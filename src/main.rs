@@ -30,28 +30,32 @@ fn solve(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let verified = expected == Some(result.count);
 
     println!(
-        "N={} Q(N)={} elapsed_s={:.6} peak_states={} accepted_transitions={} verified={}",
+        "N={} Q(N)={} elapsed_s={:.6} peak_rss_bytes={} peak_states={} tensor_entries_examined={} tensor_entries_matched={} verified={}",
         n,
         result.count,
         result.elapsed.as_secs_f64(),
+        result.peak_rss_bytes,
         result.peak_states,
-        result.total_accepted_transitions,
+        result.tensor_entries_examined,
+        result.tensor_entries_matched,
         verified
     );
     if layers {
         println!(
-            "row,input_states,candidate_transitions,accepted_transitions,output_states,output_weight,elapsed_s"
+            "row,input_states,tensor_entries_examined,tensor_entries_matched,completed_row_terms,output_states,output_weight,elapsed_s,peak_rss_bytes"
         );
         for layer in result.layers {
             println!(
-                "{},{},{},{},{},{},{:.6}",
+                "{},{},{},{},{},{},{},{:.6},{}",
                 layer.row + 1,
                 layer.input_states,
-                layer.candidate_transitions,
-                layer.accepted_transitions,
+                layer.tensor_entries_examined,
+                layer.tensor_entries_matched,
+                layer.completed_row_terms,
                 layer.output_states,
                 layer.output_weight,
-                layer.elapsed.as_secs_f64()
+                layer.elapsed.as_secs_f64(),
+                layer.peak_rss_bytes
             );
         }
     }
@@ -94,7 +98,7 @@ fn bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
 
     if csv {
         println!(
-            "N,count,known_count,verified,median_elapsed_s,min_elapsed_s,peak_states,candidate_transitions,accepted_transitions,repeats"
+            "N,count,known_count,verified,median_elapsed_s,min_elapsed_s,peak_rss_bytes,peak_states,tensor_entries_examined,tensor_entries_matched,repeats"
         );
     }
     for n in min_n..=max_n {
@@ -115,23 +119,25 @@ fn bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         }
         if csv {
             println!(
-                "{},{},{},{},{:.9},{:.9},{},{},{},{}",
+                "{},{},{},{},{:.9},{:.9},{},{},{},{},{}",
                 n,
                 result.count,
-                known.map_or_else(String::new, |v| v.to_string()),
+                known.map_or_else(String::new, |value| value.to_string()),
                 verified,
                 med.as_secs_f64(),
                 minimum.as_secs_f64(),
+                result.peak_rss_bytes,
                 result.peak_states,
-                result.total_candidate_transitions,
-                result.total_accepted_transitions,
+                result.tensor_entries_examined,
+                result.tensor_entries_matched,
                 repeats
             );
         } else {
             println!(
-                "N={n:>2} Q(N)={:<10} median={:.6}s peak_states={:<8} verified={verified}",
+                "N={n:>2} Q(N)={:<10} median={:.6}s peak_rss={:.1}MiB peak_states={:<8} verified={verified}",
                 result.count,
                 med.as_secs_f64(),
+                result.peak_rss_bytes as f64 / (1024.0 * 1024.0),
                 result.peak_states
             );
         }
