@@ -269,21 +269,23 @@ fn contract_one_row(
     counters: &mut RowCounters,
 ) -> Result<Vec<(BoundaryState, u128)>, String> {
     // The left row boundary is v0=(1,0): incoming row signal is exactly zero.
-    let mut partials = vec![PartialRow {
+    let mut partials = Vec::with_capacity(n + 1);
+    partials.push(PartialRow {
         columns_out: 0,
         diag_dr_out: 0,
         diag_dl_out: 0,
         row_signal: 0,
         weight: parent_weight,
-    }];
+    });
+    let mut next_partials = Vec::with_capacity(n + 1);
 
     for column in 0..n {
-        let mut next_partials = Vec::with_capacity(partials.len() + 1);
+        next_partials.clear();
         let column_in = bit(parent.columns, column);
         let diag_dr_in = bit(parent.diag_dr, column);
         let diag_dl_in = bit(parent.diag_dl, column);
 
-        for partial in partials {
+        for partial in partials.drain(..) {
             let matching =
                 tensor.matching_entries(column_in, partial.row_signal, diag_dr_in, diag_dl_in);
             counters.examined += matching.len() as u128;
@@ -320,7 +322,7 @@ fn contract_one_row(
                 next_partials.push(successor);
             }
         }
-        partials = next_partials;
+        std::mem::swap(&mut partials, &mut next_partials);
     }
 
     // The right row boundary is v1=(0,1): exactly one signal must emerge.
