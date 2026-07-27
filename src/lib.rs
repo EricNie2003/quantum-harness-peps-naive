@@ -6,6 +6,7 @@
 //! complete row before moving the boundary down by one lattice spacing.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -200,6 +201,42 @@ impl PackedBoundary {
     }
 }
 
+#[derive(Default)]
+struct U128Hasher {
+    state: u64,
+}
+
+impl U128Hasher {
+    fn mix(mut value: u64) -> u64 {
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+}
+
+impl Hasher for U128Hasher {
+    fn finish(&self) -> u64 {
+        self.state
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut value = 0xcbf2_9ce4_8422_2325_u64;
+        for &byte in bytes {
+            value ^= u64::from(byte);
+            value = value.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.state = Self::mix(value);
+    }
+
+    fn write_u128(&mut self, value: u128) {
+        let low = value as u64;
+        let high = (value >> 64) as u64;
+        self.state = Self::mix(low ^ Self::mix(high.wrapping_add(0x9e37_79b9_7f4a_7c15)));
+    }
+}
+
+type BoundaryMap = HashMap<PackedBoundary, u128, BuildHasherDefault<U128Hasher>>;
+
 #[derive(Clone, Copy, Debug)]
 struct PartialRow {
     columns_out: u64,
@@ -365,7 +402,8 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
         diag_dr: 0,
         diag_dl: 0,
     };
-    let mut boundary = HashMap::from([(PackedBoundary::pack(initial, n), 1_u128)]);
+    let mut boundary = BoundaryMap::default();
+    boundary.insert(PackedBoundary::pack(initial, n), 1_u128);
     let mut peak_states = 1;
     let mut total_examined = 0;
     let mut total_matched = 0;
@@ -377,7 +415,7 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
         let input_states = boundary.len();
         let mut counters = RowCounters::default();
         let mut completed_row_terms = 0;
-        let mut next = HashMap::<PackedBoundary, u128>::new();
+        let mut next = BoundaryMap::default();
 
         for (packed_parent, parent_weight) in boundary.drain() {
             let parent = packed_parent.unpack(n);
