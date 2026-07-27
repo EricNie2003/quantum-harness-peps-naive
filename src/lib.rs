@@ -169,6 +169,37 @@ pub struct BoundaryState {
     pub diag_dl: u64,
 }
 
+/// Packed hash key for the three groups of open virtual indices.
+///
+/// For a board of width `n`, bits `[0,n)`, `[n,2n)`, and `[2n,3n)` store
+/// column, down-right diagonal, and down-left diagonal signals respectively.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct PackedBoundary(u128);
+
+impl PackedBoundary {
+    fn pack(state: BoundaryState, n: usize) -> Self {
+        Self(
+            u128::from(state.columns)
+                | (u128::from(state.diag_dr) << n)
+                | (u128::from(state.diag_dl) << (2 * n)),
+        )
+    }
+
+    fn unpack(self, n: usize) -> BoundaryState {
+        let mask = (1_u128 << n) - 1;
+        BoundaryState {
+            columns: (self.0 & mask) as u64,
+            diag_dr: ((self.0 >> n) & mask) as u64,
+            diag_dl: ((self.0 >> (2 * n)) & mask) as u64,
+        }
+    }
+
+    fn columns(self, n: usize) -> u64 {
+        let mask = (1_u128 << n) - 1;
+        (self.0 & mask) as u64
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PartialRow {
     columns_out: u64,
@@ -311,8 +342,8 @@ fn contract_one_row(
 
 /// Exactly contract the rank-8 `C` network row by row.
 pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
-    if n > 63 {
-        return Err("the packed virtual-boundary backend supports N <= 63".to_owned());
+    if n > 42 {
+        return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
     }
     if n == 0 {
         return Ok(ContractionResult {
@@ -334,7 +365,7 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
         diag_dr: 0,
         diag_dl: 0,
     };
-    let mut boundary = HashMap::from([(initial, 1_u128)]);
+    let mut boundary = HashMap::from([(PackedBoundary::pack(initial, n), 1_u128)]);
     let mut peak_states = 1;
     let mut total_examined = 0;
     let mut total_matched = 0;
@@ -346,14 +377,15 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
         let input_states = boundary.len();
         let mut counters = RowCounters::default();
         let mut completed_row_terms = 0;
-        let mut next = HashMap::<BoundaryState, u128>::new();
+        let mut next = HashMap::<PackedBoundary, u128>::new();
 
-        for (parent, parent_weight) in boundary.drain() {
+        for (packed_parent, parent_weight) in boundary.drain() {
+            let parent = packed_parent.unpack(n);
             for (successor, weight) in
                 contract_one_row(n, &tensor, parent, parent_weight, &mut counters)?
             {
                 completed_row_terms += 1;
-                let coefficient = next.entry(successor).or_insert(0);
+                let coefficient = next.entry(PackedBoundary::pack(successor, n)).or_insert(0);
                 *coefficient = coefficient
                     .checked_add(weight)
                     .ok_or_else(|| format!("coefficient overflow after row {}", row + 1))?;
@@ -387,7 +419,7 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
     let board_mask = (1_u64 << n) - 1;
     let count = boundary
         .iter()
-        .filter(|(state, _)| state.columns == board_mask)
+        .filter(|(state, _)| state.columns(n) == board_mask)
         .try_fold(0_u128, |sum, (_, value)| {
             sum.checked_add(*value)
                 .ok_or_else(|| "final coefficient sum overflow".to_owned())
@@ -481,7 +513,10 @@ pub fn peak_rss_bytes() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{SiteTensorB, SiteTensorC, VirtualLegs, contract_rows, known_count};
+    use super::{
+        BoundaryState, PackedBoundary, SiteTensorB, SiteTensorC, VirtualLegs, contract_rows,
+        known_count,
+    };
 
     fn brute_force_count(n: usize) -> u128 {
         fn place(row: usize, n: usize, queens: &mut Vec<usize>, count: &mut u128) {
@@ -629,7 +664,34 @@ mod tests {
     }
 
     #[test]
-    fn rejects_virtual_boundaries_wider_than_u64() {
-        assert!(contract_rows(64).is_err());
+    fn rejects_virtual_boundaries_wider_than_u128_layout() {
+        assert!(contract_rows(43).is_err());
+    }
+
+    #[test]
+    fn packed_boundary_round_trips_without_losing_virtual_indices() {
+        for n in 1..=42 {
+            let mask = (1_u64 << n) - 1;
+            let states = [
+                BoundaryState {
+                    columns: 0,
+                    diag_dr: 0,
+                    diag_dl: 0,
+                },
+                BoundaryState {
+                    columns: mask,
+                    diag_dr: mask,
+                    diag_dl: mask,
+                },
+                BoundaryState {
+                    columns: 0x2aaa_aaaa_aaaa & mask,
+                    diag_dr: 0x1555_5555_5555 & mask,
+                    diag_dl: 0x3333_3333_3333 & mask,
+                },
+            ];
+            for state in states {
+                assert_eq!(PackedBoundary::pack(state, n).unpack(n), state, "N={n}");
+            }
+        }
     }
 }
