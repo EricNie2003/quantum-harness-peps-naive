@@ -17,7 +17,9 @@ Release benchmark 正确复现了 \(Q(4)\) 到 \(Q(14)\)。在测试机器上：
 
 - \(Q(8)=92\)：三次中位 0.981 ms，峰值 RSS 5.32 MiB；
 - \(Q(12)=14\,200\)：三次中位 0.575 s，峰值 RSS 37.30 MiB；
-- \(Q(14)=365\,596\)：三次中位 25.192 s，峰值 RSS 986.34 MiB。
+- 初始 naive \(Q(14)=365\,596\)：三次中位 25.192 s，峰值 RSS 986.34 MiB；
+- 完成 E1、E3、E5a 后的当前 baseline：三次中位 11.090 s，峰值 RSS
+  666.17 MiB，累计约 2.27x 加速并降低约 32.5% RSS。
 
 ## 2. Sec. VI 局域张量
 
@@ -126,15 +128,18 @@ HashMap<BoundaryState, u128>
 column_in, row_in, diag_dr_in, diag_dl_in
 ```
 
-然后遍历显式 `SiteTensorC.entries`，只保留 incoming indices 相等的非零元，把其四个
-outgoing indices 写入新的边界。行末只保留 `row_out=1` 的项，即与 \(v_1\) 收缩。
+当前实现先在 `SiteTensorC::from_b` 中遍历显式 `SiteTensorC.entries`，机械地按四个
+incoming virtual bits 生成 16 个索引桶。收缩时查找对应桶，并把每个匹配 `CEntry` 的
+四个 outgoing indices 写入新边界。新增测试对全部 16 个 signature 验证桶内容与线性过滤
+`C.entries()` 完全一致。行末只保留 `row_out=1` 的项，即与 \(v_1\) 收缩。
 
 不同父项产生同一 outgoing virtual boundary 时，其 `u128` 系数在哈希表中精确相加。
 最后一行后，只保留所有 column signals 均为 1 的状态；剩余 diagonal signals 由
 \(v_2\) 无条件求和。
 
-这一实现没有把局域张量替换为 `available_columns` 或 queen bit recurrence。代码确实为
-每个格点检查 \(C\) 的 17 个稀疏非零元，因此 benchmark 中记录了：
+这一实现没有把局域张量替换为 `available_columns` 或 queen bit recurrence。代码仍消费
+从显式 \(C\) 机械生成的完整 `CEntry`；`tensor_entries_examined` 在初始 naive 版本中表示
+线性扫描的 17 项，在 E1 之后表示索引桶中实际检查的条目。因此 benchmark 中记录了：
 
 - `tensor_entries_examined`；
 - `tensor_entries_matched`；
@@ -195,7 +200,10 @@ cargo run --release -- bench 14 --min 14 --repeats 3 --csv
 在同一进程中按递增顺序执行，因此某一行的 HWM 也包含之前较小问题的运行；由于规模单调增长，
 大 \(N\) 的峰值由当前运行主导。N=14 在独立进程中测量。
 
-## 7. Benchmark 结果
+## 7. 初始冻结 naive benchmark
+
+下表是进行 E1 之前的显式 \(C\) naive baseline，用于衡量之后的单变量优化。它与
+`benchmarks/naive_release.csv` 对应，不能当作当前 HEAD 的性能。
 
 | N | Q(N) | 中位时间 (s) | 最小时间 (s) | 峰值 RSS (MiB) | 峰值 support | 检查的 C 元素 |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -213,7 +221,28 @@ cargo run --release -- bench 14 --min 14 --repeats 3 --csv
 
 原始数据位于 `benchmarks/naive_release.csv`。
 
-## 8. N=14 逐层分析
+### 7.1 当前 promoted baseline
+
+当前 HEAD 包含三个通过 gate 的改动：
+
+- E1：由显式 \(C\) 自动生成 incoming-signature index；
+- E3：三个开放 virtual masks 打包为单个 `u128` hash key；
+- E5a：复用逐格点 partial row buffers。
+
+| 阶段 | N=14 中位时间 (s) | 峰值 RSS (MiB) | 峰值 support | 决策 |
+|---|---:|---:|---:|---|
+| 初始 naive | 25.1915 | 986.34 | 5,479,934 | 冻结基线 |
+| E1 后 | 19.3084 | 986.67 | 5,479,934 | KEEP |
+| E3 后 | 17.6112 | 666.17 | 5,479,934 | KEEP |
+| E5a 后（当前） | 11.0897 | 666.17 | 5,479,934 | KEEP |
+
+各阶段的独立原始数据与报告位于 `experiments/e1_c_input_index/`、
+`experiments/e3_packed_u128/` 和 `experiments/e5a_partial_buffer_reuse/`。
+
+## 8. 初始 N=14 逐层分析
+
+本节保留 E1 之前的 naive profiling，用于说明 support 峰值位置；局域项检查数和层时间不再
+代表当前 HEAD。
 
 一次独立逐层运行总耗时 23.877 s，峰值 RSS 986.32 MiB。
 
@@ -235,7 +264,7 @@ cargo run --release -- bench 14 --min 14 --repeats 3 --csv
 - 峰值 RSS 增长约 4.87 倍；
 - 检查的局域 \(C\) 元素数增长约 6.03 倍。
 
-这个 naive 实现每次都线性扫描 17 个非零元。N=14 共检查约 75 亿个局域项，其中约
+初始 naive 实现每次都线性扫描 17 个非零元。N=14 共检查约 75 亿个局域项，其中约
 4.65 亿项匹配 incoming virtual indices。主要瓶颈是边界 support、哈希表内存和 naive
 局域项扫描。
 
@@ -251,13 +280,16 @@ cargo run --release -- bench 14 --min 4 --repeats 3 --csv
 
 ## 10. 当前范围
 
-这是正确但故意低效的 Sec. VI PEPS baseline。它尚未达到 Issue #34 的完整验收：
+这是严格 Sec. VI PEPS baseline，已经完成第一轮低风险常数优化，但尚未达到 Issue #34
+的完整验收：
 
 - 当前只 benchmark 到 \(N=14\)；
 - 未复现 \(Q(16),Q(20),Q(27)\)；
 - 未加入有限域/CRT；
 - 未比较其他 contraction ordering；
 - 未实现 checkpoint、切片或并行。
+
+按当前停止点，完整 row-operator fusion（E5b）及 E6 之后的方向尚未尝试。
 
 下一步优化必须继续从显式 \(C\) 机械推导，并通过本版本逐项核验，不能退化为把经典 DFS
 重新标记成 PEPS。

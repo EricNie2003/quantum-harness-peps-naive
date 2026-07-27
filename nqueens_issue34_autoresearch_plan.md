@@ -44,9 +44,10 @@
 | 通用 dense/direct-TN oracle | 尚未完成 | 在改变 ordering 前补齐 |
 | \(Q(16),Q(20),Q(27)\) | 尚未完成 | 当前 naive support/RSS 增长过快 |
 
-当前 N=14 baseline 的三次中位时间约 25.19 s，峰值 RSS 约 986 MiB，检查约
-75 亿个局域 \(C\) 非零元。最直接的浪费是：已知 4 个 incoming virtual bits 后仍线性
-扫描全部 17 个条目。
+初始冻结的 N=14 naive baseline（优化前）三次中位时间约 25.19 s，峰值 RSS 约
+986 MiB，检查约 75 亿个局域 \(C\) 非零元。最直接的浪费是：已知 4 个 incoming
+virtual bits 后仍线性扫描全部 17 个条目。E1、E3、E5a 完成后，当前 promoted baseline
+的 N=14 中位时间为 11.09 s，峰值 RSS 约 666 MiB。
 
 ## C. 难度与可行性标尺
 
@@ -221,6 +222,39 @@ ZDD。若节点数或 apply/reduce 时间在两个连续 \(N\) 上不优于 expl
    - kill：时间和 RSS 都无稳定改善。
 
 E1 完成前不并行启动 E2；E2 完成后的 keep/reject 结果决定 E3 的新 baseline。
+
+## H. 本轮实际执行记录与停止点
+
+本轮按独立 worktree、单变量和 correctness-first 协议顺序完成了以下实验：
+
+| 实验 | 分支 | 结果 | N=14 或最大判别规模 | 决策 |
+|---|---|---|---|---|
+| E1：4-bit incoming signature 索引 \(C\) | `codex/exp-c-input-index` | N=14 从 25.19 s 降到 19.31 s；tensor entry 检查减少 93.8%；RSS/support 不变 | N=14 | **KEEP，已合入** |
+| E2：`HashMap::with_capacity(input_states)` | `codex/exp-hash-capacity` | N=13 仅快约 3.4%，RSS 收益未延续 | N=13 | **REJECT，未合入** |
+| E3：三个 mask 打包为 `u128` key | `codex/exp-packed-u128` | N=14 RSS 从约 986.7 MiB 降到 666.2 MiB，时间再改善 8.8% | N=14 | **KEEP，已合入** |
+| E4a：标准 HashMap 上替换确定性 hasher | `codex/exp-fast-u128-hasher` | N=13 中位数慢约 2.1%，RSS 不变 | N=13 | **REJECT，未合入** |
+| E5a：复用逐格点 partial row buffers | `codex/exp-partial-buffer-reuse` | 相对 E3，N=14 从 17.61 s 降到 11.09 s，1.59x；RSS/support 不变 | N=14 | **KEEP，已合入** |
+
+从最初显式 \(C\) naive baseline 到当前 promoted baseline：
+
+- N=14 三次中位时间：25.1915 s → 11.0897 s，累计约 **2.27x**；
+- N=14 peak RSS：986.34 MiB → 666.17 MiB，下降约 **32.5%**；
+- peak support 始终为 5,479,934，说明这些都是常数/内存布局收益，没有改变指数增长；
+- 所有已运行 count、局域 truth table、pack/unpack、独立 oracle 和已知值测试均通过。
+
+原始数据与独立报告：
+
+- `experiments/e1_c_input_index/`
+- `experiments/e3_packed_u128/`
+- `experiments/e5a_partial_buffer_reuse/`
+- E2、E4a 的负结果保存在各自未合入的实验分支中。
+
+按用户指示，**测试完 E5 后停止**：
+
+- E5a 已完成；
+- E5b“从显式 \(C\) 自动生成并缓存完整 row operator”尚未尝试；
+- E6 sort-reduce、E7 CRT、E8 slicing 及后续方向均未启动；
+- 恢复研究时应从当前 main baseline 新建独立 worktree，不能从被拒分支继续。
 
 ---
 
