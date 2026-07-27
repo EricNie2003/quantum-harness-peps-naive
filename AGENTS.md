@@ -81,3 +81,23 @@ their virtual bonds (with a mechanically derived sparse representation allowed
 after tensor-level tests). Traditional DFS/backtracking or bitmask pruning is
 useful only as an independent oracle or comparator; it must not be presented as
 the PEPS method or used to replace the tensor contraction.
+
+Every attempted optimization of the naive contraction must be isolated in its
+own Git worktree (and normally its own experiment branch). The baseline
+worktree must remain unchanged so that results can be reproduced and compared
+fairly. An experiment is incomplete until it has a self-contained report that
+records its hypothesis, exact code revision, worktree/branch, PEPS contraction
+convention, arithmetic backend, hardware and build configuration, commands,
+correctness checks, runtime/memory/support measurements, raw result paths, and
+a decision to keep or reject the change. Benchmark data from one worktree or
+algorithm must never be silently reused for another.
+
+The optimization objective is a strictly exact PEPS contraction algorithm for
+the N-Queens count: it must preserve the local-tensor construction and all
+boundary constraints, pass independent correctness checks, and ultimately aim
+for throughput substantially beyond the same-hardware DFS/bitmask baselines.
+DFS/bitmask speed is a comparison target, not an implementation shortcut. When
+the resource projection and correctness gates permit, the research should also
+attempt to compute the currently unavailable `Q(28)` value; if it is not
+reached, the report must give the largest verified `N`, measured scaling, and
+the precise limiting bottleneck.
