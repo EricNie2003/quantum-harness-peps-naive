@@ -8,6 +8,222 @@
 
 ---
 
+# 2026-07-27 基于现有硬约束的重新评估（当前执行版本）
+
+本节依据仓库根目录 `AGENTS.md` 重新评判原计划。若本节与后文旧的优先级、baseline
+描述或“推荐首个任务”冲突，**以本节为准**。后文保留为研究方向的详细背景。
+
+## A. 不可绕过的合规边界
+
+当前主实现必须始终保留以下可执行证据：
+
+1. 显式 rank-9 局域张量 \(B\)，含 8 条二值 virtual legs、1 条 physical leg，
+   且恰有 17 个非零元；
+2. 显式构造 \(C=\sum_\alpha B^\alpha\)，rank-8，恰有 17 个非零元；
+3. 主 contraction 的局域转移必须从 `C.entries()` 机械生成；
+4. 使用 \(v_0=(1,0)\)、row/column 终点的 \(v_1=(0,1)\)、diagonal 终点的
+   \(v_2=(1,1)\)；
+5. 任何 fused transition、packed state、对称切片或新 ordering 都必须与显式
+   \(C\) contraction 做逐项或小 \(N\) 等价测试；
+6. 普通 DFS/bitmask 只能作为 oracle 或同硬件比较，不能作为 PEPS 主实现；
+7. 每个优化实验必须在独立 Git worktree/branch 中完成，baseline worktree 不修改；
+8. 每个实验必须独立记录 count、wall time、peak RSS、peak support、局域项工作量和
+   keep/reject 决策。
+
+## B. 当前基线状态
+
+| 项目 | 当前状态 | 证据 |
+|---|---|---|
+| 显式 \(B\) 的 17 个非零元 | 已完成 | `SiteTensorB::sec_vi` + 单元测试 |
+| 显式 \(C=\sum_\alpha B\) 的 17 个非零元 | 已完成 | `SiteTensorC::from_b` + 单元测试 |
+| 逐格点、逐行 exact contraction | 已完成 | `contract_one_row` / `contract_rows` |
+| \(v_0/v_1/v_2\) 边界 | 已完成 | 行首、行末、棋盘底部及对角线边缘逻辑 |
+| 独立小 \(N\) oracle | 已完成 | 朴素棋盘枚举，\(N=0\ldots9\) |
+| 已知值验证 | 已完成至 \(N=14\) | `benchmarks/naive_release.csv` |
+| wall time / RSS / support profiling | 已完成至 \(N=14\) | benchmark 和 layer CSV |
+| 通用 dense/direct-TN oracle | 尚未完成 | 在改变 ordering 前补齐 |
+| \(Q(16),Q(20),Q(27)\) | 尚未完成 | 当前 naive support/RSS 增长过快 |
+
+当前 N=14 baseline 的三次中位时间约 25.19 s，峰值 RSS 约 986 MiB，检查约
+75 亿个局域 \(C\) 非零元。最直接的浪费是：已知 4 个 incoming virtual bits 后仍线性
+扫描全部 17 个条目。
+
+## C. 难度与可行性标尺
+
+- 难度 1/5：局部改动，不改变边界语义，半天内可验证；
+- 难度 2/5：改变状态布局或容器，需要专门等价测试和完整 benchmark；
+- 难度 3/5：新增算术/并行/批处理后端，需要多个组件和失败恢复；
+- 难度 4/5：改变 contraction tree、分布式执行或需要复杂资源投影；
+- 难度 5/5：研究型原型，收益和完成概率均高度不确定。
+
+“可行性”综合考虑 PEPS 合规性、当前 Rust 代码、可用单机资源和预期验证成本，而不只是
+理论上能否实现。
+
+## D. 研究方向重新排序
+
+| 新顺序 | 方向 | PEPS 合规条件 | 可行性 | 难度 | 预期收益 | 当前决策 |
+|---:|---|---|:---:|:---:|---|---|
+| E1 | 按 4-bit incoming signature 索引 \(C\) | 索引必须由显式 `C.entries()` 自动生成并逐项比对 | 极高 | 1/5 | 去掉每次 17 项线性扫描，support 不变 | **首先尝试** |
+| E2 | `HashMap` 容量预估/复用 | 只改变容器，不改变 tensor transition | 极高 | 1/5 | 减少 rehash；可能增加 RSS | E1 后尝试 |
+| E3 | 三个 mask 打包为单个 `u128` key | 编解码必须与开放 virtual indices 一一对应 | 很高 | 2/5 | key 从 24 B 降至 16 B，改善 hash/RSS | E2 后尝试 |
+| E4 | flat/robin-hood hash 后端 | 输入输出必须与标准 `HashMap` 完全一致 | 高 | 2/5 | 更少指针和更高吞吐 | E3 后尝试 |
+| E5 | 从 \(C\) 自动生成整行 sparse operator | 禁止手写 `available_columns`；逐行表必须由局域 \(C\) contraction 生成 | 高 | 2/5 | 融合临时 partial row，降低局域开销 | E4 后尝试 |
+| E6 | sort-reduce / radix-reduce | candidate 必须来自同一 tensor operator | 中高 | 3/5 | 顺序内存访问、易并行；临时内存风险 | hash 基线稳定后 |
+| E7 | 机器字有限域 + CRT | 模数乘积必须显式证明 \(>N!\)，保留冗余模数 | 高 | 3/5 | 固定字宽、天然并行；不降 support | 在主容器确定后 |
+| E8 | prefix tensor slicing | slice 是固定 physical/virtual boundary 的子网络；加权和需核验 | 高 | 3/5 | 可恢复并行、降低单任务 RSS | CRT 前后均可 |
+| E9 | CPU 多线程/work stealing | 每个 worker 收缩合规 tensor slice | 高 | 3/5 | 吞吐提升；总内存可能放大 | slicing 后 |
+| E10 | row/column/snake/diagonal ordering | 必须先补通用 direct-TN oracle；不能调用 DFS recurrence | 中 | 4/5 | 可能降低 peak support，也可能更差 | 推迟到 E1–E6 后 |
+| E11 | support-aware cost model | 只用于选择合法 contraction tree | 中 | 3/5 | 诊断/排序价值，不直接提速 | 有至少 3 种 ordering 数据后 |
+| E12 | ZDD/BDD 边界 | 节点语义必须是开放 virtual boundary 的精确商 | 中低 | 5/5 | 可能结构压缩 | 固定 3–4 小时原型预算 |
+| E13 | meet-in-the-middle/separator | join signature 必须覆盖所有跨 separator virtual bonds | 低 | 5/5 | 可能改变 exponent，接口可能爆炸 | 仅在 support 数据支持时 |
+| E14 | exact finite-field MPS | exact rank factorization，禁止浮点 SVD | 低 | 5/5 | 研究 exact rank；主求解未必更快 | 仅作小规模诊断 |
+| E15 | MPI/Slurm job array | worker 必须执行 exact tensor slice，manifest 可验证 | 中高* | 4/5 | 扩展总吞吐 | *仅在有集群时高 |
+| E16 | GPU expansion/sort-reduce | kernel transition 必须由 \(C\) 表生成并与 CPU 比对 | 中低 | 5/5 | 大批量吞吐 | CPU 算法与分片稳定后 |
+| E17 | 多 GPU 分布式 TN | 保持 exact arithmetic 与完整通信校验 | 低 | 5/5 | 最终规模路线 | 远期 |
+
+## E. 对原 R1–R17 的具体修订
+
+### 原 R1 packed sparse boundary state
+
+基础版本已经使用三个 `u64` mask，因此“从对象 tuple 改为机器字”已完成。剩余研究问题改为
+**把三个 mask 编码为单个 `u128` key**。对 \(N\le28\)，共需 \(3N\le84\) bits，可无损
+编码。该方向保留，但排在局域 \(C\) 索引和容器容量实验之后。
+
+### 原 R2 flat hash map / allocator
+
+拆成两个实验：
+
+1. 无依赖的容量预估与 map 复用（难度 1）；
+2. 第三方 flat/robin-hood hash（难度 2）。
+
+不得同时改变 key encoding，否则无法归因。
+
+### 原 R3 sort-reduce
+
+保留。必须先测量 `completed_row_terms / unique_output_states` 的 merge ratio，并对临时
+candidate vector 做内存上界。若预测峰值超过可用内存的 70%，不得直接跑最大 \(N\)。
+
+### 原 R4 fused transition / early propagation
+
+原文“行恰好一枚直接编码进 transition”“预计算可用位置”有退化为经典 bitmask DFS 的风险。
+修订为：
+
+> 从显式 \(C\) 自动 contraction 出完整行 operator，再缓存或融合该 operator。
+
+只有生成器与显式逐格点 contraction 在全部可达小 \(N\) 边界上逐项一致时，才可作为 PEPS
+后端。手写 queen recurrence 不接受。
+
+### 原 R5 contraction ordering
+
+规则路径在理论上可行，但当前实现的数据布局专为 row order 设计。开始该方向前必须实现一个
+与 geometry 解耦的 factor-graph/direct-TN oracle，并在 \(N\le4\) 对每条 ordering 得到完全
+相同的 contraction。难度从“高到中”调整为 4/5，优先级下调。
+
+### 原 R6 support-aware cost model
+
+保留为诊断方向，不应早于实际生成至少三种 ordering 的数据。没有训练/留出路径数据时拟合
+cost model 没有决策价值。
+
+### 原 R7 symmetry slicing
+
+保留，但统一改称 **tensor slicing**。固定第一行皇后可以理解为固定一组 physical legs，
+但实现必须由 \(B/C\) 网络边界条件生成 slice，且不切片 contraction 的加权和必须一致。
+完整 \(D_4\) 权重处理推迟到 prefix slicing 已验证之后。
+
+### 原 R8 finite field / CRT
+
+合规且可行，但它不减少 support。当前系数远未成为主要瓶颈，因此排在状态/容器优化之后；
+作为 Q20 以上的严格算术和冗余校验仍是必做项。
+
+### 原 R9 exact finite-field MPS
+
+保留为小规模科学诊断，不进入主求解关键路径。若 \(N\le8\) 已比 sparse boundary 慢
+100 倍且 exact rank 没有显著压缩，立即停止。
+
+### 原 R10 ZDD/BDD
+
+保留固定时间盒。必须表示开放 virtual boundary 的未来等价类，而不是直接改做 queen-placement
+ZDD。若节点数或 apply/reduce 时间在两个连续 \(N\) 上不优于 explicit support，则停止。
+
+### 原 R11 separator / meet-in-the-middle
+
+可行性下调为低。列和两族 diagonal virtual lines 同时跨 separator，signature 很可能抵消
+双向收缩收益。只有测得 separator signature 上界明显小于 row-order peak support 才实现。
+
+### 原 R12 CPU parallel
+
+保留，但放在 deterministic tensor slicing 之后，避免多个线程共享一个超大 hash map。
+首选 slice-level 并行和独立 map，而不是细粒度加锁。
+
+### 原 R13 MPI/Slurm
+
+算法上可行，但依赖外部基础设施。无可用集群时只实现 manifest/reducer，不假设集群存在。
+
+### 原 R14 GPU expansion + sort-reduce
+
+保留为远期。GPU kernel 必须消费从 \(C\) 导出的 transition table；在 CPU sort-reduce、
+固定字宽算术和切片 manifest 稳定之前不启动。
+
+### 原 R15 multi-GPU distributed contraction
+
+远期方向。通信量和设备资源都尚无数据，当前不能给出“中等可行”的结论。
+
+### 原 R16 hybrid TN + classic search
+
+重新分类为 **对照/验证方向，不是默认主方法**。若 tensor contraction 只生成 DFS prefix，
+剩余部分完全由经典回溯求解，则不能作为纯 PEPS 主结果。只有整个 hybrid 流程仍可表述为
+合法 tensor slicing 与子网络 exact contraction 时才可能合规。
+
+### 原 R17 approximate-guided exact
+
+只允许近似结果用于排序合法 exact tensor slices 或 contraction trees。近似量不能删除 slice、
+决定 exact coefficient 为零或参与最终计数。
+
+## F. 逐个实验的统一协议
+
+每个 E1–E17 实验严格执行：
+
+1. 从冻结 baseline commit 创建独立 `codex/exp-*` branch 和 Git worktree；
+2. 写预注册记录：单变量假设、pass threshold、kill condition、目标 \(N\)；
+3. 先跑局域 \(B/C\) truth table、独立 oracle 和已知 Q(N)；
+4. 短任务先用 \(N=10,11,12\) 三次中位数筛选；
+5. 只有在至少两个连续 \(N\) 有稳定收益时才跑 \(N=13\)；
+6. 预测内存安全后才跑 \(N=14\)；
+7. 记录 wall time、peak RSS、peak support、tensor work、count；
+8. 生成独立实验报告和原始 CSV；
+9. 明确 `KEEP`、`REJECT` 或 `DIAGNOSTIC_ONLY`；
+10. 只有 `KEEP` 实验才允许合入下一轮 baseline；被拒实验保留 branch/report，不污染 baseline。
+
+默认 keep threshold：
+
+- 时间降低至少 15%，且两个连续 \(N\) 一致；或
+- peak RSS 降低至少 15%；或
+- 最大安全 \(N\) 增加 1；或
+- 提供明确、可复现的结构性负结果。
+
+主后端升级仍沿用更严格目标：优先寻找 \(\ge2\times\) 加速、\(\ge30\%\) 内存下降或可达
+尺寸增加 1 的方向。
+
+## G. 当前立即执行队列
+
+1. **E1：4-bit incoming signature 的 \(C\) 索引。**
+   - 假设：把每次 17 项扫描替换为从显式 \(C\) 自动生成的 16 桶 lookup；
+   - 预期：`tensor_entries_examined` 大幅下降，support/RSS/count 不变；
+   - kill：N=11、12 中位时间改善均小于 15%；
+   - correctness：索引桶展开后必须与 `C.entries()` 集合完全相同。
+2. **E2：HashMap 容量策略。**
+   - 假设：利用上一层 completed terms 预留下一层容量可减少 rehash；
+   - 风险：过度预留使 RSS 上升；
+   - kill：时间改善小于 10%或 RSS 上升超过 15%。
+3. **E3：单个 `u128` packed key。**
+   - 假设：更小 key 改善 hash/cache，并降低 bytes/state；
+   - correctness：全范围 pack/unpack round trip + 与标准 boundary map 比对；
+   - kill：时间和 RSS 都无稳定改善。
+
+E1 完成前不并行启动 E2；E2 完成后的 keep/reject 结果决定 E3 的新 baseline。
+
+---
+
 # 0. 执行摘要
 
 ## 0.1 官方要求核对结论
