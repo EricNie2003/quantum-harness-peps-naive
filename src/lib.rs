@@ -346,7 +346,7 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
         let input_states = boundary.len();
         let mut counters = RowCounters::default();
         let mut completed_row_terms = 0;
-        let mut next = HashMap::<BoundaryState, u128>::new();
+        let mut next = HashMap::<BoundaryState, u128>::with_capacity(input_states);
 
         for (parent, parent_weight) in boundary.drain() {
             for (successor, weight) in
