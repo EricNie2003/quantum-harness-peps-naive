@@ -88,6 +88,7 @@ pub struct CEntry {
 #[derive(Clone, Debug)]
 pub struct SiteTensorC {
     entries: Vec<CEntry>,
+    entries_by_input: [Vec<CEntry>; 16],
 }
 
 impl SiteTensorC {
@@ -105,7 +106,20 @@ impl SiteTensorC {
             .map(|(legs, value)| CEntry { legs, value })
             .collect();
         entries.sort_by_key(|entry| legs_key(entry.legs));
-        Self { entries }
+        let mut entries_by_input: [Vec<CEntry>; 16] = std::array::from_fn(|_| Vec::new());
+        for &entry in &entries {
+            entries_by_input[input_key(
+                entry.legs.column_in,
+                entry.legs.row_in,
+                entry.legs.diag_dr_in,
+                entry.legs.diag_dl_in,
+            )]
+            .push(entry);
+        }
+        Self {
+            entries,
+            entries_by_input,
+        }
     }
 
     pub fn sec_vi() -> Self {
@@ -122,15 +136,16 @@ impl SiteTensorC {
         row_in: u8,
         diag_dr_in: u8,
         diag_dl_in: u8,
-    ) -> impl Iterator<Item = &CEntry> {
-        self.entries.iter().filter(move |entry| {
-            let legs = entry.legs;
-            legs.column_in == column_in
-                && legs.row_in == row_in
-                && legs.diag_dr_in == diag_dr_in
-                && legs.diag_dl_in == diag_dl_in
-        })
+    ) -> &[CEntry] {
+        &self.entries_by_input[input_key(column_in, row_in, diag_dr_in, diag_dl_in)]
     }
+}
+
+fn input_key(column_in: u8, row_in: u8, diag_dr_in: u8, diag_dl_in: u8) -> usize {
+    usize::from(column_in)
+        | (usize::from(row_in) << 1)
+        | (usize::from(diag_dr_in) << 2)
+        | (usize::from(diag_dl_in) << 3)
 }
 
 fn legs_key(legs: VirtualLegs) -> u16 {
@@ -238,10 +253,10 @@ fn contract_one_row(
         let diag_dl_in = bit(parent.diag_dl, column);
 
         for partial in partials {
-            counters.examined += tensor.entries().len() as u128;
-            for entry in
-                tensor.matching_entries(column_in, partial.row_signal, diag_dr_in, diag_dl_in)
-            {
+            let matching =
+                tensor.matching_entries(column_in, partial.row_signal, diag_dr_in, diag_dl_in);
+            counters.examined += matching.len() as u128;
+            for entry in matching {
                 counters.matched += 1;
                 let mut successor = PartialRow {
                     columns_out: partial.columns_out,
@@ -552,10 +567,39 @@ mod tests {
     #[test]
     fn local_c_truth_table_has_empty_and_occupied_branches() {
         let tensor = SiteTensorC::sec_vi();
-        assert_eq!(tensor.matching_entries(0, 0, 0, 0).count(), 2);
-        assert_eq!(tensor.matching_entries(1, 0, 0, 0).count(), 1);
-        assert_eq!(tensor.matching_entries(0, 1, 0, 0).count(), 1);
-        assert_eq!(tensor.matching_entries(1, 1, 1, 1).count(), 1);
+        assert_eq!(tensor.matching_entries(0, 0, 0, 0).len(), 2);
+        assert_eq!(tensor.matching_entries(1, 0, 0, 0).len(), 1);
+        assert_eq!(tensor.matching_entries(0, 1, 0, 0).len(), 1);
+        assert_eq!(tensor.matching_entries(1, 1, 1, 1).len(), 1);
+    }
+
+    #[test]
+    fn input_index_is_mechanically_equivalent_to_scanning_c() {
+        let tensor = SiteTensorC::sec_vi();
+        for signature in 0_u8..16 {
+            let column_in = signature & 1;
+            let row_in = (signature >> 1) & 1;
+            let diag_dr_in = (signature >> 2) & 1;
+            let diag_dl_in = (signature >> 3) & 1;
+            let indexed = tensor.matching_entries(column_in, row_in, diag_dr_in, diag_dl_in);
+            let scanned: Vec<_> = tensor
+                .entries()
+                .iter()
+                .filter(|entry| {
+                    let legs = entry.legs;
+                    legs.column_in == column_in
+                        && legs.row_in == row_in
+                        && legs.diag_dr_in == diag_dr_in
+                        && legs.diag_dl_in == diag_dl_in
+                })
+                .copied()
+                .collect();
+            assert_eq!(
+                indexed,
+                scanned.as_slice(),
+                "input signature {signature:04b}"
+            );
+        }
     }
 
     #[test]
