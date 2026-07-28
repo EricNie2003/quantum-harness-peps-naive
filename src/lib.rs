@@ -6,6 +6,7 @@
 //! complete row before moving the boundary down by one lattice spacing.
 
 pub mod dfs_bitmask;
+pub mod frontier_audit;
 pub mod weighted_dd;
 
 use std::collections::HashMap;
