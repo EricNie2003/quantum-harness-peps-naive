@@ -474,6 +474,125 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
     contract_rows_with_backend(n, RowBackend::Compiled)
 }
 
+/// Exactly contract the same compiled row operator, materializing each layer
+/// as a sorted vector and reducing equal packed boundary keys in place.
+pub fn contract_rows_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    if n > 42 {
+        return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
+    }
+    if n == 0 {
+        return Ok(ContractionResult {
+            n,
+            count: 1,
+            elapsed: Duration::ZERO,
+            peak_states: 1,
+            tensor_entries_examined: 0,
+            tensor_entries_matched: 0,
+            row_operator_candidates: 0,
+            row_operator_matched: 0,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        });
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    debug_assert_eq!(tensor.entries().len(), 17);
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let mut boundary = vec![(PackedBoundary::pack(initial, n), 1_u128)];
+    let mut peak_states = 1;
+    let mut total_operator_candidates = 0;
+    let mut total_operator_matched = 0;
+    let mut layers = Vec::with_capacity(n);
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states = boundary.len();
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0;
+        let mut candidates = Vec::<(PackedBoundary, u128)>::new();
+
+        for (packed_parent, parent_weight) in std::mem::take(&mut boundary) {
+            let parent = packed_parent.unpack(n);
+            let row_terms =
+                contract_one_row_compiled(n, &operator, parent, parent_weight, &mut counters)?;
+            completed_row_terms += row_terms.len() as u128;
+            candidates.extend(
+                row_terms
+                    .into_iter()
+                    .map(|(successor, weight)| (PackedBoundary::pack(successor, n), weight)),
+            );
+        }
+
+        candidates.sort_unstable_by_key(|(state, _)| state.0);
+        let mut write = 0_usize;
+        for read in 0..candidates.len() {
+            let (state, weight) = candidates[read];
+            if write > 0 && candidates[write - 1].0 == state {
+                candidates[write - 1].1 = candidates[write - 1]
+                    .1
+                    .checked_add(weight)
+                    .ok_or_else(|| format!("coefficient overflow after row {}", row + 1))?;
+            } else {
+                candidates[write] = (state, weight);
+                write += 1;
+            }
+        }
+        candidates.truncate(write);
+        boundary = candidates;
+
+        let output_weight = boundary.iter().try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+        })?;
+        peak_states = peak_states.max(boundary.len());
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        let layer_peak_rss = peak_rss_bytes();
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states: boundary.len(),
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: layer_peak_rss,
+        });
+    }
+
+    // Identical v1/v2 final contraction to the hash materialization backend.
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .filter(|(state, _)| state.columns(n) == board_mask)
+        .try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| "final coefficient sum overflow".to_owned())
+        })?;
+
+    Ok(ContractionResult {
+        n,
+        count,
+        elapsed: total_start.elapsed(),
+        peak_states,
+        tensor_entries_examined: 17,
+        tensor_entries_matched: 17,
+        row_operator_candidates: total_operator_candidates,
+        row_operator_matched: total_operator_matched,
+        peak_rss_bytes: peak_rss_bytes(),
+        layers,
+    })
+}
+
 /// Reference backend retained for tensor-level verification.
 pub fn contract_rows_sitewise(n: usize) -> Result<ContractionResult, String> {
     contract_rows_with_backend(n, RowBackend::Sitewise)
@@ -703,7 +822,7 @@ mod tests {
     use super::{
         BoundaryState, CompiledRowOperator, PackedBoundary, RowCounters, SiteTensorB, SiteTensorC,
         VirtualLegs, contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_sitewise, known_count,
+        contract_rows_sitewise, contract_rows_sort_reduce, known_count,
     };
     use std::collections::HashMap;
 
@@ -898,6 +1017,52 @@ mod tests {
                 contract_rows_sitewise(n).unwrap().count,
                 "N={n}"
             );
+        }
+    }
+
+    #[test]
+    fn sort_reduce_matches_hash_materialization_through_n10() {
+        for n in 0..=10 {
+            let hash = contract_rows(n).unwrap();
+            let sorted = contract_rows_sort_reduce(n).unwrap();
+            assert_eq!(sorted.count, hash.count, "count mismatch at N={n}");
+            assert_eq!(
+                sorted.peak_states, hash.peak_states,
+                "support mismatch at N={n}"
+            );
+            assert_eq!(
+                sorted.row_operator_candidates, hash.row_operator_candidates,
+                "candidate mismatch at N={n}"
+            );
+            assert_eq!(
+                sorted.row_operator_matched, hash.row_operator_matched,
+                "matched mismatch at N={n}"
+            );
+            let hash_layers = hash
+                .layers
+                .iter()
+                .map(|layer| {
+                    (
+                        layer.input_states,
+                        layer.completed_row_terms,
+                        layer.output_states,
+                        layer.output_weight,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let sorted_layers = sorted
+                .layers
+                .iter()
+                .map(|layer| {
+                    (
+                        layer.input_states,
+                        layer.completed_row_terms,
+                        layer.output_states,
+                        layer.output_weight,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(sorted_layers, hash_layers, "layer mismatch at N={n}");
         }
     }
 
