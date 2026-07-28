@@ -9,6 +9,7 @@ pub mod dfs_bitmask;
 pub mod weighted_dd;
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -842,6 +843,23 @@ pub fn contract_rows_d4_compact_sharded_sort_reduce(
     contract_rows_d4_compact_sharded_kernel(n, shards)
 }
 
+#[derive(Clone, Debug)]
+pub struct ParallelGenerationResult {
+    pub contraction: ContractionResult,
+    pub generation_elapsed: Duration,
+    pub sort_elapsed: Duration,
+    pub reduce_elapsed: Duration,
+    pub peak_thread_local_bytes: usize,
+    pub peak_worker_partials: usize,
+}
+
+pub fn contract_rows_d4_compact_parallel_generation(
+    n: usize,
+    shards: usize,
+) -> Result<ParallelGenerationResult, String> {
+    contract_rows_d4_compact_parallel_generation_kernel(n, shards)
+}
+
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
 }
@@ -1086,7 +1104,7 @@ fn contract_rows_d4_sharded_sparse_kernel(
 
     for row in 0..n {
         let layer_start = Instant::now();
-        let input_states = boundary.iter().map(Vec::len).sum();
+        let input_states: usize = boundary.iter().map(Vec::len).sum();
         let mut counters = RowCounters::default();
         let mut completed_row_terms = 0_u128;
         for shard in &mut candidates {
@@ -1388,6 +1406,269 @@ fn contract_rows_d4_compact_sharded_kernel(
         row_operator_matched: total_operator_matched,
         peak_rss_bytes: peak_rss_bytes(),
         layers,
+    })
+}
+
+struct LocalGeneration {
+    buckets: Vec<Vec<CompactEntry>>,
+    counters: RowCounters,
+    completed_row_terms: u128,
+    error: Option<String>,
+    parents_since_flush: usize,
+    peak_capacity_bytes: usize,
+}
+
+impl LocalGeneration {
+    fn new(shards: usize) -> Self {
+        Self {
+            buckets: (0..shards).map(|_| Vec::<CompactEntry>::new()).collect(),
+            counters: RowCounters::default(),
+            completed_row_terms: 0,
+            error: None,
+            parents_since_flush: 0,
+            peak_capacity_bytes: 0,
+        }
+    }
+
+    fn capacity_bytes(&self) -> usize {
+        self.buckets
+            .iter()
+            .map(|bucket| bucket.capacity() * std::mem::size_of::<CompactEntry>())
+            .sum()
+    }
+
+    fn flush(&mut self, shared: &[Mutex<Vec<CompactEntry>>], force: bool) -> Result<(), String> {
+        self.peak_capacity_bytes = self.peak_capacity_bytes.max(self.capacity_bytes());
+        for (local, destination) in self.buckets.iter_mut().zip(shared) {
+            if !local.is_empty() && (force || local.len() >= 1_024) {
+                let mut destination = destination
+                    .lock()
+                    .map_err(|_| "parallel candidate bucket lock was poisoned".to_owned())?;
+                destination.extend_from_slice(local);
+                local.clear();
+            }
+        }
+        self.parents_since_flush = 0;
+        Ok(())
+    }
+}
+
+fn contract_rows_d4_compact_parallel_generation_kernel(
+    n: usize,
+    shards: usize,
+) -> Result<ParallelGenerationResult, String> {
+    if n > 21 {
+        return Err("the compact u64 virtual-boundary backend supports N <= 21".to_owned());
+    }
+    if shards == 0 || !shards.is_power_of_two() || shards > 256 {
+        return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if n == 0 {
+        return Ok(ParallelGenerationResult {
+            contraction: ContractionResult {
+                n,
+                count: 1,
+                elapsed: Duration::ZERO,
+                peak_states: 1,
+                tensor_entries_examined: 0,
+                tensor_entries_matched: 0,
+                row_operator_candidates: 0,
+                row_operator_matched: 0,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            generation_elapsed: Duration::ZERO,
+            sort_elapsed: Duration::ZERO,
+            reduce_elapsed: Duration::ZERO,
+            peak_thread_local_bytes: 0,
+            peak_worker_partials: 0,
+        });
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let initial_key = u64::try_from(PackedBoundary::pack(initial, n).0)
+        .map_err(|_| "initial compact key does not fit u64".to_owned())?;
+    let mut boundary = (0..shards)
+        .map(|_| Vec::<CompactEntry>::new())
+        .collect::<Vec<_>>();
+    boundary[shard_index(u128::from(initial_key), n, shards, ShardMode::Prefix)]
+        .push(CompactEntry::new(initial_key, 1));
+    let mut peak_states = 1_usize;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n);
+    let mut generation_elapsed = Duration::ZERO;
+    let mut sort_elapsed = Duration::ZERO;
+    let mut reduce_elapsed = Duration::ZERO;
+    let mut peak_thread_local_bytes = 0_usize;
+    let mut peak_worker_partials = 0_usize;
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states: usize = boundary.iter().map(Vec::len).sum();
+
+        let generation_start = Instant::now();
+        let worker_count = rayon::current_num_threads().max(1);
+        let target_states = input_states.div_ceil(worker_count).max(1);
+        let mut source_ranges = Vec::<(usize, usize)>::with_capacity(worker_count);
+        let mut range_start = 0_usize;
+        let mut range_states = 0_usize;
+        for (index, source_shard) in boundary.iter().enumerate() {
+            range_states += source_shard.len();
+            if range_states >= target_states
+                && source_ranges.len() + 1 < worker_count
+                && index + 1 < shards
+            {
+                source_ranges.push((range_start, index + 1));
+                range_start = index + 1;
+                range_states = 0;
+            }
+        }
+        source_ranges.push((range_start, shards));
+        let shared = (0..shards)
+            .map(|_| Mutex::new(Vec::<CompactEntry>::new()))
+            .collect::<Vec<_>>();
+        let partials = source_ranges
+            .par_iter()
+            .map(|&(start, end)| {
+                let mut local = LocalGeneration::new(shards);
+                for parent_shard in &boundary[start..end] {
+                    if local.error.is_some() {
+                        break;
+                    }
+                    for &parent in parent_shard {
+                        match append_compact_sparse_sharded_d4(
+                            n,
+                            &operator,
+                            PackedBoundary(u128::from(parent.key)).unpack(n),
+                            parent.weight(),
+                            row == 0,
+                            &mut local.counters,
+                            &mut local.buckets,
+                        ) {
+                            Ok(count) => local.completed_row_terms += count as u128,
+                            Err(error) => {
+                                local.error = Some(error);
+                                break;
+                            }
+                        }
+                        local.parents_since_flush += 1;
+                        if local.parents_since_flush >= 256
+                            && let Err(error) = local.flush(&shared, false)
+                        {
+                            local.error = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if local.error.is_none()
+                    && let Err(error) = local.flush(&shared, true)
+                {
+                    local.error = Some(error);
+                }
+                local
+            })
+            .collect::<Vec<_>>();
+        peak_worker_partials = peak_worker_partials.max(partials.len());
+        peak_thread_local_bytes = peak_thread_local_bytes.max(
+            partials
+                .iter()
+                .map(|partial| partial.peak_capacity_bytes)
+                .sum(),
+        );
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0_u128;
+        for partial in partials {
+            if let Some(error) = partial.error {
+                return Err(error);
+            }
+            counters.tensor_examined += partial.counters.tensor_examined;
+            counters.tensor_matched += partial.counters.tensor_matched;
+            counters.operator_candidates += partial.counters.operator_candidates;
+            counters.operator_matched += partial.counters.operator_matched;
+            completed_row_terms += partial.completed_row_terms;
+        }
+        drop(boundary);
+        let mut candidates = shared
+            .into_iter()
+            .map(|bucket| {
+                bucket
+                    .into_inner()
+                    .map_err(|_| "parallel candidate bucket lock was poisoned".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        generation_elapsed += generation_start.elapsed();
+
+        let sort_start = Instant::now();
+        candidates
+            .par_iter_mut()
+            .for_each(|shard| shard.sort_unstable_by_key(|entry| entry.key));
+        sort_elapsed += sort_start.elapsed();
+
+        let reduce_start = Instant::now();
+        candidates
+            .par_iter_mut()
+            .try_for_each(|shard| reduce_sorted_compact(shard, row))?;
+        reduce_elapsed += reduce_start.elapsed();
+
+        let output_states = candidates.iter().map(Vec::len).sum();
+        let output_weight = candidates.iter().flatten().try_fold(0_u128, |sum, entry| {
+            sum.checked_add(entry.weight())
+                .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+        })?;
+        peak_states = peak_states.max(output_states);
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        boundary = candidates;
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states,
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .flatten()
+        .filter(|entry| PackedBoundary(u128::from(entry.key)).columns(n) == board_mask)
+        .try_fold(0_u128, |sum, entry| {
+            sum.checked_add(entry.weight())
+                .ok_or_else(|| "final parallel-generation coefficient overflow".to_owned())
+        })?;
+    Ok(ParallelGenerationResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed: total_start.elapsed(),
+            peak_states,
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_operator_candidates,
+            row_operator_matched: total_operator_matched,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers,
+        },
+        generation_elapsed,
+        sort_elapsed,
+        reduce_elapsed,
+        peak_thread_local_bytes,
+        peak_worker_partials,
     })
 }
 
@@ -2360,9 +2641,10 @@ mod e24_kernel_tests {
         PackedBoundary, ShardMode, contract_rows_d4_arena_sort_reduce,
         contract_rows_d4_batched_radix, contract_rows_d4_batched_sort_reduce,
         contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
-        contract_rows_d4_compact_sharded_sort_reduce, contract_rows_d4_deferred_sparse_sort_reduce,
-        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sharded_sparse_sort_reduce,
-        contract_rows_d4_sparse_sort_reduce, sort_packed_radix,
+        contract_rows_d4_compact_parallel_generation, contract_rows_d4_compact_sharded_sort_reduce,
+        contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_orbit_sort_reduce,
+        contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
+        sort_packed_radix,
     };
 
     #[test]
@@ -2502,6 +2784,27 @@ mod e24_kernel_tests {
             );
             assert_eq!(
                 candidate.row_operator_matched, baseline.row_operator_matched,
+                "N={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_generation_matches_compact_serial_generation() {
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_compact_sharded_sort_reduce(n, 8).unwrap();
+            let candidate = contract_rows_d4_compact_parallel_generation(n, 8).unwrap();
+            assert_eq!(candidate.contraction.count, baseline.count, "N={n}");
+            assert_eq!(
+                candidate.contraction.peak_states, baseline.peak_states,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.contraction.row_operator_candidates, baseline.row_operator_candidates,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.contraction.row_operator_matched, baseline.row_operator_matched,
                 "N={n}"
             );
         }
