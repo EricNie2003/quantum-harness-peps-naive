@@ -1139,3 +1139,103 @@ operations。更小 chunk 单调增加 run 数和时间，没有显著降低 RSS
 被拒代码只保留在 `codex/exp-chunked-runs`，未合入 main production。
 完整报告：`experiments/e27_chunked_runs/REPORT.md`；raw CSV：
 `benchmarks/e27_chunk_grid_release.csv`。
+
+## 30. E28：24-byte compact exact entries
+
+E28 将 N<=21 的 `3N` virtual key 精确存为 `u64`，把 checked `u128`
+coefficient 拆为两个 `u64`，使 entry 从 32 bytes 降到 24 bytes。
+没有缩小整数范围或使用未对齐 unsafe access。
+
+**KEEP**：
+
+| N | E26 8t | E28 8t | 时间改善 | E26 RSS | E28 RSS | RSS 改善 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 14 | 0.25820 s | 0.22065 s | 14.5% | 206,209,024 | 157,429,760 | 23.7% |
+| 15 | 1.85859 s | 1.61179 s | 13.3% | 1,256,726,528 | 946,487,296 | 24.7% |
+
+34 个 release tests 通过；count/support/80,077,350 N=15 transitions
+不变。完整报告：`experiments/e28_compact_soa/REPORT.md`；raw CSV：
+`benchmarks/e28_compact_release.csv`。
+
+## 31. E29：two-row C-derived macro
+
+E29 连续作用同一个 explicit-C row relation 两次，内部 row bond 不做
+全局 materialization，之后才 exact sort/reduce。
+
+**REJECT**：N=10--13 transitions 相对 E28 反而增加
+1.2%、1.6%、1.8%、2.4%；N=13 时间从 0.04773 s 增到 0.09829 s。
+机制是跳过第一行 canonical merge 后，第二行会为等价 intermediate
+states 重复执行 C apply。35 个 release tests 证明计数正确。
+
+被拒代码未合入 main。完整报告：
+`experiments/e29_two_row_macro/REPORT.md`；raw CSV：
+`benchmarks/e29_two_row_macro_release.csv`。
+
+## 32. E30：actual-cost macro tree search
+
+E30 穷举 N=10--13 全部 size-1/size-2 row compositions，以 actual
+transitions、peak candidates、measured time 评分，并计入搜索成本。
+
+**REJECT macro search**：
+
+| N | paths | search time | best association | work reduction |
+|---:|---:|---:|:---|---:|
+| 10 | 89 | 0.175 s | row 2 使用一次 size-2 | 0% |
+| 11 | 144 | 0.996 s | row 2 使用一次 size-2 | 0% |
+| 12 | 233 | 6.967 s | row 2 使用一次 size-2 | 0% |
+| 13 | 377 | 54.883 s | 全部 size-1 | 0% |
+
+搜索验证了 OMEinsum/treeSA 思路的边界：它能在 D4/sparse 基础上选择
+association，但候选 macro edge 本身没有 actual work 收益时，搜索不能
+创造性能。被拒代码未合入 main。完整报告：
+`experiments/e30_actual_macro_tree/REPORT.md`；raw CSV：
+`benchmarks/e30_macro_tree_search_release.csv`。
+
+## 33. E26–E30 强制五方向复盘
+
+### 33.1 结果与机制
+
+| 方向 | 核心实测 | 机制 | 决策 |
+|:---|:---|:---|:---|
+| E26 key shards | N=15 8t 2.755→1.859 s，RSS -26.6% | smaller sorts、parallel bucket reduce、较低 capacity over-reservation | KEEP |
+| E27 retained runs | peak candidates -53.7%，RSS 仅 -5.1%，时间 +74.8% | runs 与完整 output 同时存活；1.48e8 heap ops | REJECT |
+| E28 compact entries | entry 32→24 bytes；N=15 RSS -24.7%、time -13.3% | 降低真实 bytes/entry 与 memory traffic | KEEP |
+| E29 two-row macro | N=10--13 work +1.2%→+2.4%，N=13 time 2.06x | 延迟 canonical merge 导致重复 local C apply | REJECT |
+| E30 path search | 89--377 paths，最佳 work 改善 0%；search 0.175→54.9 s | 没有正收益 edge 时 tree search 无法改善 | REJECT |
+
+本轮最重要的正结论是：**稀疏性之外，数据布局和精确分区仍有稳定收益**。
+E26+E28 将 E24 N=15 的 8-thread 2.7549 s / 1.713 GB 降到
+1.6118 s / 0.946 GB；相对更早 11.0346 s flat baseline，吞吐已改善
+6.85x（线程数不同，仅作为累计工程进展，不作公平 speedup）。
+
+最重要的负结论是：当前 exact boundary 必须频繁 canonical merge。
+试图通过 retained runs 或 two-row association 减少 merge 次数，分别
+付出 heap/live-run 重叠和重复 C apply。路径搜索不能绕过这一事实。
+
+### 33.2 与 DFS 的剩余差距
+
+当前最佳 E28：
+
+| N | PEPS 1t | DFS 1t | gap | PEPS 8t | DFS 8t | gap | PEPS RSS |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 14 | 0.44980 | 0.07708 | 5.84x | 0.22065 | 0.009912 | 22.26x | 157 MB |
+| 15 | 3.15005 | 0.49924 | 6.31x | 1.61179 | 0.06609 | 24.39x | 946 MB |
+
+N=15 PEPS/DFS RSS 约 163x，且 N=14→15 时间倍率 PEPS 约 7.31，
+DFS 8t 约 6.67。差距仍随 N 扩大。现有证据足以否定“继续减少 sort
+常数即可超过 DFS”，但仍不是所有 exact PEPS contraction paths 的
+数学不可能性证明。
+
+### 33.3 新主假设与 E31–E35
+
+下一轮分成两条线：
+
+1. 继续压低当前已验证 production representation 的每-transition
+   成本：并行生成、窄系数 exact fast path、cache-friendly radix；
+2. 用 corner/diamond cut 和可认证 distinguishability audit 判断
+   row frontier 的指数障碍是否属于路径选择，还是更接近表示下界。
+
+顺序为 E31 parallel generation → E32 exact narrow-coefficient fast
+path → E33 compact shard radix → E34 corner/diamond contraction →
+E35 certified frontier lower-bound audit。完整 gates 写入研究计划。
+在 E35 完成和下一次 review 前不得启动 E36。

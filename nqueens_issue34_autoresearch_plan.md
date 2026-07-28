@@ -2749,3 +2749,39 @@ E27 已完成并 **REJECT**。N=15 RSS 仅降 5.1%，时间回退 74.8%，
 148,116,850 次 heap operations 成为新瓶颈；更小 chunk 没有进一步
 降低 RSS。被拒实现不进入 production main。下一方向按顺序为 E28
 row-aware compact key / SoA coefficients。
+
+## P. E26–E30 强制复盘后的修订（2026-07-28）
+
+完整复盘见 `REPORT.md` §33。E26/E28 KEEP，E27/E29/E30 REJECT。
+当前 production baseline 为 E28：N=15 在 8 threads 下
+1.61179 s / 946,487,296 bytes，exact count/support/transitions 不变。
+
+### P.1 新判断
+
+- key sharding 和 24-byte layout 的收益来自真实 cache/memory traffic，
+  应继续保留；
+- retained runs 不能避免 input runs 与 output 同时存活；
+- canonical merge 不能随意延后，否则 local C apply 重复；
+- macro tree search 只有在候选 edge 本身有 actual work 优势时才值得；
+- 当前 row frontier 尚未构成数学不可能性证明，需要替代 cut 与
+  certified distinguishability 两类证据。
+
+### P.2 E31–E35
+
+| ID | 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E31 | **parallel compact candidate generation** | 每个 worker 完整消费 E28 C-derived parent shards；thread-local buckets 的并集与 serial candidate multiset 完全一致 | 高 / 2 | N=14/15 8t time 降 20%，RSS 增幅 <30%；count/support/work identical | speedup <10% 或 thread-local capacity 令 RSS 增 >50% |
+| E32 | **checked u64 coefficient fast path + exact promotion** | 每次 add/mul checked；任一 overflow 自动重放/提升该 layer 为 u128；强制 promotion 测试 | 高 / 3 | N=14/15 RSS 或 time 再降 20%，所有 counts 一致 | 无法证明 promotion 完整，或收益 <10% |
+| E33 | **out-of-place compact shard LSD radix** | key/value permutation 完整；与 standard sort 的 exact multiset/reduction 对照 | 中高 / 3 | 两档 time 降 15%，RSS 增幅 <25% | 重现 E24 radix：两档变慢或 scratch 抵消内存收益 |
+| E34 | **corner/diamond explicit-C contraction path** | frontier 完整覆盖 cut virtual bonds；所有 exposed endpoints 正确施加 v0/v1/v2；D4 stabilizer 明确 | 中低 / 5 | N=10--12 peak support/candidates 比 row cut 降 30%，count 与 oracle 一致 | active interface 或 support 连续两档 >2x row baseline |
+| E35 | **certified row-frontier distinguishability audit** | 用 exact two-prime signatures 后附确定性 witness/replay，不能把 hash collision 当证明 | 中 / 5 | 给出 N=10--14 可复查 lower bound、增长拟合和 DFS/PEPS 资源投影；或发现可合并 classes ≥30% 且在线可构造 | 只能给 post-hoc probabilistic quotient，无法认证或无法在线构造 |
+
+### P.3 强制规则
+
+1. E31--E33 都以 E28 Prefix/256、24-byte entry 为同 revision baseline；
+2. E31 必须分别报告 generation/sort/reduce wall time和 thread-local bytes；
+3. E32 必须用人工小位宽触发 promotion，与 u128 baseline 逐层比较；
+4. E33 对相同 candidate buffers 做 standard/radix 消融；
+5. E34 先画出并测试 cut interface，不得把 DFS state recurrence叫作 corner PEPS；
+6. E35 若不能给确定性 witness，只能称 empirical bound，禁止宣称“不可能”；
+7. 完成 E35 后执行下一次 five-direction review，复盘前不得启动 E36。
