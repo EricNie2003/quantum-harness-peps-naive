@@ -60,13 +60,33 @@ fn push_leg(legs: &mut Vec<(u16, u8)>, id: u16, value: u8) {
     legs.push((id, value));
 }
 
-fn site_tensor(n: usize, row: usize, column: usize) -> Result<(SparseTensor, u128), String> {
+fn occupied(legs: VirtualLegs) -> bool {
+    legs.column_in == 0
+        && legs.column_out == 1
+        && legs.row_in == 0
+        && legs.row_out == 1
+        && legs.diag_dr_in == 0
+        && legs.diag_dr_out == 1
+        && legs.diag_dl_in == 0
+        && legs.diag_dl_out == 1
+}
+
+fn site_tensor(
+    n: usize,
+    row: usize,
+    column: usize,
+    top_queen: Option<usize>,
+) -> Result<(SparseTensor, u128), String> {
     let tensor = SiteTensorC::sec_vi();
     let mut accumulated = HashMap::<u128, u128>::new();
     let mut canonical_indices = None::<Vec<u16>>;
     let mut accepted_entries = 0_u128;
 
     for entry in tensor.entries() {
+        let is_occupied = occupied(entry.legs);
+        if row == 0 && top_queen.is_some_and(|queen| is_occupied != (column == queen)) {
+            continue;
+        }
         let VirtualLegs {
             column_in,
             column_out,
@@ -129,9 +149,20 @@ fn site_tensor(n: usize, row: usize, column: usize) -> Result<(SparseTensor, u12
             .fold(0_u128, |key, (position, &(_, value))| {
                 key | (u128::from(value) << position)
             });
+        let orbit_weight =
+            if row == 0 && is_occupied && top_queen.is_some_and(|queen| queen != n - 1 - queen) {
+                2
+            } else {
+                1
+            };
         let coefficient = accumulated.entry(key).or_insert(0);
         *coefficient = coefficient
-            .checked_add(entry.value)
+            .checked_add(
+                entry
+                    .value
+                    .checked_mul(orbit_weight)
+                    .ok_or_else(|| "D4 slice multiplicity overflow".to_owned())?,
+            )
             .ok_or_else(|| "local boundary contraction overflow".to_owned())?;
     }
 
@@ -378,7 +409,7 @@ pub fn contract_with_path(n: usize, path: PathKind) -> Result<PathMetrics, Strin
     for row in 0..n {
         let mut grid_row = Vec::with_capacity(n);
         for column in 0..n {
-            let (tensor, accepted_entries) = site_tensor(n, row, column)?;
+            let (tensor, accepted_entries) = site_tensor(n, row, column, None)?;
             metrics.local_tensor_entries_examined += 17;
             metrics.local_tensor_entries_accepted += accepted_entries;
             metrics.peak_support = metrics.peak_support.max(tensor.entries.len());
@@ -429,6 +460,154 @@ pub fn contract_with_path(n: usize, path: PathKind) -> Result<PathMetrics, Strin
     Ok(metrics)
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SeparatorMetrics {
+    pub count: u128,
+    pub peak_top_support: usize,
+    pub peak_bottom_support: usize,
+    pub peak_live_support: usize,
+    pub aggregate_left_join_keys: usize,
+    pub aggregate_right_join_keys: usize,
+    pub join_matching_pairs: u128,
+    pub path: PathMetrics,
+    pub d4_sectors: usize,
+}
+
+fn contract_row_region(
+    grid: &[Vec<Cluster>],
+    row_start: usize,
+    row_end: usize,
+    metrics: &mut PathMetrics,
+) -> Result<Cluster, String> {
+    let rows = grid[row_start..row_end]
+        .iter()
+        .map(|row| contract_sequence(row.clone(), metrics))
+        .collect::<Result<Vec<_>, _>>()?;
+    contract_sequence(rows, metrics)
+}
+
+fn join_key_count(left: &SparseTensor, right: &SparseTensor) -> (usize, usize) {
+    let right_positions = right
+        .indices
+        .iter()
+        .enumerate()
+        .map(|(position, &id)| (id, position))
+        .collect::<HashMap<_, _>>();
+    let shared = left
+        .indices
+        .iter()
+        .enumerate()
+        .filter_map(|(left_position, id)| {
+            right_positions
+                .get(id)
+                .map(|&right_position| (left_position, right_position))
+        })
+        .collect::<Vec<_>>();
+    let left_positions = shared.iter().map(|&(left, _)| left).collect::<Vec<_>>();
+    let right_positions = shared.iter().map(|&(_, right)| right).collect::<Vec<_>>();
+    let left_keys = left
+        .entries
+        .iter()
+        .map(|&(key, _)| project_key(key, &left_positions))
+        .collect::<HashSet<_>>()
+        .len();
+    let right_keys = right
+        .entries
+        .iter()
+        .map(|&(key, _)| project_key(key, &right_positions))
+        .collect::<HashSet<_>>()
+        .len();
+    (left_keys, right_keys)
+}
+
+pub fn contract_bidirectional_separator(n: usize) -> Result<SeparatorMetrics, String> {
+    if n == 0 {
+        return Ok(SeparatorMetrics {
+            count: 1,
+            peak_top_support: 1,
+            peak_bottom_support: 1,
+            peak_live_support: 2,
+            d4_sectors: 1,
+            ..SeparatorMetrics::default()
+        });
+    }
+    if n == 1 {
+        let path = contract_with_path(1, PathKind::RowBlocks)?;
+        return Ok(SeparatorMetrics {
+            count: path.count,
+            peak_top_support: 1,
+            peak_bottom_support: 1,
+            peak_live_support: 2,
+            path,
+            d4_sectors: 1,
+            ..SeparatorMetrics::default()
+        });
+    }
+    let middle = n / 2;
+    let mut result = SeparatorMetrics {
+        d4_sectors: n.div_ceil(2),
+        ..SeparatorMetrics::default()
+    };
+    for queen in 0..n.div_ceil(2) {
+        let mut grid = Vec::with_capacity(n);
+        let mut metrics = PathMetrics::default();
+        for row in 0..n {
+            let mut grid_row = Vec::with_capacity(n);
+            for column in 0..n {
+                let (tensor, accepted) = site_tensor(n, row, column, Some(queen))?;
+                metrics.local_tensor_entries_examined += 17;
+                metrics.local_tensor_entries_accepted += accepted;
+                metrics.peak_support = metrics.peak_support.max(tensor.entries.len());
+                metrics.peak_rank = metrics.peak_rank.max(tensor.indices.len());
+                grid_row.push(Cluster {
+                    tensor,
+                    sites: vec![row * n + column],
+                });
+            }
+            grid.push(grid_row);
+        }
+        let top = contract_row_region(&grid, 0, middle, &mut metrics)?;
+        let bottom = contract_row_region(&grid, middle, n, &mut metrics)?;
+        let top_support = top.tensor.entries.len();
+        let bottom_support = bottom.tensor.entries.len();
+        let (left_keys, right_keys) = join_key_count(&top.tensor, &bottom.tensor);
+        let matches_before = metrics.matching_entry_pairs;
+        let joined = contract_clusters(top, bottom, &mut metrics)?;
+        if !joined.tensor.indices.is_empty() {
+            return Err("separator join retained open virtual bonds".to_owned());
+        }
+        let sector_count = joined
+            .tensor
+            .entries
+            .iter()
+            .try_fold(0_u128, |sum, &(_, value)| {
+                sum.checked_add(value)
+                    .ok_or_else(|| "separator count overflow".to_owned())
+            })?;
+        result.count = result
+            .count
+            .checked_add(sector_count)
+            .ok_or_else(|| "aggregate separator count overflow".to_owned())?;
+        result.peak_top_support = result.peak_top_support.max(top_support);
+        result.peak_bottom_support = result.peak_bottom_support.max(bottom_support);
+        result.peak_live_support = result
+            .peak_live_support
+            .max(top_support.saturating_add(bottom_support));
+        result.aggregate_left_join_keys += left_keys;
+        result.aggregate_right_join_keys += right_keys;
+        result.join_matching_pairs += metrics.matching_entry_pairs - matches_before;
+        result.path.peak_support = result.path.peak_support.max(metrics.peak_support);
+        result.path.peak_rank = result.path.peak_rank.max(metrics.peak_rank);
+        result.path.local_tensor_entries_examined += metrics.local_tensor_entries_examined;
+        result.path.local_tensor_entries_accepted += metrics.local_tensor_entries_accepted;
+        result.path.cartesian_pair_upper_bound += metrics.cartesian_pair_upper_bound;
+        result.path.matching_entry_pairs += metrics.matching_entry_pairs;
+        result.path.contractions += metrics.contractions;
+    }
+    result.path.count = result.count;
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PathKind, contract_with_path};
@@ -449,6 +628,17 @@ mod tests {
                     "path={path:?}, N={n}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn bidirectional_separator_matches_known_counts_through_n5() {
+        for n in 0..=5 {
+            assert_eq!(
+                super::contract_bidirectional_separator(n).unwrap().count,
+                known_count(n).unwrap(),
+                "N={n}"
+            );
         }
     }
 }

@@ -905,3 +905,14 @@ CRT、消融和最终 DFS benchmark 改为所有 KEEP 候选的强制工程阶�
 E19 明确采用“D4 外层 sector + 内层非对称路径搜索”的组合，但不假设必然有收益。候选集
 必须包含当前 D4 row baseline，并按 aggregate actual nnz、RSS 和 wall time 选择；sector
 拆分导致的跨 sector merge 损失也计入总成本。
+
+## 21. E20：bidirectional separator join
+
+显式 C top/bottom 子网络以完整 3N-bit virtual separator key 精确连接，N=4–7 计数全部
+正确。但 v1 column ends 与两族 v2 diagonal ends 使 bottom frontier 极密：N=7 top/bottom
+support 为 13/13,589，live 13,602，而单向 D4 baseline peak support 仅 86；时间
+8.409869 s 对 0.0000557 s。
+
+join matching pairs 在 N=7 仅 22，故瓶颈不是 hash join，而是 bottom interface 的生成。
+按 gate **REJECT 并停止 N=8**。完整报告：
+`experiments/e20_bidirectional_separator/REPORT.md`。

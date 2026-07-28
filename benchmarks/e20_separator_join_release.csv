@@ -1,0 +1,5 @@
+N,count,known_count,verified,elapsed_s,peak_rss_bytes,peak_top_support,peak_bottom_support,peak_live_support,aggregate_left_join_keys,aggregate_right_join_keys,join_matching_pairs,peak_intermediate_support,peak_rank,tensor_entries_examined,tensor_entries_accepted,all_matching_pairs,d4_sectors
+4,2,2,true,0.001265900,5627904,2,72,74,3,144,1,768,20,544,235,5302,2
+5,10,10,true,0.024292500,7856128,3,292,295,7,876,6,7168,26,1275,670,114031,3
+6,4,4,true,0.366319300,24293376,7,2296,2303,18,6888,2,65536,32,1836,1090,1335687,3
+7,40,40,true,8.409868500,195694592,13,13589,13602,43,54356,22,589824,38,3332,2149,20692370,4
