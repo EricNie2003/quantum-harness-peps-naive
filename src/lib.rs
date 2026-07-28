@@ -217,6 +217,8 @@ pub struct LayerMetric {
     pub input_states: usize,
     pub tensor_entries_examined: u128,
     pub tensor_entries_matched: u128,
+    pub row_operator_candidates: u128,
+    pub row_operator_matched: u128,
     pub completed_row_terms: u128,
     pub output_states: usize,
     pub output_weight: u128,
@@ -232,14 +234,80 @@ pub struct ContractionResult {
     pub peak_states: usize,
     pub tensor_entries_examined: u128,
     pub tensor_entries_matched: u128,
+    pub row_operator_candidates: u128,
+    pub row_operator_matched: u128,
     pub peak_rss_bytes: u64,
     pub layers: Vec<LayerMetric>,
 }
 
 #[derive(Default)]
 struct RowCounters {
-    examined: u128,
-    matched: u128,
+    tensor_examined: u128,
+    tensor_matched: u128,
+    operator_candidates: u128,
+    operator_matched: u128,
+}
+
+#[derive(Clone, Debug)]
+struct CompiledRowOperator {
+    occupied: CEntry,
+}
+
+impl CompiledRowOperator {
+    /// Partially evaluate the horizontal row MPO from the explicit sparse C.
+    ///
+    /// Compilation succeeds only for the exact Sec. VI structure: one
+    /// identity pass-through entry for every incoming signature and one
+    /// all-channel 0->1 emission entry. If C changes, this specialization
+    /// fails closed instead of silently becoming a handwritten recurrence.
+    fn compile(tensor: &SiteTensorC) -> Result<Self, String> {
+        let mut passthrough = [false; 16];
+        let mut occupied = None;
+
+        for &entry in tensor.entries() {
+            let legs = entry.legs;
+            let is_passthrough = legs.column_in == legs.column_out
+                && legs.row_in == legs.row_out
+                && legs.diag_dr_in == legs.diag_dr_out
+                && legs.diag_dl_in == legs.diag_dl_out;
+            let is_occupied = legs.column_in == 0
+                && legs.column_out == 1
+                && legs.row_in == 0
+                && legs.row_out == 1
+                && legs.diag_dr_in == 0
+                && legs.diag_dr_out == 1
+                && legs.diag_dl_in == 0
+                && legs.diag_dl_out == 1;
+
+            if entry.value != 1 {
+                return Err("compiled row operator requires unit Sec. VI coefficients".to_owned());
+            }
+            if is_passthrough {
+                let key = input_key(
+                    legs.column_in,
+                    legs.row_in,
+                    legs.diag_dr_in,
+                    legs.diag_dl_in,
+                );
+                if std::mem::replace(&mut passthrough[key], true) {
+                    return Err(format!("duplicate C pass-through signature {key:04b}"));
+                }
+            } else if is_occupied {
+                if occupied.replace(entry).is_some() {
+                    return Err("multiple occupied C entries".to_owned());
+                }
+            } else {
+                return Err("C contains an entry outside the Sec. VI row automaton".to_owned());
+            }
+        }
+
+        if passthrough.iter().any(|present| !present) {
+            return Err("C is missing a pass-through signature".to_owned());
+        }
+        Ok(Self {
+            occupied: occupied.ok_or_else(|| "C is missing the occupied entry".to_owned())?,
+        })
+    }
 }
 
 fn bit(mask: u64, index: usize) -> u8 {
@@ -250,6 +318,11 @@ fn set_bit(mask: &mut u64, index: usize, value: u8) {
     if value == 1 {
         *mask |= 1_u64 << index;
     }
+}
+
+fn replace_bit(mask: u64, index: usize, value: u8) -> u64 {
+    let selected = 1_u64 << index;
+    (mask & !selected) | (u64::from(value) << index)
 }
 
 /// Contract one row by applying the explicit sparse `C` tensor at every site.
@@ -263,7 +336,7 @@ fn set_bit(mask: &mut u64, index: usize, value: u8) {
 /// Reversing the paper's drawing convention for a diagonal, if any, is an
 /// isomorphic reorientation: `v0` remains at the incoming endpoint and `v2`
 /// at the outgoing endpoint.
-fn contract_one_row(
+fn contract_one_row_sitewise(
     n: usize,
     tensor: &SiteTensorC,
     parent: BoundaryState,
@@ -290,9 +363,9 @@ fn contract_one_row(
         for partial in partials.drain(..) {
             let matching =
                 tensor.matching_entries(column_in, partial.row_signal, diag_dr_in, diag_dl_in);
-            counters.examined += matching.len() as u128;
+            counters.tensor_examined += matching.len() as u128;
             for entry in matching {
-                counters.matched += 1;
+                counters.tensor_matched += 1;
                 let mut successor = PartialRow {
                     columns_out: partial.columns_out,
                     diag_dr_out: partial.diag_dr_out,
@@ -344,8 +417,72 @@ fn contract_one_row(
         .collect())
 }
 
+/// Apply the exact row transfer produced by partial evaluation of C.
+///
+/// The formula below is valid only because `CompiledRowOperator::compile`
+/// verified every empty C entry is an identity pass-through and extracted the
+/// unique occupied C entry. Geometry only shifts diagonal outgoing signals to
+/// their positions on the next row.
+fn contract_one_row_compiled(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    counters: &mut RowCounters,
+) -> Result<Vec<(BoundaryState, u128)>, String> {
+    let occupied = operator.occupied;
+    let board_mask = (1_u64 << n) - 1;
+    let mut outputs = Vec::with_capacity(n);
+
+    for column in 0..n {
+        counters.operator_candidates += 1;
+        let legs = occupied.legs;
+        if bit(parent.columns, column) != legs.column_in
+            || bit(parent.diag_dr, column) != legs.diag_dr_in
+            || bit(parent.diag_dl, column) != legs.diag_dl_in
+        {
+            continue;
+        }
+        counters.operator_matched += 1;
+
+        let columns_out = replace_bit(parent.columns, column, legs.column_out);
+        let diag_dr_at_sites = replace_bit(parent.diag_dr, column, legs.diag_dr_out);
+        let diag_dl_at_sites = replace_bit(parent.diag_dl, column, legs.diag_dl_out);
+        let weight = parent_weight
+            .checked_mul(occupied.value)
+            .ok_or_else(|| "coefficient overflow in compiled row operator".to_owned())?;
+        outputs.push((
+            BoundaryState {
+                columns: columns_out,
+                diag_dr: (diag_dr_at_sites << 1) & board_mask,
+                diag_dl: diag_dl_at_sites >> 1,
+            },
+            weight,
+        ));
+    }
+    Ok(outputs)
+}
+
+#[derive(Clone, Copy)]
+enum RowBackend {
+    Sitewise,
+    Compiled,
+}
+
 /// Exactly contract the rank-8 `C` network row by row.
 pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_with_backend(n, RowBackend::Compiled)
+}
+
+/// Reference backend retained for tensor-level verification.
+pub fn contract_rows_sitewise(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_with_backend(n, RowBackend::Sitewise)
+}
+
+fn contract_rows_with_backend(
+    n: usize,
+    row_backend: RowBackend,
+) -> Result<ContractionResult, String> {
     if n > 42 {
         return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
     }
@@ -357,6 +494,8 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
             peak_states: 1,
             tensor_entries_examined: 0,
             tensor_entries_matched: 0,
+            row_operator_candidates: 0,
+            row_operator_matched: 0,
             peak_rss_bytes: peak_rss_bytes(),
             layers: Vec::new(),
         });
@@ -364,6 +503,10 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
 
     let tensor = SiteTensorC::sec_vi();
     debug_assert_eq!(tensor.entries().len(), 17);
+    let compiled_operator = match row_backend {
+        RowBackend::Compiled => Some(CompiledRowOperator::compile(&tensor)?),
+        RowBackend::Sitewise => None,
+    };
     let initial = BoundaryState {
         columns: 0,
         diag_dr: 0,
@@ -371,8 +514,10 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
     };
     let mut boundary = HashMap::from([(PackedBoundary::pack(initial, n), 1_u128)]);
     let mut peak_states = 1;
-    let mut total_examined = 0;
-    let mut total_matched = 0;
+    let mut total_tensor_examined = if compiled_operator.is_some() { 17 } else { 0 };
+    let mut total_tensor_matched = if compiled_operator.is_some() { 17 } else { 0 };
+    let mut total_operator_candidates = 0;
+    let mut total_operator_matched = 0;
     let mut layers = Vec::with_capacity(n);
     let total_start = Instant::now();
 
@@ -385,9 +530,15 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
 
         for (packed_parent, parent_weight) in boundary.drain() {
             let parent = packed_parent.unpack(n);
-            for (successor, weight) in
-                contract_one_row(n, &tensor, parent, parent_weight, &mut counters)?
-            {
+            let row_terms = match &compiled_operator {
+                Some(operator) => {
+                    contract_one_row_compiled(n, operator, parent, parent_weight, &mut counters)?
+                }
+                None => {
+                    contract_one_row_sitewise(n, &tensor, parent, parent_weight, &mut counters)?
+                }
+            };
+            for (successor, weight) in row_terms {
                 completed_row_terms += 1;
                 let coefficient = next.entry(PackedBoundary::pack(successor, n)).or_insert(0);
                 *coefficient = coefficient
@@ -401,14 +552,18 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
                 .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
         })?;
         peak_states = peak_states.max(next.len());
-        total_examined += counters.examined;
-        total_matched += counters.matched;
+        total_tensor_examined += counters.tensor_examined;
+        total_tensor_matched += counters.tensor_matched;
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
         let layer_peak_rss = peak_rss_bytes();
         layers.push(LayerMetric {
             row,
             input_states,
-            tensor_entries_examined: counters.examined,
-            tensor_entries_matched: counters.matched,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
             completed_row_terms,
             output_states: next.len(),
             output_weight,
@@ -434,8 +589,10 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
         count,
         elapsed: total_start.elapsed(),
         peak_states,
-        tensor_entries_examined: total_examined,
-        tensor_entries_matched: total_matched,
+        tensor_entries_examined: total_tensor_examined,
+        tensor_entries_matched: total_tensor_matched,
+        row_operator_candidates: total_operator_candidates,
+        row_operator_matched: total_operator_matched,
         peak_rss_bytes: peak_rss_bytes(),
         layers,
     })
@@ -544,9 +701,11 @@ pub fn peak_rss_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundaryState, PackedBoundary, SiteTensorB, SiteTensorC, VirtualLegs, contract_rows,
-        known_count,
+        BoundaryState, CompiledRowOperator, PackedBoundary, RowCounters, SiteTensorB, SiteTensorC,
+        VirtualLegs, contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
+        contract_rows_sitewise, known_count,
     };
+    use std::collections::HashMap;
 
     fn brute_force_count(n: usize) -> u128 {
         fn place(row: usize, n: usize, queens: &mut Vec<usize>, count: &mut u128) {
@@ -672,6 +831,73 @@ mod tests {
         for n in 0..=10 {
             let result = contract_rows(n).unwrap();
             assert_eq!(result.count, known_count(n).unwrap(), "N={n}");
+        }
+    }
+
+    fn normalized_terms(terms: Vec<(BoundaryState, u128)>) -> HashMap<BoundaryState, u128> {
+        let mut normalized = HashMap::new();
+        for (state, weight) in terms {
+            *normalized.entry(state).or_insert(0) += weight;
+        }
+        normalized
+    }
+
+    #[test]
+    fn compiled_operator_matches_sitewise_for_every_reachable_parent_through_n8() {
+        let tensor = SiteTensorC::sec_vi();
+        let operator = CompiledRowOperator::compile(&tensor).unwrap();
+
+        for n in 1..=8 {
+            let mut boundary = HashMap::from([(
+                BoundaryState {
+                    columns: 0,
+                    diag_dr: 0,
+                    diag_dl: 0,
+                },
+                1_u128,
+            )]);
+            for row in 0..n {
+                let mut next = HashMap::new();
+                for (&parent, &parent_weight) in &boundary {
+                    let reference = contract_one_row_sitewise(
+                        n,
+                        &tensor,
+                        parent,
+                        parent_weight,
+                        &mut RowCounters::default(),
+                    )
+                    .unwrap();
+                    let compiled = contract_one_row_compiled(
+                        n,
+                        &operator,
+                        parent,
+                        parent_weight,
+                        &mut RowCounters::default(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        normalized_terms(reference.clone()),
+                        normalized_terms(compiled),
+                        "N={n}, row={}, parent={parent:?}",
+                        row + 1
+                    );
+                    for (state, weight) in reference {
+                        *next.entry(state).or_insert(0) += weight;
+                    }
+                }
+                boundary = next;
+            }
+        }
+    }
+
+    #[test]
+    fn complete_compiled_and_sitewise_contractions_agree_through_n10() {
+        for n in 0..=10 {
+            assert_eq!(
+                contract_rows(n).unwrap().count,
+                contract_rows_sitewise(n).unwrap().count,
+                "N={n}"
+            );
         }
     }
 
