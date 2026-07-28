@@ -854,7 +854,15 @@ pub fn contract_rows_d4_two_row_macro(
     n: usize,
     shards: usize,
 ) -> Result<MacroContractionResult, String> {
-    contract_rows_d4_two_row_macro_kernel(n, shards)
+    contract_rows_d4_macro_pattern(n, shards, 0x5555_5555_5555_5555)
+}
+
+pub fn contract_rows_d4_macro_pattern(
+    n: usize,
+    shards: usize,
+    two_row_starts: u64,
+) -> Result<MacroContractionResult, String> {
+    contract_rows_d4_two_row_macro_kernel(n, shards, two_row_starts)
 }
 
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
@@ -1409,6 +1417,7 @@ fn contract_rows_d4_compact_sharded_kernel(
 fn contract_rows_d4_two_row_macro_kernel(
     n: usize,
     shards: usize,
+    two_row_starts: u64,
 ) -> Result<MacroContractionResult, String> {
     if n > 21 {
         return Err("the compact u64 virtual-boundary backend supports N <= 21".to_owned());
@@ -1469,7 +1478,7 @@ fn contract_rows_d4_two_row_macro_kernel(
         for shard in &mut candidates {
             shard.clear();
         }
-        let has_second_row = row + 1 < n;
+        let has_second_row = row + 1 < n && ((two_row_starts >> row) & 1) != 0;
         for parent_shard in &boundary {
             for &parent in parent_shard {
                 let mut first = vec![Vec::<CompactEntry>::new()];
