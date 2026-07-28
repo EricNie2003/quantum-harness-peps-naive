@@ -1001,3 +1001,91 @@ gate；N=10 收益回落到 13.0%。所有候选保留相同 C、D4 与边界，
 因此 **REJECT 完整 weighted-edge production rewrite**：大部分 residual functions 不是简单
 标量倍数，E15 的线性低秩不能靠一维 edge scaling 获得。完整报告：
 `experiments/e23_weighted_edge_quotient/REPORT.md`。
+
+## 25. E24：生产 sort-reduce 内核
+
+E24 保持显式 17-entry C、`v0/v1/v2`、checked `u128` 和首行纵向镜像
+D4 orbit 不变，只消融 arena、candidate generation、排序和 sparse
+position iterator。31 个 release tests 与 Clippy 全部通过。
+
+**KEEP arena + fused batch + sparse iterator；KEEP parallel standard sort
+作为吞吐选项；REJECT 自写 MSD radix；REJECT deferred candidate 默认布局。**
+
+单线程 `arena_batched_sparse` 在 N=12--15 相对本轮原 D4 baseline 快
+2.27--2.46x；固定 8 线程只并行排序时，N=13--15 相对原单线程 PEPS
+快 4.0--4.74x。N=15 从 11.0346 s 降至 4.8224 s（1t）或
+2.7549 s（8t sort）。
+
+然而同机 DFS 仍明显更快：
+
+| N | PEPS 1t s | DFS 1t s | gap | PEPS 8t s | DFS 8t s | gap |
+|---:|---:|---:|---:|---:|---:|---:|
+| 13 | 0.12015 | 0.01415 | 8.49x | 0.06785 | 0.002211 | 30.69x |
+| 14 | 0.71181 | 0.07708 | 9.23x | 0.34198 | 0.009912 | 34.50x |
+| 15 | 4.82235 | 0.49924 | 9.66x | 2.75489 | 0.06609 | 41.68x |
+
+稀疏 position iterator 将 N=15 无效位置检查从 1,031,876,940 降为
+80,077,350 个 accepted candidates，但 peak support 仍为 18,178,233，
+RSS 约 1.71 GB。剩余瓶颈已从 local tensor predicate 转移为整层 candidate
+写入、排序、聚合与 frontier 内存流量。
+
+完整报告：`experiments/e24_radix_arena_kernel/REPORT.md`；raw CSV：
+`benchmarks/e24_*_release.csv`。
+
+## 26. E25：依赖拒绝
+
+E25 的预注册前置条件是 E21 或 E23 至少一个通过 production keep gate。
+E21 触发 nodes/support kill gate，E23 也被拒绝；E22 只保留 order-search
+机制，不能冒充成功的 symbolic representation。
+
+因此 E25 **DEPENDENCY REJECT**：没有启动 tilted separator、没有物化
+bottom-v2 support，也没有用新编号重跑 E20。完整记录：
+`experiments/e25_symbolic_tilted_separator/REPORT.md`。
+
+## 27. E21–E25 强制五方向复盘
+
+### 27.1 结果与机制
+
+| 方向 | 结果 | 机制判断 | 决策 |
+|:---|:---|:---|:---|
+| E21 canonical weighted DD | N=8/9 nodes/support=4.53/3.65，慢 59--71x | canonical apply 没有共享足够 residual subfunctions，unique/apply hash 开销反而放大表示 | REJECT production；保留研究基线 |
+| E22 actual-node order search | N=8/9 nodes 降 21.3%/22.2%，N=10 仅 13.0%；仍慢 80--105x | D4-compatible variable order 有真实收益，但不能修复错误的表示数量级 | KEEP 搜索机制；REJECT production |
+| E23 proportional edge quotient | N=8--10 nodes 仅降 6.1%/14.6%/5.4%，时间增 26--46% | 大部分 exact residuals 不是标量倍数；一维 edge weight 捕获不了 E15 的多维秩 | REJECT |
+| E24 production kernel | serial 2.27--2.46x，8t sort 总体约 4x；count/support 保持 | arena/batch 降 allocation；稀疏位集去掉 11--13x 无效检查；剩余受排序和内存带宽控制 | KEEP |
+| E25 tilted separator | E21/E23 均未通过 production gate | 没有合法 symbolic bottom 表示；重跑 concrete separator 只会重复 E20 | DEPENDENCY REJECT |
+
+本轮推翻了两个假设：
+
+1. “canonical DD + 变量顺序搜索会自然小于 concrete support”不成立；
+   搜索能给 20% node 改善，但 representation 本身仍大 3--6 倍且 hash/apply
+   更慢。
+2. “局域 17-nnz 检查是 direct PEPS 的主要成本”不再成立；E24 已把
+   无效检查削减一个数量级，时间只再降约 2.3 倍。
+
+得到的新事实是：当前最强、最可复现的路径仍是 **显式 C 派生的稀疏
+flat frontier**，但它必须避免一次物化整层 8000 万候选。此结论不是
+“PEPS 永远不可能超过 DFS”的证明；我们没有所有 exact contraction
+paths 的下界。它是对当前 row-frontier 表示的机制性否定：N=15 PEPS
+保留 1818 万 states，而 DFS 只遍历搜索树并维持 O(1) bitmask stack，
+所以仅靠 hasher、radix 常数或更多线程不可能消除现有数量级差距。
+
+### 27.2 新优先级
+
+下一轮从 E24 KEEP 代码出发，先处理 candidate materialization，再考虑
+高风险 contraction path：
+
+1. E26：key-prefix sharded parallel sort-reduce；
+2. E27：parent-chunk sorted runs + exact k-way merge，限制 peak candidate；
+3. E28：row-aware compact boundary key / SoA exact coefficient layout；
+4. E29：两行 C-derived macro apply，在内部 bond 消去后才物化 boundary；
+5. E30：用 actual support/candidate/RSS 成本搜索 sharded macro contraction
+   tree（简化 greedy/treeSA）。
+
+E26 是最简单且最可行的方向。若 prefix sharding 不能改善 cache locality
+或并行归并，立即停止调 bucket 常数并转 E27。E27 的目标首先是 RSS，
+允许最多 20% 时间回退；E28 必须与 E26/E27 做交互消融，避免重复 E24
+deferred layout 的失败。E29/E30 只有在小 N 不产生 N² candidate blow-up
+时才扩大 benchmark。
+
+五方向 review 已完成，允许启动 E26；完整 gates 同步写入
+`nqueens_issue34_autoresearch_plan.md`。

@@ -2686,3 +2686,51 @@ baseline 比较。至少保留以下矩阵：
 
 最终报告必须同时给出 incremental chain 和 ablation matrix，避免把后加入的优化收益错误
 归因给前置改动。
+
+## O. E21–E25 强制复盘后的修订（2026-07-28）
+
+E21–E25 的完整复盘见 `REPORT.md` §27。E21 的 canonical DD 与 E23 的
+weighted-edge quotient 均未通过 production gate；E22 证明 actual-node
+order search 有约 20% node 收益，但 DD 仍比 direct D4 慢 80--105x。
+E25 因此按预注册前置条件 dependency reject，未重跑 E20。
+
+E24 是本轮唯一 production KEEP：arena、融合 candidate generation 与
+C-derived sparse position iterator 将 N=12--15 serial runtime 改善
+2.27--2.46x；固定 8 线程标准排序将原 PEPS baseline 再改善到约 4x。
+但 N=15 仍有 18,178,233 peak states、80,077,350 accepted candidates
+和约 1.71 GB RSS；同线程 DFS 快 41.68x。
+
+### O.1 新主假设
+
+短期最可检验的假设不再是 post-hoc symbolic compression，而是：
+
+> 保留显式 17-entry C 派生的 exact sparse transition，但用 key-prefix
+> partition、局部即时归并和有界 sorted runs 避免全层 candidate 的一次性
+> materialization；只有在该 production representation 上，再搜索两行
+> macro/tree association。
+
+如果 E26/E27 只能改变排序常数而不能降低 peak candidates/RSS 或增长率，
+则 flat row frontier 已达到结构瓶颈；届时必须明确报告无法超过 DFS 的
+实测范围，而不能宣称数学上的普遍不可能性。
+
+### O.2 E26–E30
+
+| ID | 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E26 | **key-prefix sharded parallel sort-reduce** | successor 仍由 compiled 17-entry C 生成；按 packed virtual key 的不重叠 prefix 完整分区；每 bucket exact checked reduce | 高 / 2 | N=14/15 至少一项：同线程时间降 20% 或 RSS 降 30%；count/support/work 完全一致 | 最佳 8--256 buckets 改善 <10%，或额外 partition pass 抵消收益 |
+| E27 | **parent-chunk sorted runs + exact k-way merge** | 每个 run 覆盖一段完整 parent transitions；最终按 key exact 合并所有 run，无丢弃/近似 | 高 / 3 | N=15 peak RSS 降 40%，时间回退不超过 20%，count/support/work 一致 | run metadata/merge 比全层多 2x 时间，或仍保留全部 candidates |
+| E28 | **row-aware compact key + SoA coefficients** | 动态省略的 bits 必须由该 row 的 v0/v2/shift 唯一恢复；u128 coefficient 独立 checked | 中高 / 3 | 在 E26/E27 上 N=14/15 RSS 再降 20% 或时间降 15% | 重现 E24 deferred：RSS 上升或 N=15 收益 <5% |
+| E29 | **two-row C-derived macro apply** | 明确收缩两行所有局域 C 与内部 virtual bonds；不得写 queen-pair recurrence | 中 / 4 | N=10--13 output support 不增，accepted candidates/row-equivalent 降 25% | N² macro branches 或中间 support 超单行 2x 连续两档 |
+| E30 | **actual-cost sharded macro tree search** | 只搜索 E26/E29 合法 exact macro association；D4/boundary/arithmetic不变 | 中 / 4 | 两档 actual candidates、RSS 或 wall time 降 15%；搜索成本计入 | 仅 estimated width 改善，actual cost 不降，或搜索开销吞掉收益 |
+
+### O.3 顺序与消融
+
+1. 严格按 E26 → E27 → E28 → E29 → E30，每项独立 worktree/branch；
+2. E26 比较 1/8 threads，并与 E24 `arena_batched_sparse` /
+   `parallel_sort` 同 revision 消融；
+3. E27 必须报告 peak live candidates、run count、merge heap operations；
+4. E28 同时报告 `size_of`、active key bits、boundary bytes 与 candidate bytes；
+5. E29 必须以 explicit sitewise C contraction 小 N 真值表验证 macro；
+6. E30 可借鉴 OMEinsum/treeSA 的 cost-search 思路，但只实现本项目需要的
+   greedy/local moves，暂不引入 Julia runtime；
+7. 完成 E30 后再次执行 five-direction review，复盘前不得启动 E31。
