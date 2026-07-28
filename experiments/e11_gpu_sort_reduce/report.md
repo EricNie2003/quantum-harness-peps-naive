@@ -84,8 +84,8 @@ boundary, applying the column `v1`; remaining diagonal bits are unrestricted.
 
 Validation host: Intel i5-2450M, 2 physical cores / 4 logical threads,
 x86_64 Linux; `rustc 1.97.1 (8bab26f4f 2026-07-14)`, Cargo 1.97.1. This host
-has no `nvcc` and no CUDA device, so it cannot establish native CUDA linking,
-runtime correctness, RTX performance, or the keep gate.
+has no CUDA device. The first validation pass also had no `nvcc`, so it used
+Rust-only checks and Clang syntax parsing.
 
 Commands completed successfully at the candidate commit:
 
@@ -110,7 +110,42 @@ The RTX 4060 WSL host subsequently passed the same 17-test CPU suite with Rust
 library's `std::numeric_limits<uint64_t>::max()`. Candidate commit `4a2165c`
 replaced those constants with the exactly equivalent all-one `uint64_t`
 expression and passed the local host/device syntax and CPU gates. Native build
-and runtime validation remain pending after that compatibility fix.
+and runtime validation remained pending at that point.
+
+The no-GPU validation host was then provisioned with CUDA 12.9.86 compiler,
+CUB/CCCL headers, and CUDA Runtime development libraries only. At candidate
+commit `4a2165c`, these native compile/link commands passed:
+
+```text
+CUDA_HOME=/usr/local/cuda-12.9 \
+NVCC=/usr/local/cuda-12.9/bin/nvcc \
+LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64 \
+cargo build --release --features cuda
+
+CUDA_HOME=/usr/local/cuda-12.9 \
+NVCC=/usr/local/cuda-12.9/bin/nvcc \
+LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64 \
+cargo test --release --features cuda --no-run
+
+CUDA_HOME=/usr/local/cuda-12.9 \
+NVCC=/usr/local/cuda-12.9/bin/nvcc \
+LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64 \
+cargo test --release --features cuda
+
+CUDA_HOME=/usr/local/cuda-12.9 \
+NVCC=/usr/local/cuda-12.9/bin/nvcc \
+LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64 \
+cargo clippy --release --features cuda --all-targets -- -D warnings
+```
+
+All six CUDA-feature test executables linked, and `ldd` resolved
+`libcudart.so.12` from `/usr/local/cuda-12.9/lib64` with no missing libraries.
+The full feature suite reported 20/20 passing; the device-dependent comparison
+test correctly skipped its kernels after the probe found no usable device. A
+CLI probe returned the expected fail-closed error, `CUDA driver version is
+insufficient for CUDA runtime version`, rather than crashing. Thus native
+CUDA compilation and host linking are validated; kernel execution, arithmetic
+self-test, and PEPS layer comparisons still require the RTX 4060.
 
 The device self-test, once run, checks stable two-word sort ordering, wide-key
 equality/run lengths, compact overflow detection, two-limb carry, and two-limb
