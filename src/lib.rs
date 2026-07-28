@@ -465,10 +465,93 @@ fn contract_one_row_compiled(
     Ok(outputs)
 }
 
+/// Apply the same compiled exact row transfer while enumerating only positions
+/// whose three incoming virtual signals match the occupied C entry.
+///
+/// The bit predicate is not a handwritten queen recurrence: every required
+/// signal is read from the `occupied` entry that
+/// `CompiledRowOperator::compile` extracted from the explicit 17-entry C.
+fn contract_one_row_compiled_sparse(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    counters: &mut RowCounters,
+) -> Result<Vec<(BoundaryState, u128)>, String> {
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    if legs.row_in != 0 {
+        return Err(
+            "sparse row iterator requires occupied row_in to match the left v0 boundary".to_owned(),
+        );
+    }
+
+    let board_mask = (1_u64 << n) - 1;
+    let matching_bits = |mask: u64, required: u8| -> Result<u64, String> {
+        match required {
+            0 => Ok((!mask) & board_mask),
+            1 => Ok(mask & board_mask),
+            _ => Err("compiled C entry contains a non-binary incoming signal".to_owned()),
+        }
+    };
+    let mut positions = matching_bits(parent.columns, legs.column_in)?
+        & matching_bits(parent.diag_dr, legs.diag_dr_in)?
+        & matching_bits(parent.diag_dl, legs.diag_dl_in)?;
+    let mut outputs = Vec::with_capacity(positions.count_ones() as usize);
+    let weight = parent_weight
+        .checked_mul(occupied.value)
+        .ok_or_else(|| "coefficient overflow in sparse compiled row operator".to_owned())?;
+
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        let column = selected.trailing_zeros() as usize;
+        positions &= positions - 1;
+        counters.operator_candidates += 1;
+        counters.operator_matched += 1;
+
+        let columns_out = replace_bit(parent.columns, column, legs.column_out);
+        let diag_dr_at_sites = replace_bit(parent.diag_dr, column, legs.diag_dr_out);
+        let diag_dl_at_sites = replace_bit(parent.diag_dl, column, legs.diag_dl_out);
+        outputs.push((
+            BoundaryState {
+                columns: columns_out,
+                diag_dr: (diag_dr_at_sites << 1) & board_mask,
+                diag_dl: diag_dl_at_sites >> 1,
+            },
+            weight,
+        ));
+    }
+    Ok(outputs)
+}
+
+#[derive(Clone, Copy)]
+enum CompiledPositionMode {
+    DenseScan,
+    SparseIterator,
+}
+
+fn contract_one_row_compiled_with_mode(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    counters: &mut RowCounters,
+    mode: CompiledPositionMode,
+) -> Result<Vec<(BoundaryState, u128)>, String> {
+    match mode {
+        CompiledPositionMode::DenseScan => {
+            contract_one_row_compiled(n, operator, parent, parent_weight, counters)
+        }
+        CompiledPositionMode::SparseIterator => {
+            contract_one_row_compiled_sparse(n, operator, parent, parent_weight, counters)
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum RowBackend {
     Sitewise,
-    Compiled,
+    Compiled(CompiledPositionMode),
 }
 
 /// Exactly contract the rank-8 `C` network row by row.
@@ -479,12 +562,32 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
 /// Retained exact HashMap materialization backend used as an implementation-
 /// independent layer-materialization reference for sort-reduce tests.
 pub fn contract_rows_hash_materialization(n: usize) -> Result<ContractionResult, String> {
-    contract_rows_with_backend(n, RowBackend::Compiled)
+    contract_rows_with_backend(n, RowBackend::Compiled(CompiledPositionMode::DenseScan))
+}
+
+/// Hash materialization ablation using the sparse C-derived position iterator.
+pub fn contract_rows_sparse_hash_materialization(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_with_backend(
+        n,
+        RowBackend::Compiled(CompiledPositionMode::SparseIterator),
+    )
 }
 
 /// Exactly contract the same compiled row operator, materializing each layer
 /// as a sorted vector and reducing equal packed boundary keys in place.
 pub fn contract_rows_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_sort_reduce_with_mode(n, CompiledPositionMode::DenseScan)
+}
+
+/// Sort-reduce materialization using the sparse C-derived position iterator.
+pub fn contract_rows_sparse_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_sort_reduce_with_mode(n, CompiledPositionMode::SparseIterator)
+}
+
+fn contract_rows_sort_reduce_with_mode(
+    n: usize,
+    position_mode: CompiledPositionMode,
+) -> Result<ContractionResult, String> {
     if n > 42 {
         return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
     }
@@ -527,8 +630,14 @@ pub fn contract_rows_sort_reduce(n: usize) -> Result<ContractionResult, String> 
 
         for (packed_parent, parent_weight) in std::mem::take(&mut boundary) {
             let parent = packed_parent.unpack(n);
-            let row_terms =
-                contract_one_row_compiled(n, &operator, parent, parent_weight, &mut counters)?;
+            let row_terms = contract_one_row_compiled_with_mode(
+                n,
+                &operator,
+                parent,
+                parent_weight,
+                &mut counters,
+                position_mode,
+            )?;
             completed_row_terms += row_terms.len() as u128;
             candidates.extend(
                 row_terms
@@ -608,6 +717,22 @@ pub fn contract_rows_parallel_sort_reduce(
     n: usize,
     threads: usize,
 ) -> Result<ContractionResult, String> {
+    contract_rows_parallel_sort_reduce_with_mode(n, threads, CompiledPositionMode::DenseScan)
+}
+
+/// Parallel sliced sort-reduce using the sparse C-derived position iterator.
+pub fn contract_rows_sparse_parallel_sort_reduce(
+    n: usize,
+    threads: usize,
+) -> Result<ContractionResult, String> {
+    contract_rows_parallel_sort_reduce_with_mode(n, threads, CompiledPositionMode::SparseIterator)
+}
+
+fn contract_rows_parallel_sort_reduce_with_mode(
+    n: usize,
+    threads: usize,
+    position_mode: CompiledPositionMode,
+) -> Result<ContractionResult, String> {
     if threads == 0 {
         return Err("parallel sort-reduce requires at least one thread".to_owned());
     }
@@ -661,12 +786,13 @@ pub fn contract_rows_parallel_sort_reduce(
                     let mut counters = RowCounters::default();
                     for &(packed_parent, parent_weight) in parents {
                         let parent = packed_parent.unpack(n);
-                        let row_terms = contract_one_row_compiled(
+                        let row_terms = contract_one_row_compiled_with_mode(
                             n,
                             &operator,
                             parent,
                             parent_weight,
                             &mut counters,
+                            position_mode,
                         )?;
                         local.extend(row_terms.into_iter().map(|(successor, weight)| {
                             (PackedBoundary::pack(successor, n), weight)
@@ -787,7 +913,7 @@ fn contract_rows_with_backend(
     let tensor = SiteTensorC::sec_vi();
     debug_assert_eq!(tensor.entries().len(), 17);
     let compiled_operator = match row_backend {
-        RowBackend::Compiled => Some(CompiledRowOperator::compile(&tensor)?),
+        RowBackend::Compiled(_) => Some(CompiledRowOperator::compile(&tensor)?),
         RowBackend::Sitewise => None,
     };
     let initial = BoundaryState {
@@ -813,13 +939,21 @@ fn contract_rows_with_backend(
 
         for (packed_parent, parent_weight) in boundary.drain() {
             let parent = packed_parent.unpack(n);
-            let row_terms = match &compiled_operator {
-                Some(operator) => {
-                    contract_one_row_compiled(n, operator, parent, parent_weight, &mut counters)?
+            let row_terms = match (&compiled_operator, row_backend) {
+                (Some(operator), RowBackend::Compiled(mode)) => {
+                    contract_one_row_compiled_with_mode(
+                        n,
+                        operator,
+                        parent,
+                        parent_weight,
+                        &mut counters,
+                        mode,
+                    )?
                 }
-                None => {
+                (None, RowBackend::Sitewise) => {
                     contract_one_row_sitewise(n, &tensor, parent, parent_weight, &mut counters)?
                 }
+                _ => return Err("row backend/operator mismatch".to_owned()),
             };
             for (successor, weight) in row_terms {
                 completed_row_terms += 1;
@@ -985,9 +1119,11 @@ pub fn peak_rss_bytes() -> u64 {
 mod tests {
     use super::{
         BoundaryState, CompiledRowOperator, PackedBoundary, RowCounters, SiteTensorB, SiteTensorC,
-        VirtualLegs, contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
-        contract_rows_sitewise, contract_rows_sort_reduce, known_count,
+        VirtualLegs, contract_one_row_compiled, contract_one_row_compiled_sparse,
+        contract_one_row_sitewise, contract_rows, contract_rows_hash_materialization,
+        contract_rows_parallel_sort_reduce, contract_rows_sitewise, contract_rows_sort_reduce,
+        contract_rows_sparse_hash_materialization, contract_rows_sparse_parallel_sort_reduce,
+        contract_rows_sparse_sort_reduce, known_count,
     };
     use std::collections::HashMap;
 
@@ -1159,11 +1295,30 @@ mod tests {
                         &mut RowCounters::default(),
                     )
                     .unwrap();
+                    let mut sparse_counters = RowCounters::default();
+                    let sparse = contract_one_row_compiled_sparse(
+                        n,
+                        &operator,
+                        parent,
+                        parent_weight,
+                        &mut sparse_counters,
+                    )
+                    .unwrap();
                     assert_eq!(
                         normalized_terms(reference.clone()),
-                        normalized_terms(compiled),
+                        normalized_terms(compiled.clone()),
                         "N={n}, row={}, parent={parent:?}",
                         row + 1
+                    );
+                    assert_eq!(
+                        normalized_terms(compiled),
+                        normalized_terms(sparse),
+                        "sparse mismatch at N={n}, row={}, parent={parent:?}",
+                        row + 1
+                    );
+                    assert_eq!(
+                        sparse_counters.operator_candidates,
+                        sparse_counters.operator_matched
                     );
                     for (state, weight) in reference {
                         *next.entry(state).or_insert(0) += weight;
@@ -1232,11 +1387,69 @@ mod tests {
     }
 
     #[test]
+    fn sparse_iterator_matches_dense_backends_through_n10() {
+        for n in 0..=10 {
+            let dense_hash = contract_rows_hash_materialization(n).unwrap();
+            let sparse_hash = contract_rows_sparse_hash_materialization(n).unwrap();
+            let dense_sort = contract_rows_sort_reduce(n).unwrap();
+            let sparse_sort = contract_rows_sparse_sort_reduce(n).unwrap();
+
+            for candidate in [&sparse_hash, &dense_sort, &sparse_sort] {
+                assert_eq!(candidate.count, dense_hash.count, "count mismatch at N={n}");
+                assert_eq!(
+                    candidate.peak_states, dense_hash.peak_states,
+                    "support mismatch at N={n}"
+                );
+                assert_eq!(
+                    candidate.row_operator_matched, dense_hash.row_operator_matched,
+                    "accepted mismatch at N={n}"
+                );
+                let dense_layers = dense_hash
+                    .layers
+                    .iter()
+                    .map(|layer| {
+                        (
+                            layer.input_states,
+                            layer.completed_row_terms,
+                            layer.output_states,
+                            layer.output_weight,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let candidate_layers = candidate
+                    .layers
+                    .iter()
+                    .map(|layer| {
+                        (
+                            layer.input_states,
+                            layer.completed_row_terms,
+                            layer.output_states,
+                            layer.output_weight,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(candidate_layers, dense_layers, "layer mismatch at N={n}");
+            }
+            assert_eq!(
+                sparse_hash.row_operator_candidates, sparse_hash.row_operator_matched,
+                "sparse hash examined a zero transition at N={n}"
+            );
+            assert_eq!(
+                sparse_sort.row_operator_candidates, sparse_sort.row_operator_matched,
+                "sparse sort examined a zero transition at N={n}"
+            );
+        }
+    }
+
+    #[test]
     fn parallel_slices_match_serial_sort_reduce_through_n10() {
         for threads in [1, 2, 4] {
             for n in 0..=10 {
                 let serial = contract_rows_sort_reduce(n).unwrap();
                 let parallel = contract_rows_parallel_sort_reduce(n, threads).unwrap();
+                let sparse_serial = contract_rows_sparse_sort_reduce(n).unwrap();
+                let sparse_parallel =
+                    contract_rows_sparse_parallel_sort_reduce(n, threads).unwrap();
                 assert_eq!(
                     parallel.count, serial.count,
                     "count mismatch at N={n}, threads={threads}"
@@ -1280,6 +1493,22 @@ mod tests {
                 assert_eq!(
                     parallel_layers, serial_layers,
                     "layer mismatch at N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    sparse_parallel.count, sparse_serial.count,
+                    "sparse count mismatch at N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    sparse_parallel.peak_states, sparse_serial.peak_states,
+                    "sparse support mismatch at N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    sparse_parallel.row_operator_candidates, sparse_serial.row_operator_candidates,
+                    "sparse candidate mismatch at N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    sparse_parallel.row_operator_matched, sparse_serial.row_operator_matched,
+                    "sparse accepted mismatch at N={n}, threads={threads}"
                 );
             }
         }
