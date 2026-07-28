@@ -2568,17 +2568,30 @@ finite-field rank。若把 compiled row operator 表示为由显式 `C` 机械�
 反证条件：任何实现若必须先展开完整 boundary support 才能重新分解，便没有 production
 价值；若 apply 后的 exact rank 快速回到 support，E15 的低秩只是一种不稳定的事后性质。
 
-### M.4 E16–E20 新顺序
+### M.4 E16–E20 五个独立方向（结合 D4/tree-search 讨论后的定稿）
 
 | ID | 方向 | exact PEPS 义务 | feasibility / 难度 | keep gate | kill gate |
 |:---|:---|:---|:---:|:---|:---|
-| E16 | **单素域 exact rank-factorized row apply 原型** | row MPO 必须从 17-entry C 自动生成；零阈值 Gaussian/rank factorization | 中 / 5 | N=8–10 不 materialize full boundary；每层 rank 与事后 oracle 一致；总时间 ≤ direct sparse 的 10x | 任一层需 full support 或 rank mismatch；N=9 已不可运行 |
-| E17 | **61-bit multi-prime + CRT certified factorized contraction** | 模数乘积显式大于 N!，至少一冗余 prime；每素域 rank/apply 独立核验 | 中低 / 5 | N=10–12 exact integer count；同硬件总时间开始随 N 改善，RSS 低于 D4 sparse | CRT/多 prime 常数使两档均慢 >20x，或 rank 不稳定导致爆炸 |
-| E18 | **在线 future-signature / quotient apply** | signature 必须等于完整 successor-class map，不能用 completion count 碰撞 | 中低 / 5 | 不预建 concrete suffix graph时，N=10–12 class数接近 E14 的 1.5x 内，build+apply ≤ direct 的 2x | 仍需枚举全部 concrete transitions 两遍，或 class ratio >0.5 |
-| E19 | **D4 × rank/quotient × sparse iterator 消融** | fixed orbit、multiplicity、各 prime 和 tensor equivalence 全部保留 | 中 / 4 | 至少两个正交机制有 >10% 边际；选出唯一 production stack | 组合收益只是测量噪声或破坏 exactness |
-| E20 | **production exact compressed PEPS vs DFS** | release、同硬件、相同线程；raw CSV/RSS/support/rank/entries | 取决于 E16–19 | N=13–16 至少两档超过 DFS；否则给出 crossover/resource projection | scaling 仍不优于 DFS 或 projected Q(28) 资源不可行 |
+| E16 | **单素域 streaming exact MPS/MPO row apply** | row MPO 必须从 17-entry C 自动生成；从 rank-1 boundary 开始；零阈值 exact compression | 中 / 5 | N=8–10 从头到尾不 materialize full boundary；每层 coefficient/rank 与 sparse oracle 一致；总时间 ≤ direct 的 10x | 任一 production layer 需 full support、rank mismatch，或 N=9 已不可运行 |
+| E17 | **exact skeleton/PLUQ two-block factorized apply** | 直接维持 E15 的左右 flattening `U·V`/pivot bases；所有 pivot 与更新在有限域 exact 执行 | 中低 / 5 | N=8–10 不展开完整矩阵，rank 与 E15 一致；至少一档比 E16 的 field ops/RSS 低 20% | 更新必然需要枚举全部 `(L,R)` support，或 factor rank 连续两档高于 oracle 1.5x |
+| E18 | **在线 future-signature / quotient apply** | signature 必须等于完整 successor-class map，不能用 completion count 或 hash 碰撞代替证明 | 中低 / 5 | 不预建 concrete suffix graph时，N=10–12 class 数在 E14 的 1.5x 内，build+apply ≤ direct 的 2x | 仍需枚举全部 concrete transitions 两遍，或 class ratio >0.5 |
+| E19 | **D4-conditioned macro-tree search** | 外层 sector 必须逐项记录 stabilizer/orbit weight；内层 greedy/tree rotation 以 C-derived row/half-row macro 为原子 | 中 / 4 | same-revision actual nnz/RSS 评分；两个连续 N 相对 D4 row baseline 至少快 15% 或 support 降 20% | 仅 dense `tc/sc` 改善、sector 拆分丢失 merge 后总 work 上升，或两档无收益 |
+| E20 | **bidirectional low-rank/quotient separator join** | top/bottom 子网络和 join signature 必须覆盖所有跨 separator virtual bonds；join exact | 低 / 5 | N=10–12 peak live states/rank 比单向 baseline 低 30%，总时间开始出现更低增长率 | join interface/support 爆炸，或任何隐藏 DFS placement recurrence |
 
-### M.5 E16 的最小区分实验
+这里不再把 CRT、消融或“最终 benchmark”单列为研究方向：它们是每个 KEEP 候选进入
+production 的强制工程阶段。任何 E16/E17/E20 候选若进入整数计数，必须使用足以覆盖
+\(N!\) 上界的 61-bit prime 乘积、CRT 和至少一个冗余 prime；任何 KEEP 都必须与 D4-only、
+对应无 D4 变体、E11 sparse iterator 和相同线程数做消融。
+
+E19 与 D4/tree-search 文档一致，但明确不预注册正收益保证。D4 sector reduction 与 path
+search 在数学上可组合；sector 拆分可能丢失跨 sector boundary merge，dense TreeSA score
+也可能与 17-nnz tensor 的 actual sparse cost 相反。只允许“候选集中保留当前 D4 row
+baseline、实测选择不回退”，不能把“兼容”写成“必然继续加速”。
+
+### M.5 执行顺序与最小区分实验
+
+执行优先级为 E16 → E17 → E18 → E19 → E20。E17 是 E16 的替代低秩表示，即使 E16
+REJECT 也允许独立尝试；E19 不依赖低秩成功，避免把所有风险押在单一路线。
 
 E16 不能从 full sparse matrix 做 SVD/Gaussian 后宣称成功。最小合规实验必须：
 
@@ -2590,7 +2603,13 @@ E16 不能从 full sparse matrix 做 SVD/Gaussian 后宣称成功。最小合规
 6. 分别记录 pre/post rank、field operations、fill-in、wall time、RSS；
 7. N=8–10 若不能避免 full support 或两档 rank mismatch，立即停止。
 
-只有 E16 通过后才允许 E17。不得因为 E15 的事后 rank 很低就提前宣称能计算 Q(28)。
+E17 必须从 rank-1/pivot-basis representation 直接更新，不允许调用 E15 的 full-matrix
+diagnostic 作为 production step。E18 必须把 quotient construction 与 replay 时间一起计入。
+E19 必须同时报告每 sector 和 aggregate 总成本。E20 必须报告 join-key 数、rank、support 和
+两侧生成 work。
+
+完成 E20 后再次执行 five-direction review gate；在复盘前不得启动新的第六方向。不得因为
+E15 的事后 rank 很低或某个预构建 quotient replay 很快，就提前宣称能计算 Q(28)。
 
 ### 强制消融与“错误 REJECT”复查
 

@@ -890,7 +890,18 @@ Gaussian 先 materialize full boundary 且 N=13 比 direct D4 慢约 42x，不�
 rank-factorized boundary 上，并在**不展开 full sparse support**的条件下维持有限域低秩。
 只做更多线程、hash tuning、局域 iterator 或更细 site contraction order 不再优先。
 
-下一轮 E16–E20、exactness/CRT 义务、keep/kill gate 和最小区分实验已写入
-`nqueens_issue34_autoresearch_plan.md`。按 gate，E16 必须先做单素域、无阈值、由 `C`
-自动生成的 factorized row apply；若任何一层需要 full-support materialization，立即拒绝，
-不得用 E15 的事后低 rank 冒充可用算法。
+下一轮整理为五个独立方向：
+
+1. E16：单素域 streaming exact MPS/MPO row apply；
+2. E17：exact skeleton/PLUQ two-block factorized apply；
+3. E18：无需 concrete-graph 预构建的在线 future quotient；
+4. E19：D4-conditioned、以 row/half-row macro 为原子的 greedy/tree search；
+5. E20：bidirectional low-rank/quotient separator join。
+
+CRT、消融和最终 DFS benchmark 改为所有 KEEP 候选的强制工程阶段，不再伪装成独立研究
+方向。详细 exactness 义务、keep/kill gate 和最小区分实验已写入
+`nqueens_issue34_autoresearch_plan.md`。
+
+E19 明确采用“D4 外层 sector + 内层非对称路径搜索”的组合，但不假设必然有收益。候选集
+必须包含当前 D4 row baseline，并按 aggregate actual nnz、RSS 和 wall time 选择；sector
+拆分导致的跨 sector merge 损失也计入总成本。
