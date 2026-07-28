@@ -992,3 +992,12 @@ gate；N=10 收益回落到 13.0%。所有候选保留相同 C、D4 与边界，
 
 **KEEP order-search mechanism，REJECT 当前 DD production**：选中顺序仍比 direct D4 慢
 80–105x。完整报告：`experiments/e22_dd_order_search/REPORT.md`。
+
+## 24. E23：two-prime proportional edge quotient
+
+在 E22 boundary ADD 上做 exact projective edge normalization，两个素域的 canonical node
+数完全一致。但 N=8–10 仅进一步降 6.1%、14.6%、5.4%，诊断时间反而增加 26–46%。
+
+因此 **REJECT 完整 weighted-edge production rewrite**：大部分 residual functions 不是简单
+标量倍数，E15 的线性低秩不能靠一维 edge scaling 获得。完整报告：
+`experiments/e23_weighted_edge_quotient/REPORT.md`。
