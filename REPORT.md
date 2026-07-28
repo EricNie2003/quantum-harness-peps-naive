@@ -1116,3 +1116,26 @@ bucket capacity over-reservation，不是 exponent 改善。8-thread DFS
 完整报告：`experiments/e26_prefix_sharded_reduce/REPORT.md`；raw CSV：
 `benchmarks/e26_shard_grid_8t_release.csv`、
 `benchmarks/e26_selected_release.csv`。
+
+## 29. E27：chunked sorted runs
+
+E27 将 E26 的 parents 分块，每个 chunk/prefix bucket 单独 exact
+sort-reduce，最后对同一 shard 的所有 runs 做 checked-u128 k-way
+merge。34 个 release tests 通过，count/support/C-transition work 与
+E26 完全一致。
+
+**REJECT**：
+
+| N | E26 8t | E27 8t | 时间变化 | E26 RSS | E27 RSS | RSS 变化 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 14 | 0.25820 s | 0.40207 s | +55.7% | 206,209,024 | 199,221,248 | -3.4% |
+| 15 | 1.85859 s | 3.24815 s | +74.8% | 1,256,726,528 | 1,193,234,432 | -5.1% |
+
+N=15 peak live candidates 从 80,077,350 降到 37,072,187，但 retained
+runs 有 18,893,954 entries；merge 生成最终 18,178,233 states 时两者
+仍同时存活。因此 RSS 仅降 5.1%，同时产生 148,116,850 次 heap
+operations。更小 chunk 单调增加 run 数和时间，没有显著降低 RSS。
+
+被拒代码只保留在 `codex/exp-chunked-runs`，未合入 main production。
+完整报告：`experiments/e27_chunked_runs/REPORT.md`；raw CSV：
+`benchmarks/e27_chunk_grid_release.csv`。

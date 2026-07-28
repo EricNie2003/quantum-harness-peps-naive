@@ -2744,3 +2744,8 @@ E26 已完成并 **KEEP Prefix/256**。N=14/15 相对 E24 同线程全局 sort
 
 下一方向严格为 E27 parent-chunk sorted runs + exact k-way merge；不得
 把继续调 shard 数量计为新方向。
+
+E27 已完成并 **REJECT**。N=15 RSS 仅降 5.1%，时间回退 74.8%，
+148,116,850 次 heap operations 成为新瓶颈；更小 chunk 没有进一步
+降低 RSS。被拒实现不进入 production main。下一方向按顺序为 E28
+row-aware compact key / SoA coefficients。
