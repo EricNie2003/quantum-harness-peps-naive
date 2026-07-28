@@ -1,0 +1,7 @@
+path,N,count,known_count,verified,elapsed_s,peak_rss_bytes,peak_support,peak_rank,tensor_entries_examined,tensor_entries_accepted,cartesian_pair_upper_bound,matching_entry_pairs,contractions,d4_sectors
+RowBlocks,5,10,10,true,0.025762800,7483392,7168,26,1275,670,352967,100798,72,3
+RowBlocks,6,4,4,true,0.365292100,23973888,65536,32,1836,1090,6084880,1186738,105,3
+RowBlocks,7,40,40,true,7.635538800,180527104,589824,38,3332,2149,174237473,17426551,192,4
+HalfRowBlocks,5,10,10,true,0.020381300,7475200,7168,26,1275,670,295733,70420,72,3
+HalfRowBlocks,6,4,4,true,0.280977500,23805952,65536,32,1836,1090,5380765,804685,105,3
+HalfRowBlocks,7,40,40,true,5.795350900,180977664,589824,38,3332,2149,164311201,11921243,192,4

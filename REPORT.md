@@ -905,3 +905,68 @@ CRT、消融和最终 DFS benchmark 改为所有 KEEP 候选的强制工程阶�
 E19 明确采用“D4 外层 sector + 内层非对称路径搜索”的组合，但不假设必然有收益。候选集
 必须包含当前 D4 row baseline，并按 aggregate actual nnz、RSS 和 wall time 选择；sector
 拆分导致的跨 sector merge 损失也计入总成本。
+
+## 21. E16–E20 强制五方向复盘
+
+五个方向均在独立 worktree/branch 中完成、通过各自的 exactness tests，并保存 raw CSV。
+分支最终提交为：
+
+| 方向 | branch | revision | production 决策 |
+|:---|:---|:---|:---|
+| E16 | `codex/exp-streaming-exact-mps` | `a448eb9` | REJECT |
+| E17 | `codex/exp-exact-pluq` | `b2ab913` | REJECT plain PLUQ |
+| E18 | `codex/exp-online-future-quotient` | `53d58b0` | KEEP oracle / REJECT production |
+| E19 | `codex/exp-d4-macro-tree` | `a67a4d9` | REJECT candidate，保留 baseline |
+| E20 | `codex/exp-bidirectional-separator` | `a15f0de` | REJECT |
+
+### 21.1 结果和机制
+
+| 方向 | 关键实测 | 真正机制 |
+|:---|:---|:---|
+| E16 streaming exact MPS | N=8 rank=163 与 E15 一致；40.7896 s，D4 baseline 0.0000879 s | low rank 真实；dense finite-field elimination 与 O(N²) adjacent SWAP 抵消全部收益 |
+| E17 two-block PLUQ | N=12 support=98,939、rank=8,334，但 factor products=25,875,207 | algebraic rank 低不保证 pivot factors 稀疏；fill-in 把成本放大 261.5x |
+| E18 online quotient | 去掉 E14 第二遍 transitions；N=10–13 class/support 降至 16.3%→10.6% | signature replay 很小，但构造 exact signature 前仍需访问全部 concrete states；总时间仍是 direct 的 2.93–4.44x |
+| E19 D4 macro tree | half-row 在 generic 表示内快 20.9–24.1%，matching pairs 约降 30% | D4 与 tree search 可组合；但 full-row C partial evaluation 比 association 更关键，candidate 仍慢 3.9e3–1.28e5x |
+| E20 separator join | N=7 top/bottom support=13/13,589，join matches=22 | join 不贵；v1/v2 bottom boundary 先制造巨大开放接口，live support 比单向 baseline 高 158x |
+
+E16–E20 没有任何 production candidate 接近 DFS，更没有超过 DFS。当前最佳生产实现仍是
+E12 的 D4 projected sparse row contraction。上一轮“只要找到事后低 rank / 少量 future
+classes 就能直接压缩 production apply”的主假设被推翻：**压缩必须在局域 C apply 的同时
+以 canonical symbolic representation 产生**；先生成 concrete support、再 Gaussian、
+PLUQ、signature 或 separator 都太迟。
+
+### 21.2 对 D4、稀疏性和路径搜索的新判断
+
+1. D4 仍是已验证且应默认保留的外层常数项；interior row cut 的 stabilizer 仍只有
+   identity 与 vertical reflection，不能虚报 full 8x。
+2. 需要的“稀疏性”不是 tensor 有 17 nnz，也不是 pivot basis 恰好低 rank，而是
+   **hash-consed symbolic nodes 在 apply 过程中不产生 concrete cross product**。
+3. OMEinsum/treeSA 风格搜索仍有用，但应搜索 symbolic variable tree / macro association，
+   并用 actual node count、apply cache misses、RSS 评分；不得再搜索裸 site tree。
+4. horizontal row separator 不适合 bidirectional join。任何新 separator 必须先预测并实测
+   v2-induced bottom representation，不能把 join 后的小匹配数当作可行证据。
+
+### 21.3 修订后的下一轮方向
+
+review 后的新顺序为：
+
+1. E21：C-derived exact weighted decision diagram / ZDD boundary apply；
+2. E22：以 actual DD nodes 为成本的 variable-tree greedy / 简化 treeSA；
+3. E23：DD leaves 上的 channel-aligned exact hierarchical finite-field factors；
+4. E24：当前 D4 production kernel 的 radix-sort、arena 和 transition batching 消融；
+5. E25：仅在 E21/E23 成功后尝试 symbolic tilted separator / bottom-v2 automaton。
+
+E21 是区分新旧主假设的首个实验；E24 是不依赖新表示成功的低风险生产优化。E22 不得在
+没有 canonical DD baseline 时启动，E25 不得重新物化 E20 的 bottom sparse support。
+完整 gates 已写入 `nqueens_issue34_autoresearch_plan.md`。按 five-direction gate，本报告
+完成前没有启动 E21。
+
+### 21.4 完整实验记录
+
+- `experiments/e16_streaming_exact_mps/REPORT.md`
+- `experiments/e17_exact_pluq/REPORT.md`
+- `experiments/e18_online_future_quotient/REPORT.md`
+- `experiments/e19_d4_macro_tree/REPORT.md`
+- `experiments/e20_bidirectional_separator/REPORT.md`
+
+对应 raw CSV 已汇总为 `benchmarks/e16_*` 至 `benchmarks/e20_*`。

@@ -2611,6 +2611,53 @@ E19 必须同时报告每 sector 和 aggregate 总成本。E20 必须报告 join
 完成 E20 后再次执行 five-direction review gate；在复盘前不得启动新的第六方向。不得因为
 E15 的事后 rank 很低或某个预构建 quotient replay 很快，就提前宣称能计算 Q(28)。
 
+## N. E16–E20 强制复盘后的修订（2026-07-28）
+
+E16–E20 已全部完成，复盘详见 `REPORT.md` §21。实测推翻了“事后 low-rank / quotient
+足以变成 production 加速”的假设：
+
+- E16 保持正确 rank 却被 dense elimination 和 wire SWAP 拖慢约 4.6e5x；
+- E17 的 PLUQ factor products 在 N=12 达 sparse support 的 261.5x；
+- E18 虽把 quotient construction 从两遍 transition 降为一遍，仍需 memoize 全部
+  concrete states，时间为 direct 的 2.93–4.44x；
+- E19 证明 D4 与 tree search 可组合，但 generic representation 仍远输 full-row macro；
+- E20 证明 horizontal bidirectional split 的 bottom v2 interface 在 join 前已经爆炸。
+
+### N.1 新主假设
+
+唯一仍与证据一致的 exponent-changing 路线是：把 boundary 表示为由显式 C 局域 apply
+直接维护的 canonical symbolic graph，使等价子函数在 concrete `(left,right)` state
+生成前就 hash-cons。D4 projected slices 保留为外层 sector；path search 改为搜索 symbolic
+variable tree，而不是裸 site contraction tree。
+
+若 E21 的 canonical node 数仍与 concrete support 同斜率，或 apply 必须先枚举所有 concrete
+successors，新主假设即被反证，研究应回到 E24 的 production sparse kernel 与可并行分片，
+而不是继续包装 post-hoc compression。
+
+### N.2 E21–E25
+
+| ID | 方向 | exact PEPS 义务 | feasibility / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E21 | **C-derived exact weighted DD/ZDD boundary apply** | terminals 是 checked integer/finite-field coefficients；每个 apply rule 从 17-entry C 机械生成；canonical unique table 无概率等价 | 中低 / 5 | N=10–12 不枚举 full support；peak nodes ≤0.5×D4 support，count/rank 与 oracle 一致；总时间 ≤5× direct | apply cache 仍为每个 concrete state 建节点，或 nodes/support 连续两档 >0.8 |
+| E22 | **actual-node variable-tree greedy / simplified treeSA** | 只变更 DD variable tree/macro association；D4 sector 和 C apply 不变 | 中 / 4 | 两个连续 N 相对 E21 baseline nodes 降 20% 或 wall time 降 15%，aggregate sector 成本计全 | 仅 dense width 改善、actual nodes/RSS 不降，或 reorder conversion 吞掉收益 |
+| E23 | **channel-aligned hierarchical exact factors at DD leaves** | column/dr/dl tensor-product blocks分别 exact factor；无 SVD/阈值；必须从 rank-1 apply | 低 / 5 | factor products ≤2× symbolic nodes，两个素域 rank 一致，N=10–12 比 E21 RSS 或时间低 20% | 重现 E17 pivot fill-in，products/nodes >10 连续两档 |
+| E24 | **D4 production radix/arena/batched-transition kernel** | transition 仍由 compiled C operator 生成；只改容器、排序、分配和批处理 | 高 / 3 | N=13–15 两档以上快 20%，support/count/work 完全相同；对 radix、arena、batch 做消融 | 任一 count/work 改变，或三项组合收益 <10% |
+| E25 | **symbolic tilted separator / bottom-v2 automaton** | top/bottom 均为 C-derived symbolic subnetwork；join 覆盖完整 virtual interface | 低 / 5 | 仅在 E21/E23 KEEP 后启动；N=8–10 bottom nodes 与 top 同量级且 live nodes 比单向低 30% | 任何 4^N bottom materialization、bottom/top >4，或 join interface 重现 E20 增长 |
+
+### N.3 顺序、消融和停止规则
+
+执行顺序为 E21 → E22 → E23 → E24 → E25，但：
+
+1. E22 依赖一个正确可复现的 E21 canonical baseline；E21 REJECT 时跳过 E22，并记录
+   dependency rejection，不伪造第六方向替代它；
+2. E23 可在 E21 仅通过 correctness、未通过性能 gate 时做一次小 N 区分实验；
+3. E24 与 symbolic 路线独立，应无论 E21–E23 成败都执行；
+4. E25 只有 E21 或 E23 至少一个 KEEP 才允许启动，否则按依赖 kill，不重跑 E20；
+5. 每个 symbolic candidate 必须同时记录 unique nodes、terminal count、apply-cache
+   lookups/hits、peak live nodes、field/integer operations、wall time、RSS 和 concrete-oracle
+   旁路范围；
+6. 完成或依赖拒绝 E25 后再次执行 five-direction review，复盘前不得启动 E26。
+
 ### 强制消融与“错误 REJECT”复查
 
 从 E11 开始，每个 KEEP 候选必须做同 revision、同编译配置的消融，而不是只与很早的
