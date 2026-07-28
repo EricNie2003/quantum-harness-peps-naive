@@ -1239,3 +1239,103 @@ DFS 8t 约 6.67。差距仍随 N 扩大。现有证据足以否定“继续减�
 path → E33 compact shard radix → E34 corner/diamond contraction →
 E35 certified frontier lower-bound audit。完整 gates 写入研究计划。
 在 E35 完成和下一次 review 前不得启动 E36。
+
+## 34. E31–E35 强制五方向复盘
+
+### 34.1 结果、机制与决策
+
+| 方向 | 核心结果 | 机制判断 | 决策 |
+|:---|:---|:---|:---:|
+| E31 parallel generation | N=15 1.612→1.287 s；thread-local candidate capacity 675.8→7.28 MB | 按 actual parent counts 均衡；256-parent/1024-entry bounded flush 避免完整层复制 | KEEP |
+| E32 u64 + promotion | entry 24→16 bytes；N=15 1.228→1.021 s、RSS -32.9%；N=16 7.054 s / 3.666 GB | candidate/boundary traffic 下降 1/3；overflow 自动完整 u128 replay | KEEP |
+| E33 compact radix | 13-bit radix N=15 1.121 s，standard 0.835 s；sort 0.501 vs 0.290 s | 3 次稳定 scatter/histogram 仍重于 pdqsort；8-bit 更差 | REJECT |
+| E34 corner/diamond | N=10--12 support 为 generic row-major 2.89--3.65x、production 9.86--13.23x | cut 同时暴露四族线；shell cut 只有主对角反射二阶 stabilizer | REJECT path；KEEP generic-C oracle |
+| E35 certified audit | N=14 reachable 2,847,130、certified classes 313,373；class fit base 4.444 | exact future quotient 存在，但 certificate/construction 仍先访问全部 concrete graph | KEEP diagnostic；REJECT production |
+
+E31 的消融尤其重要：默认 Rayon fold 虽动态均衡，却产生 211 份
+destination partials 和 675.8 MB thread-local capacity；固定切 8 段又因
+prefix shards 不均衡使 N=15 退到 2.681 s。只有“按父状态数均衡 +
+bounded shared flush”同时解决负载和内存。
+
+E32 用人工 coefficient limit=1 强制 promotion，在 N=8 从初始边界完整
+重跑 E31 u128 PEPS 并得到 92；所以 16-byte fast path 不是基于“当前
+看起来不溢出”的未证明假设。N=14--16 正常 benchmark 均未 promotion。
+
+E33 的 8→13-bit digit 消融把 N=15 radix sort 从 0.648 降到 0.501 s，
+验证 pass 数是瓶颈，但仍远慢于标准排序 0.290 s。E34 的通用 engine
+逐 site 扫描 explicit 17-entry C 并对所有 exposed virtual bonds 应用
+v0/v1/v2；因此 diamond 失败是实际 tensor path 证据，不是用 DFS
+recurrence 估出的 dense width。
+
+### 34.2 当前 production 与 DFS 的公平复测
+
+main 当前 production 是 E31 + E32，E33 未合入；E34/E35 只增加
+diagnostic oracle，不改变默认求解路径。Ryzen 9 7945HX、rustc 1.94、
+release/thin-LTO、8 threads：
+
+| N | PEPS median | DFS median | time gap | PEPS RSS | DFS RSS | PEPS accepted C transitions | DFS placements |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 13 | 0.03242 s | 0.002363 s | 13.72x | 38.2 MB | 5.51 MB | 2,334,177 | 2,531,728 |
+| 14 | 0.12237 s | 0.010423 s | 11.74x | 123.6 MB | 5.59 MB | 12,359,529 | 13,679,276 |
+| 15 | 0.82142 s | 0.068610 s | 11.97x | 653.8 MB | 5.64 MB | 80,077,350 | 91,883,698 |
+
+命令：
+
+- `RAYON_NUM_THREADS=8 cargo run --release --bin e32_u64_promotion -- 256 13 15 5`
+- `cargo run --release --bin dfs_bitmask -- bench 15 --min 13 --threads 8 --repeats 9 --warmup 2 --csv`
+
+现在不能再沿用 §33 的“PEPS work 数量级更大”判断。稀疏 position
+iterator、D4 top-row slicing 和 compact pipeline 后，N=13--15 的
+accepted C transitions 已比 DFS candidate placements **少 8--13%**。
+约 12x 时间差主要来自每个 PEPS transition 还要产生 16-byte record、
+跨线程汇合并全局 sort/reduce，而 DFS 只修改寄存器 bitmasks 和栈。
+
+N=14→15 时间倍率 PEPS 6.71x、DFS 6.58x；support/placements 分别
+6.38x/6.72x。当前窗口不再显示 gap 明显扩大，而是约 12x 常数差。
+这推翻了“只有 exponent-changing 表示才值得做”的过强表述：若能让
+C-derived contraction 避免晚层 record materialization/排序，追平 DFS
+在机制上仍可检验。
+
+原始数据：
+
+- `benchmarks/e31_e35_checkpoint_peps_release.csv`
+- `benchmarks/e31_e35_checkpoint_dfs_release.csv`
+
+### 34.3 E35 下界能证明什么
+
+E35 对每个 state 构造完整 sorted
+`(future_class, checked-u128 multiplicity)` signature。两个 64-bit
+素数只用于分桶；同指纹仍比较 exact vector，并从 explicit-C
+successors 重新生成每个 witness 后反向 replay Q(N)。N=10--14 没有
+指纹碰撞，但正确性不依赖这一观测。
+
+N=10--14：
+
+- reachable support log-linear base 4.997（R²=0.99950）；
+- certified class lower bound base 4.444（R²=0.99885）；
+- N=14 至少 313,373 个 weighted-bisimulation classes。
+
+这是**当前 row ordering 的 deterministic weighted quotient 下界**，
+不是所有 tensor paths、exact linear representations 或局域 symbolic
+apply 的下界。因此不能据此证明“PEPS 永远不可能快过 DFS”。它反而
+表明 future equivalence 的 slope 低于 concrete support；真正的困难是
+目前必须先访问全部 concrete states 才知道 class。
+
+### 34.4 修订主假设与下一检查点
+
+下一轮不再优先投入 generic site-tree/radix，也不把 post-hoc quotient
+当 production。新的双线假设是：
+
+1. **先继续压低 record traffic。** 在 N<=16 常用区间，把 `3N`-bit
+   key 与经检查的小系数共同装入一个 u64，overflow 自动回退 E32；
+   随后复用跨层 bucket capacity，避免每行重新分配。
+2. **改变晚层 contraction association。** 前若干行仍做 exact sparse
+   merge；当 sort/reduce 将成为主成本时，改为递归消费由 explicit C
+   编译的 row relation，直接收缩剩余 tensor branches，不物化/排序
+   整层。它必须叫作 C-derived recursive tensor contraction，并与
+   conventional DFS comparator 分开。
+
+下一五方向为 E36 joint u64 packing、E37 cross-row arena reuse、
+E38 C-derived recursive tail、E39 full-D4 canonical augmentation
+on recursive sectors、E40 actual-cost adaptive merge/tail path。完整
+gates 写入研究计划 §Q。在 E40 完成前不得开始 E41。

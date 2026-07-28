@@ -1,0 +1,4 @@
+N,count,known_count,verified,median_elapsed_s,min_elapsed_s,p10_elapsed_s,p90_elapsed_s,peak_rss_bytes,threads,split_depth,tasks,recursive_nodes,candidate_placements,metrics_elapsed_s,repeats,warmup,algorithm_class
+13,73712,73712,true,0.002362900,0.002272800,0.002272800,0.002470700,5509120,8,3,553,2490838,2531728,0.002857600,9,2,conventional_dfs_comparator
+14,365596,365596,true,0.010423400,0.010057200,0.010057200,0.010628300,5591040,8,3,682,13496479,13679276,0.012030400,9,2,conventional_dfs_comparator
+15,2279184,2279184,true,0.068609900,0.067508400,0.067508400,0.072210600,5644288,8,3,939,90634738,91883698,0.083842300,9,2,conventional_dfs_comparator

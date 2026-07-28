@@ -2785,3 +2785,65 @@ row-aware compact key / SoA coefficients。
 5. E34 先画出并测试 cut interface，不得把 DFS state recurrence叫作 corner PEPS；
 6. E35 若不能给确定性 witness，只能称 empirical bound，禁止宣称“不可能”；
 7. 完成 E35 后执行下一次 five-direction review，复盘前不得启动 E36。
+
+## Q. E31–E35 强制复盘后的修订（2026-07-28）
+
+完整复盘见 `REPORT.md` §34。E31/E32 KEEP 为 production，E33
+radix REJECT，E34 diamond ordering REJECT 但 generic explicit-C
+frontier oracle KEEP，E35 certified audit KEEP 为 diagnostic、REJECT
+为 production。
+
+当前 E32 production 在同 revision、8 threads 下 N=13--15 分别为
+0.03242/0.12237/0.82142 s；DFS comparator 为
+0.002363/0.010423/0.068610 s，差距约 11.7--13.7x。与上一检查点不同，
+PEPS accepted C transitions 已比 DFS placements 少 8--13%；主要差距
+已从 work count 转为 16-byte records 的生成、跨线程汇合与
+sort/reduce traffic。
+
+E35 认证 N=10--14 row-frontier coarsest exact weighted-bisimulation
+class peak从 735 增到 313,373，区间 fit base 4.444；但 class 只能在
+访问 concrete graph 后构造。该结果不构成所有 PEPS paths 的下界。
+
+### Q.1 新主假设
+
+下一轮同时验证两个假设：
+
+1. 当前 production 仍有一次 2x 级的 layout 机会：在常用 N 上将
+   `3N`-bit virtual key 与小 coefficient 共同 pack 为一个 u64，并
+   保留 checked promotion；再复用跨行 bucket arenas。
+2. 晚层必须避免 materialize + sort 全部 candidate records。先 merge
+   若干 row，然后递归收缩剩余 C-derived row tensors，可能把每个分支
+   的成本逼近 register-only DFS；完整 D4 只有在这种 full-solution
+   recursion 中才可能通过 orbit/stabilizer canonical augmentation
+   超过 row-cut 的二阶 stabilizer。
+
+第二条不是把 conventional DFS 改名为 PEPS：递归 successor 必须由
+`CompiledRowOperator::compile(SiteTensorC::sec_vi())` 机械生成，每步
+保留 v0/v1/v2 与 exact coefficient，并对 sitewise explicit-C oracle
+测试。独立 `dfs_bitmask` 仍只作 comparator。
+
+### Q.2 E36–E40
+
+| ID | 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E36 | **joint u64 key/coefficient packing + promotion** | `3N` key bits可逐位恢复；剩余 bits 存 coefficient；所有 add/mul checked，任一超界从初始 v0 boundary 重跑 E32 u64-coefficient 或 u128；人工小位宽强制两级 promotion | 高 / 3 | N=14/15 RSS 或 time 再降 25%；entry=8 bytes；count/support/work identical | promotion 链不完整，或两档收益 <10%，或排序无法按 key 正确 reduce |
+| E37 | **cross-row arena/bucket capacity reuse** | 只复用已完成上一层的 Vec allocations；候选 multiset、prefix partition、checked reduce 不变；不得让旧 coefficient 泄漏 | 高 / 2 | E36 KEEP 时在 E36 上、否则 E32 上，N=14/15 time 降 10% 且 RSS 不增；记录 allocation/capacity reuse | allocator retained pages 使收益 <5%，或双 buffer 令 RSS 增 >20% |
+| E38 | **C-derived recursive tail contraction** | prefix 仍为 exact sparse PEPS；tail 每层调用由 17-entry C 编译并全测试的 row relation，终点施加 column v1/diagonal v2；不得调用 `dfs_bitmask` 或复制其 handwritten recurrence | 中高 / 4 | cut grid 中两档比 E32 快 3x，或与 DFS gap ≤3x；Q(0..16) exact；记录 recursive C nodes/accepted entries/RSS | 最佳 cut 不快于 E32，或 operator/vector overhead 使每 node >5x DFS，或 fidelity 测试失败 |
+| E39 | **full-D4 canonical augmentation for recursive sectors** | 显式 8 个 coordinate/channel actions；partial prune 仅在可证明非 canonical 时；complete orbit size 按 stabilizer 精确给 1/2/4/8，逐 orbit 与无对称 E38 对照 | 低 / 5 | N=12--15 recursive nodes 降 40% 或 time 降 25%；D4 ablation（none/vertical/full）完整 | 只能终点 canonicalize、不能安全 early prune、orbit weights 错，或实际 node 降 <15% |
+| E40 | **actual-cost adaptive merge→tail path** | 只搜索 E36/E37 exact merge rows 与 E38/E39 exact recursive tail 的切换；搜索成本计入；每个 candidate 的 C work/count 可 replay | 中 / 4 | 同机 N=14/15 相对 E32 再快 2x，且至少一档达到 DFS 1.2x 内或超过 DFS；RSS < E32；完整消融 | actual cost 预测连续两档选错，最佳 gap 仍 >3x，或 search overhead 吞掉收益 |
+
+### Q.3 顺序、消融与停止规则
+
+1. 严格按 E36 → E37 → E38 → E39 → E40；每项独立 worktree/branch；
+2. E36 必须报告每行 maximum coefficient、available coefficient bits、
+   fast-path/promotion layer、8/16/24-byte entry 消融；
+3. E37 报告 Vec allocations、reused capacity、peak live/retained bytes；
+4. E38 至少测试 pure merged E32、pure C-recursive、每个可行 cut 的
+   hybrid；recursive node 必须能逐层与 compiled-C transition replay；
+5. E39 明确 row-prefix 的 D4 stabilizer 与 full recursion 的 D4 action
+   不同，禁止在 row frontier 上直接乘 8；
+6. E40 的搜索空间先限于 row cuts 和少量 D4 modes；只有 actual
+   C-derived work 存在差异时才加入 greedy/treeSA moves；
+7. checkpoint benchmark 固定 Ryzen 9 7945HX、release/thin-LTO、
+   8 threads；DFS comparator warmup/repeat policy与 §34 一致；
+8. 完成 E40 后强制复盘，允许完全推翻 Q.1；复盘前不得启动 E41。
