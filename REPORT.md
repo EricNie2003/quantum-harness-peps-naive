@@ -21,6 +21,10 @@ Release benchmark 正确复现了 \(Q(4)\) 到 \(Q(14)\)。在测试机器上：
 - 完成 E1、E3、E5a 后的当前 baseline：三次中位 11.090 s，峰值 RSS
   666.17 MiB，累计约 2.27x 加速并降低约 32.5% RSS。
 
+另加入了一个严格分离的、传统 DFS bitmask comparator。它不是 PEPS 实现，也不参与上述
+张量收缩路径。native release benchmark 中，DFS 单线程 \(Q(16)\) 的 9 次中位数为
+3.153 s；16 线程 \(Q(16)\) 为 0.211 s，\(Q(17)\) 为 1.884 s。
+
 ## 2. Sec. VI 局域张量
 
 每个格点有四条有向约束通道：
@@ -159,7 +163,9 @@ incoming virtual bits 生成 16 个索引桶。收缩时查找对应桶，并把
 cargo test --release
 ```
 
-实测 7 个测试全部通过。
+加入 DFS comparator 后，实测 13 个测试全部通过；其中 DFS 额外对
+\(Q(0)\ldots Q(16)\) 做已知值核验，并验证 1 线程和 4 线程结果一致、不同任务拆分的
+processed-state 指标一致。
 
 | N | PEPS 结果 | 已知结果 | 状态 |
 |---:|---:|---:|:---:|
@@ -293,3 +299,84 @@ cargo run --release -- bench 14 --min 4 --repeats 3 --csv
 
 下一步优化必须继续从显式 \(C\) 机械推导，并通过本版本逐项核验，不能退化为把经典 DFS
 重新标记成 PEPS。
+
+## 11. 优化 DFS bitmask comparator baseline
+
+### 11.1 定位与实现
+
+`src/dfs_bitmask.rs` 和 `src/bin/dfs_bitmask.rs` 实现一个独立的传统搜索对照。它不构造或
+消费局域张量 \(B/C\)，不满足 PEPS 主方法资格，只能作为 oracle/comparator。代码没有从
+已知值表返回答案；`known_count` 只在搜索完成后用于验证。
+
+主要优化为：
+
+- 用三个 `u64` bitboard 表示已占列和两组当前行对角攻击位；
+- 用 `available & available.wrapping_neg()` 提取最低可用位；
+- 首行按左右镜像只搜索一半，奇数 \(N\) 的中心列单独赋权；
+- 最后一行直接测试可用位，避免每个解再进入一次递归；
+- 单线程不做多余前缀拆分；多线程自适应拆到至少 `64 * threads` 个合法前缀；
+- 共享原子 task index 做动态调度，并把估计较重的前缀优先入队；
+- 性能路径通过 const generic 完全编译掉逐节点指标更新；每个 benchmark 点另做一次
+  instrumented run，且核验其计数与性能路径一致；
+- 子树使用 checked `u64` 累加，镜像加权和线程归并使用 checked `u128`，溢出会被检测。
+
+公开接口限制 \(N\le27\)。这一限制与当前已知值验证区间一致，而不是通过查表提前结束搜索。
+
+### 11.2 Benchmark 协议
+
+冻结的搜索代码提交为 `19b9bd7a9f27e3917671512886e7c37471e0c613`。环境沿用第 6 节：
+
+- CPU：AMD Ryzen 9 7945HX，16 核 / 32 逻辑处理器；
+- Rust：`rustc 1.94.0 (4a4ef493e 2026-03-02)`，LLVM 21.1.8；
+- target：`x86_64-pc-windows-msvc`；
+- release profile：thin LTO、1 codegen unit；
+- 额外编译 flag：`-C target-cpu=native`；
+- 单线程测 \(N=8\ldots16\)，16 线程测 \(N=8\ldots17\)；
+- 每点先 warm-up 2 次，再计时 9 次，报告中位数、最小值、P10 和 P90；
+- `elapsed_s` 包含前缀生成、worker 创建、DFS 和归并，不包含进程启动或 CSV 输出；
+- processed-state 指标由额外一次 instrumented run 取得，耗时记录在
+  `metrics_elapsed_s`，不混入性能样本。
+
+精确命令：
+
+```powershell
+$env:RUSTFLAGS='-C target-cpu=native'
+cargo build --release --bin dfs_bitmask
+.\target\release\dfs_bitmask.exe bench 16 --min 8 --threads 1 --repeats 9 --warmup 2 --csv
+.\target\release\dfs_bitmask.exe bench 17 --min 8 --threads 16 --repeats 9 --warmup 2 --csv
+```
+
+峰值 RSS 与 PEPS benchmark 一样使用 Windows `GetProcessMemoryInfo` 的
+`PeakWorkingSetSize`。每组 \(N\) 在一个递增运行的进程内执行，因此是进程 working-set
+高水位，会包含先前较小 \(N\) 和线程栈；它不是 allocator heap，也无法分离代码页、栈和
+堆。DFS 没有稀疏张量 support，也不检查局域 \(C\) 项，因此 CSV 对
+`peak_sparse_support`、`local_tensor_entries_examined` 和
+`local_tensor_entries_accepted` 明确记录 `NA`。
+
+### 11.3 结果
+
+所有点均与内置的独立已知值表一致。
+
+| N | Q(N) | 单线程中位 (s) | 16 线程中位 (s) | 单线程 RSS (MiB) | 16 线程 RSS (MiB) | 对称约化搜索节点 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 92 | 0.000002 | 0.000703 | 4.93 | 5.59 | 983 |
+| 10 | 724 | 0.000042 | 0.000717 | 4.95 | 5.75 | 17,408 |
+| 12 | 14,200 | 0.002170 | 0.000993 | 4.95 | 5.93 | 420,995 |
+| 14 | 365,596 | 0.070359 | 0.005734 | 4.95 | 6.27 | 13,496,479 |
+| 15 | 2,279,184 | 0.510162 | 0.034080 | 4.95 | 6.27 | 90,634,738 |
+| 16 | 14,772,512 | 3.153447 | 0.211017 | 4.95 | 6.27 | 563,208,896 |
+| 17 | 95,815,104 | 未测 | 1.884083 | 未测 | 6.27 | 4,224,112,371 |
+
+线程创建和前缀拆分使 16 线程版本在 \(N\le11\) 明显慢于单线程；从 \(N=12\) 开始多线程
+才有收益。\(N=16\) 的中位加速比为约 14.94x（16 个物理核），说明该规模下动态前缀调度
+已经接近充分，但这一结果不能外推为 PEPS contraction 的并行效率。
+
+与第 7.1 节当前 PEPS 的旧测量做同硬件量级比较时，DFS 在 \(N=14\) 的单线程中位数
+0.070 s，PEPS 为 11.090 s。两者算法和指标完全不同，而且 DFS 本次使用
+`target-cpu=native`、运行日期也不同；因此这里只把它作为约两个数量级的性能目标，不把
+比值表述为严格控制变量的 speedup。
+
+原始机器可读数据：
+
+- `benchmarks/dfs_bitmask_single_release.csv`
+- `benchmarks/dfs_bitmask_16t_release.csv`
