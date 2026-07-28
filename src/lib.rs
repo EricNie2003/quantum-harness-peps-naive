@@ -876,7 +876,14 @@ pub fn contract_rows_d4_compact_u64_promoting(
     n: usize,
     shards: usize,
 ) -> Result<U64PromotionResult, String> {
-    contract_rows_d4_compact_u64_promoting_with_limit(n, shards, u64::MAX)
+    contract_rows_d4_compact_u64_promoting_with_limit(n, shards, u64::MAX, Compact64Sort::Standard)
+}
+
+pub fn contract_rows_d4_compact_u64_radix_promoting(
+    n: usize,
+    shards: usize,
+) -> Result<U64PromotionResult, String> {
+    contract_rows_d4_compact_u64_promoting_with_limit(n, shards, u64::MAX, Compact64Sort::Radix)
 }
 
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
@@ -1700,10 +1707,75 @@ fn u64_promotion(row: usize, operation: &str) -> String {
     )
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct CompactEntry64 {
     key: u64,
     weight: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Compact64Sort {
+    Standard,
+    Radix,
+}
+
+fn radix_sort_compact64(entries: &mut [CompactEntry64]) {
+    const RADIX_BITS: u32 = 13;
+    const RADIX: usize = 1 << RADIX_BITS;
+    const RADIX_MASK: u64 = (RADIX as u64) - 1;
+    let Some((&first, rest)) = entries.split_first() else {
+        return;
+    };
+    if rest.is_empty() {
+        return;
+    }
+    let differing = rest
+        .iter()
+        .fold(0_u64, |bits, entry| bits | (entry.key ^ first.key));
+    if differing == 0 {
+        return;
+    }
+    let active_shifts = (0..64_u32)
+        .step_by(RADIX_BITS as usize)
+        .filter(|&shift| ((differing >> shift) & RADIX_MASK) != 0)
+        .collect::<Vec<_>>();
+    let mut scratch = vec![CompactEntry64::default(); entries.len()];
+    let mut counts = vec![0_usize; RADIX];
+    let mut source_is_entries = true;
+    for shift in active_shifts {
+        counts.fill(0);
+        let source = if source_is_entries {
+            &*entries
+        } else {
+            &scratch
+        };
+        for entry in source {
+            counts[((entry.key >> shift) & RADIX_MASK) as usize] += 1;
+        }
+        let mut offset = 0_usize;
+        for count in &mut counts {
+            let current = *count;
+            *count = offset;
+            offset += current;
+        }
+        if source_is_entries {
+            for &entry in &*entries {
+                let digit = ((entry.key >> shift) & RADIX_MASK) as usize;
+                scratch[counts[digit]] = entry;
+                counts[digit] += 1;
+            }
+        } else {
+            for &entry in &scratch {
+                let digit = ((entry.key >> shift) & RADIX_MASK) as usize;
+                entries[counts[digit]] = entry;
+                counts[digit] += 1;
+            }
+        }
+        source_is_entries = !source_is_entries;
+    }
+    if !source_is_entries {
+        entries.copy_from_slice(&scratch);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1859,6 +1931,7 @@ fn contract_rows_d4_compact64_parallel_generation_kernel(
     n: usize,
     shards: usize,
     coefficient_limit: u64,
+    sort_mode: Compact64Sort,
 ) -> Result<ParallelGenerationResult, String> {
     if n > 21 {
         return Err("the compact64 virtual-boundary backend supports N <= 21".to_owned());
@@ -2002,9 +2075,10 @@ fn contract_rows_d4_compact64_parallel_generation_kernel(
         generation_elapsed += generation_start.elapsed();
 
         let sort_start = Instant::now();
-        candidates
-            .par_iter_mut()
-            .for_each(|shard| shard.sort_unstable_by_key(|entry| entry.key));
+        candidates.par_iter_mut().for_each(|shard| match sort_mode {
+            Compact64Sort::Standard => shard.sort_unstable_by_key(|entry| entry.key),
+            Compact64Sort::Radix => radix_sort_compact64(shard),
+        });
         sort_elapsed += sort_start.elapsed();
 
         let reduce_start = Instant::now();
@@ -2071,10 +2145,16 @@ fn contract_rows_d4_compact_u64_promoting_with_limit(
     n: usize,
     shards: usize,
     coefficient_limit: u64,
+    sort_mode: Compact64Sort,
 ) -> Result<U64PromotionResult, String> {
     let total_start = Instant::now();
     let fast_start = Instant::now();
-    match contract_rows_d4_compact64_parallel_generation_kernel(n, shards, coefficient_limit) {
+    match contract_rows_d4_compact64_parallel_generation_kernel(
+        n,
+        shards,
+        coefficient_limit,
+        sort_mode,
+    ) {
         Ok(result) => Ok(U64PromotionResult {
             contraction: result.contraction,
             used_u64_fast_path: true,
@@ -3072,14 +3152,14 @@ pub fn peak_rss_bytes() -> u64 {
 #[cfg(test)]
 mod e24_kernel_tests {
     use super::{
-        PackedBoundary, ShardMode, contract_rows_d4_arena_sort_reduce,
+        Compact64Sort, PackedBoundary, ShardMode, contract_rows_d4_arena_sort_reduce,
         contract_rows_d4_batched_radix, contract_rows_d4_batched_sort_reduce,
         contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
         contract_rows_d4_compact_parallel_generation, contract_rows_d4_compact_sharded_sort_reduce,
         contract_rows_d4_compact_u64_promoting, contract_rows_d4_compact_u64_promoting_with_limit,
-        contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_orbit_sort_reduce,
-        contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
-        sort_packed_radix,
+        contract_rows_d4_compact_u64_radix_promoting, contract_rows_d4_deferred_sparse_sort_reduce,
+        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sharded_sparse_sort_reduce,
+        contract_rows_d4_sparse_sort_reduce, sort_packed_radix,
     };
 
     #[test]
@@ -3267,7 +3347,9 @@ mod e24_kernel_tests {
             );
         }
 
-        let promoted = contract_rows_d4_compact_u64_promoting_with_limit(8, 8, 1).unwrap();
+        let promoted =
+            contract_rows_d4_compact_u64_promoting_with_limit(8, 8, 1, Compact64Sort::Standard)
+                .unwrap();
         assert!(!promoted.used_u64_fast_path);
         assert!(promoted.promotion_reason.is_some());
         assert_eq!(promoted.contraction.count, 92);
@@ -3278,6 +3360,44 @@ mod e24_kernel_tests {
                 .contraction
                 .peak_states
         );
+    }
+
+    #[test]
+    fn compact64_radix_matches_standard_sort_and_contraction() {
+        let mut radix = (0..20_000_u64)
+            .map(|index| super::CompactEntry64 {
+                key: index
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .rotate_left((index % 63) as u32),
+                weight: index,
+            })
+            .rev()
+            .collect::<Vec<_>>();
+        let mut expected = radix.clone();
+        expected.sort_unstable_by_key(|entry| entry.key);
+        super::radix_sort_compact64(&mut radix);
+        assert_eq!(
+            radix.iter().map(|entry| entry.key).collect::<Vec<_>>(),
+            expected.iter().map(|entry| entry.key).collect::<Vec<_>>()
+        );
+
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_compact_u64_promoting(n, 8).unwrap();
+            let candidate = contract_rows_d4_compact_u64_radix_promoting(n, 8).unwrap();
+            assert_eq!(
+                candidate.contraction.count, baseline.contraction.count,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.contraction.peak_states, baseline.contraction.peak_states,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.contraction.row_operator_matched,
+                baseline.contraction.row_operator_matched,
+                "N={n}"
+            );
+        }
     }
 }
 
