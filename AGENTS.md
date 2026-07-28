@@ -101,3 +101,23 @@ the resource projection and correctness gates permit, the research should also
 attempt to compute the currently unavailable `Q(28)` value; if it is not
 reached, the report must give the largest verified `N`, measured scaling, and
 the precise limiting bottleneck.
+
+## Five-direction review gate
+
+After every five distinct optimization directions have been attempted, stop
+starting new experiments and perform a mandatory research review before
+continuing. The review must summarize the preceding results, identify which
+mechanisms produced each speed, memory, support, or scalability improvement,
+and explain why changes without measurable performance benefit failed (for
+example, hash overhead, memory traffic, insufficient support reduction,
+compiler effects, or an invalid cost model). It must compare the observations
+with the original hypotheses and update the experiment priorities, benchmarks,
+and resource projections.
+
+The review is allowed—and when the evidence requires it, expected—to reject
+or completely overturn the previously specified optimization plan. A revised
+plan must state the new hypothesis, its PEPS/exactness obligations, the next
+research directions, the kill criteria, and the experiment needed to
+distinguish the new plan from the old one. Do not begin the sixth direction
+until this review and revised direction list have been recorded in the
+research-plan/report artifacts.
