@@ -860,6 +860,25 @@ pub fn contract_rows_d4_compact_parallel_generation(
     contract_rows_d4_compact_parallel_generation_kernel(n, shards)
 }
 
+#[derive(Clone, Debug)]
+pub struct U64PromotionResult {
+    pub contraction: ContractionResult,
+    pub used_u64_fast_path: bool,
+    pub promotion_reason: Option<String>,
+    pub attempted_fast_path_elapsed: Duration,
+    pub generation_elapsed: Duration,
+    pub sort_elapsed: Duration,
+    pub reduce_elapsed: Duration,
+    pub peak_thread_local_bytes: usize,
+}
+
+pub fn contract_rows_d4_compact_u64_promoting(
+    n: usize,
+    shards: usize,
+) -> Result<U64PromotionResult, String> {
+    contract_rows_d4_compact_u64_promoting_with_limit(n, shards, u64::MAX)
+}
+
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
 }
@@ -1670,6 +1689,421 @@ fn contract_rows_d4_compact_parallel_generation_kernel(
         peak_thread_local_bytes,
         peak_worker_partials,
     })
+}
+
+const U64_PROMOTION_PREFIX: &str = "u64 coefficient promotion required";
+
+fn u64_promotion(row: usize, operation: &str) -> String {
+    format!(
+        "{U64_PROMOTION_PREFIX} after row {} during {operation}",
+        row + 1
+    )
+}
+
+#[derive(Clone, Copy)]
+struct CompactEntry64 {
+    key: u64,
+    weight: u64,
+}
+
+#[derive(Clone, Copy)]
+struct Compact64Config {
+    n: usize,
+    row: usize,
+    top_row: bool,
+    coefficient_limit: u64,
+}
+
+fn reduce_sorted_compact64(
+    entries: &mut Vec<CompactEntry64>,
+    row: usize,
+    coefficient_limit: u64,
+) -> Result<(), String> {
+    let mut write = 0_usize;
+    for read in 0..entries.len() {
+        let selected = entries[read];
+        if write > 0 && entries[write - 1].key == selected.key {
+            let combined = entries[write - 1]
+                .weight
+                .checked_add(selected.weight)
+                .filter(|&value| value <= coefficient_limit)
+                .ok_or_else(|| u64_promotion(row, "sorted reduction"))?;
+            entries[write - 1].weight = combined;
+        } else {
+            entries[write] = selected;
+            write += 1;
+        }
+    }
+    entries.truncate(write);
+    Ok(())
+}
+
+fn append_compact64_sparse_sharded_d4(
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u64,
+    config: Compact64Config,
+    counters: &mut RowCounters,
+    output: &mut [Vec<CompactEntry64>],
+) -> Result<usize, String> {
+    let Compact64Config {
+        n,
+        row,
+        top_row,
+        coefficient_limit,
+    } = config;
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    if legs.row_in != 0 {
+        return Err(
+            "compact64 sparse iterator requires occupied row_in to match the left v0 boundary"
+                .to_owned(),
+        );
+    }
+    let occupied_value = u64::try_from(occupied.value)
+        .map_err(|_| u64_promotion(row, "local C-entry multiplication"))?;
+    let board_mask = (1_u64 << n) - 1;
+    let matching_bits = |mask: u64, required: u8| -> Result<u64, String> {
+        match required {
+            0 => Ok((!mask) & board_mask),
+            1 => Ok(mask & board_mask),
+            _ => Err("compiled C entry contains a non-binary incoming signal".to_owned()),
+        }
+    };
+    let mut positions = matching_bits(parent.columns, legs.column_in)?
+        & matching_bits(parent.diag_dr, legs.diag_dr_in)?
+        & matching_bits(parent.diag_dl, legs.diag_dl_in)?;
+    let base_weight = parent_weight
+        .checked_mul(occupied_value)
+        .filter(|&value| value <= coefficient_limit)
+        .ok_or_else(|| u64_promotion(row, "local C-entry multiplication"))?;
+    let mut appended = 0_usize;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        let column = selected.trailing_zeros() as usize;
+        positions &= positions - 1;
+        counters.operator_candidates += 1;
+        counters.operator_matched += 1;
+        let successor = BoundaryState {
+            columns: replace_bit(parent.columns, column, legs.column_out),
+            diag_dr: (replace_bit(parent.diag_dr, column, legs.diag_dr_out) << 1) & board_mask,
+            diag_dl: replace_bit(parent.diag_dl, column, legs.diag_dl_out) >> 1,
+        };
+        let mut weight = base_weight;
+        if top_row {
+            let Some(multiplicity) = top_row_vertical_orbit_weight(n, successor) else {
+                continue;
+            };
+            let multiplicity = u64::try_from(multiplicity)
+                .map_err(|_| u64_promotion(row, "D4 orbit weighting"))?;
+            weight = weight
+                .checked_mul(multiplicity)
+                .filter(|&value| value <= coefficient_limit)
+                .ok_or_else(|| u64_promotion(row, "D4 orbit weighting"))?;
+        }
+        let packed = PackedBoundary::pack(successor, n).0;
+        let key = u64::try_from(packed)
+            .map_err(|_| "compact64 virtual boundary key does not fit u64".to_owned())?;
+        let selected_shard = shard_index(u128::from(key), n, output.len(), ShardMode::Prefix);
+        output[selected_shard].push(CompactEntry64 { key, weight });
+        appended += 1;
+    }
+    Ok(appended)
+}
+
+struct LocalGeneration64 {
+    buckets: Vec<Vec<CompactEntry64>>,
+    counters: RowCounters,
+    completed_row_terms: u128,
+    error: Option<String>,
+    parents_since_flush: usize,
+    peak_capacity_bytes: usize,
+}
+
+impl LocalGeneration64 {
+    fn new(shards: usize) -> Self {
+        Self {
+            buckets: (0..shards).map(|_| Vec::<CompactEntry64>::new()).collect(),
+            counters: RowCounters::default(),
+            completed_row_terms: 0,
+            error: None,
+            parents_since_flush: 0,
+            peak_capacity_bytes: 0,
+        }
+    }
+
+    fn capacity_bytes(&self) -> usize {
+        self.buckets
+            .iter()
+            .map(|bucket| bucket.capacity() * std::mem::size_of::<CompactEntry64>())
+            .sum()
+    }
+
+    fn flush(&mut self, shared: &[Mutex<Vec<CompactEntry64>>], force: bool) -> Result<(), String> {
+        self.peak_capacity_bytes = self.peak_capacity_bytes.max(self.capacity_bytes());
+        for (local, destination) in self.buckets.iter_mut().zip(shared) {
+            if !local.is_empty() && (force || local.len() >= 1_024) {
+                let mut destination = destination.lock().map_err(|_| {
+                    "parallel compact64 candidate bucket lock was poisoned".to_owned()
+                })?;
+                destination.extend_from_slice(local);
+                local.clear();
+            }
+        }
+        self.parents_since_flush = 0;
+        Ok(())
+    }
+}
+
+fn contract_rows_d4_compact64_parallel_generation_kernel(
+    n: usize,
+    shards: usize,
+    coefficient_limit: u64,
+) -> Result<ParallelGenerationResult, String> {
+    if n > 21 {
+        return Err("the compact64 virtual-boundary backend supports N <= 21".to_owned());
+    }
+    if shards == 0 || !shards.is_power_of_two() || shards > 256 {
+        return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if coefficient_limit == 0 {
+        return Err("compact64 coefficient limit must be positive".to_owned());
+    }
+    if n == 0 {
+        return contract_rows_d4_compact_parallel_generation_kernel(n, shards);
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let initial_key = u64::try_from(PackedBoundary::pack(initial, n).0)
+        .map_err(|_| "initial compact64 key does not fit u64".to_owned())?;
+    let mut boundary = (0..shards)
+        .map(|_| Vec::<CompactEntry64>::new())
+        .collect::<Vec<_>>();
+    boundary[shard_index(u128::from(initial_key), n, shards, ShardMode::Prefix)].push(
+        CompactEntry64 {
+            key: initial_key,
+            weight: 1,
+        },
+    );
+    let mut peak_states = 1_usize;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n);
+    let mut generation_elapsed = Duration::ZERO;
+    let mut sort_elapsed = Duration::ZERO;
+    let mut reduce_elapsed = Duration::ZERO;
+    let mut peak_thread_local_bytes = 0_usize;
+    let mut peak_worker_partials = 0_usize;
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states: usize = boundary.iter().map(Vec::len).sum();
+        let generation_start = Instant::now();
+        let worker_count = rayon::current_num_threads().max(1);
+        let target_states = input_states.div_ceil(worker_count).max(1);
+        let mut source_ranges = Vec::<(usize, usize)>::with_capacity(worker_count);
+        let mut range_start = 0_usize;
+        let mut range_states = 0_usize;
+        for (index, source_shard) in boundary.iter().enumerate() {
+            range_states += source_shard.len();
+            if range_states >= target_states
+                && source_ranges.len() + 1 < worker_count
+                && index + 1 < shards
+            {
+                source_ranges.push((range_start, index + 1));
+                range_start = index + 1;
+                range_states = 0;
+            }
+        }
+        source_ranges.push((range_start, shards));
+        let shared = (0..shards)
+            .map(|_| Mutex::new(Vec::<CompactEntry64>::new()))
+            .collect::<Vec<_>>();
+        let partials = source_ranges
+            .par_iter()
+            .map(|&(start, end)| {
+                let mut local = LocalGeneration64::new(shards);
+                for parent_shard in &boundary[start..end] {
+                    if local.error.is_some() {
+                        break;
+                    }
+                    for &parent in parent_shard {
+                        match append_compact64_sparse_sharded_d4(
+                            &operator,
+                            PackedBoundary(u128::from(parent.key)).unpack(n),
+                            parent.weight,
+                            Compact64Config {
+                                n,
+                                row,
+                                top_row: row == 0,
+                                coefficient_limit,
+                            },
+                            &mut local.counters,
+                            &mut local.buckets,
+                        ) {
+                            Ok(count) => local.completed_row_terms += count as u128,
+                            Err(error) => {
+                                local.error = Some(error);
+                                break;
+                            }
+                        }
+                        local.parents_since_flush += 1;
+                        if local.parents_since_flush >= 256
+                            && let Err(error) = local.flush(&shared, false)
+                        {
+                            local.error = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if local.error.is_none()
+                    && let Err(error) = local.flush(&shared, true)
+                {
+                    local.error = Some(error);
+                }
+                local
+            })
+            .collect::<Vec<_>>();
+        peak_worker_partials = peak_worker_partials.max(partials.len());
+        peak_thread_local_bytes = peak_thread_local_bytes.max(
+            partials
+                .iter()
+                .map(|partial| partial.peak_capacity_bytes)
+                .sum(),
+        );
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0_u128;
+        for partial in partials {
+            if let Some(error) = partial.error {
+                return Err(error);
+            }
+            counters.tensor_examined += partial.counters.tensor_examined;
+            counters.tensor_matched += partial.counters.tensor_matched;
+            counters.operator_candidates += partial.counters.operator_candidates;
+            counters.operator_matched += partial.counters.operator_matched;
+            completed_row_terms += partial.completed_row_terms;
+        }
+        drop(boundary);
+        let mut candidates = shared
+            .into_iter()
+            .map(|bucket| {
+                bucket
+                    .into_inner()
+                    .map_err(|_| "parallel compact64 candidate bucket lock was poisoned".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        generation_elapsed += generation_start.elapsed();
+
+        let sort_start = Instant::now();
+        candidates
+            .par_iter_mut()
+            .for_each(|shard| shard.sort_unstable_by_key(|entry| entry.key));
+        sort_elapsed += sort_start.elapsed();
+
+        let reduce_start = Instant::now();
+        candidates
+            .par_iter_mut()
+            .try_for_each(|shard| reduce_sorted_compact64(shard, row, coefficient_limit))?;
+        reduce_elapsed += reduce_start.elapsed();
+
+        let output_states = candidates.iter().map(Vec::len).sum();
+        let output_weight = candidates.iter().flatten().try_fold(0_u128, |sum, entry| {
+            sum.checked_add(u128::from(entry.weight))
+                .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+        })?;
+        peak_states = peak_states.max(output_states);
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        boundary = candidates;
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states,
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .flatten()
+        .filter(|entry| PackedBoundary(u128::from(entry.key)).columns(n) == board_mask)
+        .try_fold(0_u128, |sum, entry| {
+            sum.checked_add(u128::from(entry.weight))
+                .ok_or_else(|| "final compact64 coefficient sum overflow".to_owned())
+        })?;
+    Ok(ParallelGenerationResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed: total_start.elapsed(),
+            peak_states,
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_operator_candidates,
+            row_operator_matched: total_operator_matched,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers,
+        },
+        generation_elapsed,
+        sort_elapsed,
+        reduce_elapsed,
+        peak_thread_local_bytes,
+        peak_worker_partials,
+    })
+}
+
+fn contract_rows_d4_compact_u64_promoting_with_limit(
+    n: usize,
+    shards: usize,
+    coefficient_limit: u64,
+) -> Result<U64PromotionResult, String> {
+    let total_start = Instant::now();
+    let fast_start = Instant::now();
+    match contract_rows_d4_compact64_parallel_generation_kernel(n, shards, coefficient_limit) {
+        Ok(result) => Ok(U64PromotionResult {
+            contraction: result.contraction,
+            used_u64_fast_path: true,
+            promotion_reason: None,
+            attempted_fast_path_elapsed: fast_start.elapsed(),
+            generation_elapsed: result.generation_elapsed,
+            sort_elapsed: result.sort_elapsed,
+            reduce_elapsed: result.reduce_elapsed,
+            peak_thread_local_bytes: result.peak_thread_local_bytes,
+        }),
+        Err(error) if error.starts_with(U64_PROMOTION_PREFIX) => {
+            let attempted_fast_path_elapsed = fast_start.elapsed();
+            let fallback = contract_rows_d4_compact_parallel_generation_kernel(n, shards)?;
+            let mut contraction = fallback.contraction;
+            contraction.elapsed = total_start.elapsed();
+            contraction.peak_rss_bytes = contraction.peak_rss_bytes.max(peak_rss_bytes());
+            Ok(U64PromotionResult {
+                contraction,
+                used_u64_fast_path: false,
+                promotion_reason: Some(error),
+                attempted_fast_path_elapsed,
+                generation_elapsed: fallback.generation_elapsed,
+                sort_elapsed: fallback.sort_elapsed,
+                reduce_elapsed: fallback.reduce_elapsed,
+                peak_thread_local_bytes: fallback.peak_thread_local_bytes,
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2642,6 +3076,7 @@ mod e24_kernel_tests {
         contract_rows_d4_batched_radix, contract_rows_d4_batched_sort_reduce,
         contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
         contract_rows_d4_compact_parallel_generation, contract_rows_d4_compact_sharded_sort_reduce,
+        contract_rows_d4_compact_u64_promoting, contract_rows_d4_compact_u64_promoting_with_limit,
         contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_orbit_sort_reduce,
         contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
         sort_packed_radix,
@@ -2808,6 +3243,41 @@ mod e24_kernel_tests {
                 "N={n}"
             );
         }
+    }
+
+    #[test]
+    fn compact64_fast_path_and_forced_promotion_are_exact() {
+        assert_eq!(std::mem::size_of::<super::CompactEntry64>(), 16);
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_compact_parallel_generation(n, 8).unwrap();
+            let candidate = contract_rows_d4_compact_u64_promoting(n, 8).unwrap();
+            assert!(candidate.used_u64_fast_path, "N={n}");
+            assert_eq!(
+                candidate.contraction.count, baseline.contraction.count,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.contraction.peak_states, baseline.contraction.peak_states,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.contraction.row_operator_matched,
+                baseline.contraction.row_operator_matched,
+                "N={n}"
+            );
+        }
+
+        let promoted = contract_rows_d4_compact_u64_promoting_with_limit(8, 8, 1).unwrap();
+        assert!(!promoted.used_u64_fast_path);
+        assert!(promoted.promotion_reason.is_some());
+        assert_eq!(promoted.contraction.count, 92);
+        assert_eq!(
+            promoted.contraction.peak_states,
+            contract_rows_d4_compact_parallel_generation(8, 8)
+                .unwrap()
+                .contraction
+                .peak_states
+        );
     }
 }
 
