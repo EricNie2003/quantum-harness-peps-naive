@@ -606,5 +606,152 @@ decision diagram 和朴素 wavefront 的结构潜力。
    时启动；否则只会把不可行的指数 materialization 推迟一两个 N。
 
 在任何新方向开始前记录 hypothesis、branch/worktree、correctness gate、keep/kill 和资源
-上限。下一组五方向完成前不得绕过下一次 review gate。当前按用户要求在 E10 与本复盘后
-停止，不启动 E11。
+上限。下一组五方向完成前不得绕过下一次 review gate。该轮当时按用户要求在 E10 后停止；
+第 16–17 节完成 scaling 诊断并记录新授权后，才恢复 E11。
+
+## 16. 当前 DFS 与 PEPS 的 scaling benchmark
+
+### 16.1 问题与理论边界
+
+`Q&A.md` 提醒应同时比较：
+
+\[
+\log T=a+bN,\qquad
+\log T=a+bN\log N,\qquad
+\log T=a+bN^2.
+\]
+
+当前逐行 PEPS boundary 只保存 column、down-right、down-left 三组各 N 个二值 virtual
+indices，即至多 `3N` bits。因此存在严格表示上界：
+
+\[
+S_{\max}\le 2^{3N},\qquad
+G(N),T(N)\le \operatorname{poly}(N)2^{3N}=\exp(O(N)).
+\]
+
+所以当前实现不可能在真正渐近区间保持 \(\exp(\Theta(N^2))\)。窄范围回归中
+\(N\log N\) 或 \(N^2\) 得到略高 \(R^2\)，只能说明有限尺寸的相邻增长率仍在上升，不能
+推翻上述结构上界。
+
+### 16.2 Benchmark protocol
+
+- code revision：`cccc5211ee15e8bcf20c283142e1597be9776db8`；
+- CPU：AMD Ryzen 9 7945HX，16 cores / 32 logical threads；
+- Rust 1.94，Windows MSVC，release/thin-LTO，未额外设置 `target-cpu=native`；
+- PEPS：
+  - `parallel_slicing 1 10 15 3`；
+  - `parallel_slicing 16 10 15 5`；
+- DFS：
+  - `dfs_bitmask bench 16 --min 11 --threads 1 --repeats 9 --warmup 2 --csv`；
+  - 同命令以 16 threads 运行；
+- 所有计数均与 `known_count` 一致；
+- wall time 不含编译和进程启动；
+- PEPS 1t 每点 3 repeats，16t 每点 5 repeats；DFS warmup 2 后 9 repeats；
+- RSS 为 Windows `PeakWorkingSetSize`。每组 N 在同一进程递增运行，较大 N 支配高水位，
+  但该值仍包含 allocator retained pages、runtime 和线程栈。
+
+### 16.3 PEPS 原始结果
+
+| N | Q(N) | 1t median (s) | 16t median (s) | peak support | row candidates | accepted | 1t RSS (MiB) | 16t RSS (MiB) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 724 | 0.003210 | 0.002217 | 8,838 | 308,110 | 33,764 | 6.03 | 10.76 |
+| 11 | 2,680 | 0.016126 | 0.006799 | 39,307 | 1,565,047 | 156,885 | 9.17 | 18.58 |
+| 12 | 14,200 | 0.081736 | 0.028089 | 188,100 | 8,461,752 | 789,394 | 20.73 | 33.73 |
+| 13 | 73,712 | 0.460710 | 0.118111 | 978,362 | 47,909,758 | 4,201,149 | 101.62 | 94.16 |
+| 14 | 365,596 | 2.739569 | 0.623666 | 5,479,934 | 286,010,088 | 23,859,616 | 444.65 | 398.45 |
+| 15 | 2,279,184 | 19.206450 | 3.897083 | 32,120,057 | 1,783,273,650 | 143,138,637 | 2,883.22 | 2,176.00 |
+
+N=14→15：
+
+- support 增长 5.86x；
+- row candidates 增长 6.24x；
+- serial time 增长 7.01x；
+- 16-thread time 增长 6.25x；
+- RSS 增长到约 2.1–2.8 GiB。
+
+### 16.4 DFS 原始结果
+
+| N | Q(N) | 1t median (s) | 16t median (s) | recursive nodes | candidate placements | 1t RSS (MiB) | 16t RSS (MiB) |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 11 | 2,680 | 0.000470 | 0.001088 | 89,878 | 91,392 | 4.94 | 5.54 |
+| 12 | 14,200 | 0.002281 | 0.001122 | 420,995 | 428,094 | 4.96 | 5.84 |
+| 13 | 73,712 | 0.013687 | 0.001901 | 2,490,838 | 2,531,728 | 4.96 | 5.95 |
+| 14 | 365,596 | 0.074657 | 0.006276 | 13,496,479 | 13,679,276 | 4.96 | 6.17 |
+| 15 | 2,279,184 | 0.499690 | 0.036802 | 90,634,738 | 91,883,698 | 4.97 | 6.24 |
+| 16 | 14,772,512 | 3.241466 | 0.231981 | 563,208,896 | 570,595,151 | 4.97 | 6.24 |
+
+DFS 16-thread 在 N=11、12 受 task split/worker overhead 支配，因此其全区间 wall-time
+回归不能当作算法复杂度；recursive nodes/candidate placements 才是更稳定的结构指标。
+
+### 16.5 三种模型拟合
+
+以下都是对 `log(metric)` 的两参数最小二乘拟合。`base` 只对
+\(\log y=a+bN\) 给出 \(e^b\)。
+
+| series / metric | N | exp(bN) R² / base | exp(bN log N) R² | exp(bN²) R² | 区间内最佳 R² |
+|:---|:---:|:---:|---:|---:|:---|
+| PEPS 1t time | 10–15 | 0.998747 / 5.65 | **0.999620** | 0.999393 | N log N |
+| PEPS 16t time | 10–15 | 0.993668 / 4.46 | 0.996022 | **0.999471** | N²；受并行饱和影响 |
+| DFS 1t time | 11–16 | 0.999126 / 5.89 | **0.999738** | 0.999199 | N log N |
+| DFS 16t time | 11–16 | 0.898577 / 3.00 | 0.907468 | **0.928481** | 不稳定，不能外推 |
+| PEPS peak support | 10–15 | 0.998977 / 5.16 | **0.999766** | 0.999297 | N log N |
+| PEPS row candidates | 10–15 | 0.999542 / 5.66 | **0.999978** | 0.998632 | N log N |
+| DFS recursive nodes | 11–16 | 0.999037 / 5.80 | **0.999675** | 0.999194 | N log N |
+
+三个模型在只有 6 个相邻 N 的窗口中高度共线，不能据千分位的 \(R^2\) 差异宣布真正的
+渐近复杂度。更稳妥的结论是：
+
+1. 当前 PEPS 和 DFS 的实测工作量都约以每增加 1 个 N 放大 5–6 倍；
+2. PEPS support 的区间几何平均增长为 5.15x；
+3. PEPS row-candidate work 为 5.66x，DFS recursive-node work 为 5.75x；
+4. 当前数据不支持“PEPS 是 \(\exp(N^2)\) 而 DFS 不是”的说法；
+5. PEPS 的 `3N`-bit frontier 给出 \(\exp(O(N))\) 上界，但尚无证据说明实际 base 会很快
+   低于 DFS。
+
+### 16.6 差距来自 work 数，而不主要来自单项常数
+
+在共同的 N=11–15 区间：
+
+| N | PEPS/DFS 1t time | PEPS/DFS 16t time |
+|---:|---:|---:|
+| 11 | 34.3x | 6.25x |
+| 12 | 35.8x | 25.0x |
+| 13 | 33.7x | 62.1x |
+| 14 | 36.7x | 99.4x |
+| 15 | 38.4x | 105.9x |
+
+N=15：
+
+- PEPS：1,783,273,650 row candidates，约 10.8 ns/candidate；
+- DFS：91,883,698 candidate placements，约 5.4 ns/candidate；
+- PEPS/DFS work ratio 约 19.4x，单项时间只约 2x。
+
+所以最优先的 sparse 优化应是从显式 `C` 编译 nonzero-position iterator，把
+1,783,273,650 次全列扫描逼近 143,138,637 次 accepted tensor transitions；继续只优化
+hash、allocator 或更多线程无法解决主要差距。
+
+原始数据：
+
+- `benchmarks/current_scaling_peps_release.csv`
+- `benchmarks/current_scaling_dfs_release.csv`
+- `benchmarks/current_scaling_model_fits.csv`
+
+## 17. 基于三轮讨论的方向判断
+
+我同意“必须同时利用稀疏性和对称性”，但二者作用不同：
+
+- **更深稀疏性是必要条件。** 当前只做了 sparse storage，还没有 sparse transition
+  generation、future-equivalence 或 support-aware ordering；这些才可能降低 work/slope。
+- **D4 对称性是公平竞争和常数优化的必要条件。** 完整网络具有 D4 action，但某个中间
+  cut 只保留其 stabilizer。row cut 通常只能直接 quotient 左右反射，其余元素用于映射
+  row/column、top/bottom 或 anchored sectors，不能简单宣称 8x。
+- **单靠 D4 不充分。** DFS 已使用首行镜像；即便 PEPS 得到理想 8x，也仍不足以消除
+  N=15 的 38.4x serial gap，而且实际 cut quotient 通常小于 8x。
+- **路径搜索值得做但不是最高优先级。** OMEinsum 当前把自动路径搜索放在
+  `OMEinsumContractionOrders.jl`，可用 `TreeSA`、复杂度评分和 slicing 生成候选；
+  这些 dense metrics 必须经过 actual sparse-support contraction 验证。
+- **需要消融。** E11 后负载会彻底改变，E2 reserve、E4 hasher 的旧结论可能不再适用；
+  E9 sort-reduce 与 E10 parallel 的边际收益也必须在 sparse iterator 上重测。
+
+更新后的 E11–E15 顺序、D4 stabilizer 处理、OMEinsum 路径候选规则和消融矩阵已记录在
+`nqueens_issue34_autoresearch_plan.md`。

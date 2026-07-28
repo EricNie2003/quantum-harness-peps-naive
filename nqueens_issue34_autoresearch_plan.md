@@ -60,7 +60,10 @@ virtual bits 后仍线性扫描全部 17 个条目。E1、E3、E5a 完成后，�
 “可行性”综合考虑 PEPS 合规性、当前 Rust 代码、可用单机资源和预期验证成本，而不只是
 理论上能否实现。
 
-## D. 研究方向重新排序
+## D. 第一轮历史研究方向重新排序（已被后文 gates 取代）
+
+本表保留最初规划及编号映射用于审计；它不是当前执行队列。当前 E11–E15 以文末“基于
+`Q&A.md` 三轮讨论与 scaling 实测的第三阶段修订”为准。
 
 | 新顺序 | 方向 | PEPS 合规条件 | 可行性 | 难度 | 预期收益 | 当前决策 |
 |---:|---|---|:---:|:---:|---|---|
@@ -2384,3 +2387,168 @@ benchmark 表、RSS/support/work 指标、KEEP/REJECT 原因和修订计划统�
 十轮后仍没有方向降低 N=14 peak support 5,479,934，也没有超过同线程 DFS。下一阶段不再
 把 hasher、reserve 或增加线程数作为主方向；优先验证 geometry-aware cutwidth 和可证明的
 future-equivalence quotient。开始 E11 前必须沿用 `REPORT.md` 第 15 节的 keep/kill gates。
+
+---
+
+## 基于 `Q&A.md` 三轮讨论与 scaling 实测的第三阶段修订
+
+### 结论：必须深化稀疏性；对称性必要但不是充分条件
+
+当前 backend 已经只存储非零 boundary states，因此“引入稀疏性”不能理解成把 dense tensor
+换成 hash/vector——这一步已经完成。下一阶段必须利用更深的、张量值相关的稀疏结构：
+
+1. 不再扫描显式为零的 row positions；
+2. 合并 future-equivalent sparse states；
+3. 用 actual `nnz/support` 而不是 dense width 驱动 ordering；
+4. 只在有限域 rank 确认存在精确线性依赖后发展 exact MPS。
+
+对称性也应引入，但要准确估计上限。逐行 boundary 保持的棋盘自同构主要是左右反射
+\(Z_2\)；旋转和上下反射通常不保持“已收缩前 k 行”这一 cut。因此单独的 symmetry slicing/
+orbit canonicalization 通常最多提供约 2x 常数收益。DFS baseline 已经使用首行镜像约化，
+所以 symmetry 是公平比较所必需的，但不能单独填平当前差距。
+
+### Scaling 对优先级的约束
+
+commit `cccc5211ee15e8bcf20c283142e1597be9776db8` 的受控 release benchmark 显示：
+
+- PEPS N=10→15：peak support 8,838→32,120,057，几何平均每 N 增长 5.15x；
+- PEPS row candidates 308,110→1,783,273,650，几何平均增长 5.66x；
+- DFS N=11→16：recursive nodes 89,878→563,208,896，几何平均增长 5.75x；
+- N=15 PEPS 生成 1,783,273,650 candidates，而 DFS 只有 91,883,698 candidate
+  placements，work ratio 为 19.4x；
+- N=15 串行 PEPS 约 10.8 ns/candidate，DFS 约 5.4 ns/candidate，单项常数只差约 2x。
+
+因此主要差距是“生成了多少 sparse work”，不是整数加法或单个 entry 的成本。进一步调
+allocator/hasher 的优先级降到最低。
+
+当前 packed boundary 只有 `3N` 个二值 virtual indices，所以 support 严格满足
+\(S_{\max}\le2^{3N}\)，整套逐行算法也有
+\(\operatorname{poly}(N)2^{3N}=\exp(O(N))\) 上界。N=10–15 上
+`exp(bN)`、`exp(bN log N)`、`exp(bN²)` 的回归都很接近；不能把窄区间内略高的 \(R^2\)
+解释为真正的 \(\exp(N^2)\) 渐近律。原始数据与拟合在：
+
+- `benchmarks/current_scaling_peps_release.csv`
+- `benchmarks/current_scaling_dfs_release.csv`
+- `benchmarks/current_scaling_model_fits.csv`
+
+### E11–E15 新顺序
+
+| ID | 方向 | 稀疏/对称机制 | 可行性 | 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---:|:---|:---|
+| E11 | **从显式 C 编译 sparse legal-position iterator** | 从 occupied `CEntry` 的 incoming predicate 机械生成 bitwise valid-position mask，只枚举非零 row transitions | 很高 | 2/5 | N=14、15 serial 与 16t 均至少 3x；输出 map/support/weight 逐层完全一致 | runtime <1.5x 或任何 tensor-level mismatch |
+| E12 | **完整 D4 action、stabilizer 与 orbit contraction** | 显式实现 8 个棋盘自同构；对每个 cut/slice 求 stabilizer，分别利用 cut-preserving orbit 与跨方向 task reuse | 中高 | 4/5 | N=13–15 aggregate work 至少下降 35%，runtime 至少 1.5x；逐 orbit exact | 只有最终答案盲乘 multiplicity、无法处理 fixed orbit，或收益 <20% |
+| E13 | **width-certified support-aware path search** | line-graph/carving-width bounds + OMEinsumContractionOrders `TreeSA`/slicing 候选 + sampled/actual nnz 重评分 | 中 | 4/5 | 两个连续 N 的 actual peak-support slope 比 row sweep 低至少 10%，且 count exact | 仅 dense FLOP/width 改善；actual support 连续两档未降 20% |
+| E14 | **future-equivalence sparse quotient** | 用 suffix behavior/bisimulation/Myhill–Nerode signature 合并 bitmask 不同但后续行为相同的 states | 中低 | 5/5 | N=10、11 canonical classes ≤ explicit support 的 70%，native apply ≤2x E11 | 两档 class ratio >0.85 或证明成本先爆炸 |
+| E15 | **有限域 flattening-rank 诊断** | 在多个 61-bit primes 上测 selected cuts 的 exact rank；只有 rank slope 显著更低才发展 CRT exact MPS | 中低 | 5/5 | 至少两个 N 的 rank/support ≤0.5，且 rank slope 低 ≥15% | rank 接近 support，立即拒绝 exact MPS 主线 |
+
+### 方向解释
+
+#### E11 为什么优先于所有其他方向
+
+E6 的 `CompiledRowOperator` 已从 17-entry `C` 证明 occupied branch 的全部 incoming 条件，
+但 runtime 仍对每个 parent 扫描全部 N 列。N=15 实测：
+
+\[
+1\,783\,273\,650\ \text{column candidates}
+\quad\rightarrow\quad
+143\,138\,637\ \text{accepted tensor transitions}.
+\]
+
+稀疏 iterator 的理论检查数可下降约 12.46x。实现必须消费 `CompiledRowOperator` 生成的
+predicate，并对 N≤10 每个可达 parent 与原 compiled/sitewise 输出 map 比较；不得直接写一个
+无 tensor 来源的 DFS `available_columns` recurrence。
+
+#### E12：尽量使用完整 D4，但按 stabilizer 分层
+
+完整棋盘与 Sec. VI 边界条件在 D4 的 8 个元素下不变：恒等、90/180/270 度旋转、水平/
+垂直反射和两条对角反射。实现必须显式生成这些作用对 site coordinate、row/column channel
+和两族 diagonal channel 的置换，并在 tensor level 验证 transformed \(B/C\) 与 boundary
+contraction 等价。
+
+但一个“已完成前 k 行”的中间 cut 通常只被左右反射保持。其余 D4 元素会把它映射成：
+
+- bottom-up row sweep；
+- left/right column sweep；
+- 旋转或反向的另一 contraction task；
+- 某个带 anchor/slice 条件的不同 sector。
+
+所以不能强行把每层都除以 8。E12 分三层：
+
+1. **cut stabilizer quotient：** 对 row sweep 使用左右反射 canonical boundary orbit；
+2. **cross-task reuse：** 让旋转/上下反射复用 row/column、top/bottom 的 kernel、profile、
+   checkpoint 或 anchored slice；
+3. **full-solution orbit：** 只有在能用局域/有限状态 symmetry-breaking automaton 正确处理
+   orbit size 1/2/4/8 时才尝试 fundamental-domain contraction。
+
+首行左右镜像可以用 projected tensor slice 表示并按 orbit multiplicity 求和。进一步的
+boundary canonicalization 必须证明 transfer 与 stabilizer action 可交换：
+
+\[
+R\,T = T\,R.
+\]
+
+只在最终答案上盲目乘 2/4/8 不算合规 symmetry contraction。报告必须逐 sector 记录 group
+element、stabilizer、orbit size、fixed-point 数、multiplicity 和独立 unsymmetrized 校验。
+cut 内部的直接 quotient 上限通常仍约 2x；完整 D4 的主要额外价值是跨方向/切片复用，而
+不是保证 8x。
+
+#### E13 的 OMEinsum 路径探索定位
+
+当前 [OMEinsum](https://github.com/under-Peter/OMEinsum.jl) 本体要求用 nested einsum 手工
+指定 contraction order；自动路径搜索在
+[OMEinsumContractionOrders.jl 文档](https://under-peter.github.io/OMEinsum.jl/dev/contractionorder/)
+中提供 `optimize_code`、`TreeSA`、复杂度评分和 slicing。
+E13 可以把 Sec. VI 网络结构导出成 einsum/graph，使用这些优化器产生 contraction-tree
+候选和 dense time/space/read-write 上界。
+
+这些结果只能作为候选生成器。每条候选必须回到 Rust direct-TN oracle，用 actual sparse
+support、accepted transitions、RSS 和 exact count 重新评分。不得因为 OMEinsum 的 dense
+complexity 下降就 KEEP；路径搜索优先级低于 E11/E12。
+
+#### E13–E15 才可能改变指数
+
+E13 优化 actual sparse separator；E14 寻找张量值相关的最小状态数；E15 检查 exact linear
+rank 是否远低于 support。它们分别对应 `Q&A.md` 提出的三类可能突破。E7 已否定普通固定变量
+顺序 ADD/ZDD，E8 已否定朴素 diagonal wavefront，所以不得在没有新结构证据时重复这两类
+实验。
+
+### 降级或停止的路线
+
+- dense exact MPS/PEPS、无截断 boundary-MPS：不作为主线；
+- SVD/CTMRG/rounding：违反 exactness；
+- reserve、hasher、allocator 微调：仅可作为通过 gate 的结构方向的配套；
+- 继续增加 CPU threads 或直接上 GPU：E10 已显示 16→32 threads 基本饱和，在 sparse work
+  数下降前不再单独立项；
+- 通用 dense contraction ordering：只提供 fixed-network 下界/上界，不代表特殊 17-nnz
+  tensor 的真实成本。
+
+完成 E15 后必须再次执行 five-direction review gate；在此之前不得启动 E16。
+
+### 强制消融与“错误 REJECT”复查
+
+从 E11 开始，每个 KEEP 候选必须做同 revision、同编译配置的消融，而不是只与很早的
+baseline 比较。至少保留以下矩阵：
+
+| 变体 | C-derived sparse iterator | sort-reduce | D4/cut symmetry | parallel |
+|:---|:---:|:---:|:---:|:---:|
+| A0 tensor reference | off | off/hash | off | 1 |
+| A1 E11 only | on | off/hash | off | 1 |
+| A2 E9 only | off | on | off | 1 |
+| A3 E11+E9 | on | on | off | 1 |
+| A4 E11+E9+E12 | on | on | on | 1 |
+| A5 full serial | on | on | on | 1 |
+| A6 full parallel | on | on | on | 16 |
+
+要求：
+
+1. N=12–15 至少报告 runtime、RSS、support、generated/accepted transitions；
+2. 计算每项的边际收益与关键二阶交互，例如
+   `speedup(E11+E9)` 是否接近两者乘积；
+3. 若某 KEEP 在新 baseline 上收益 <5%，可降级或撤销；
+4. E2 reserve、E4 hasher 在 sparse iterator 改变负载后允许一次低成本复测；
+5. E7 fixed-order DD、E8 naive diagonal ordering 只有在 E13/E14 提供新变量顺序或 quotient
+   证据时才能复活，不能原样重跑；
+6. 每次复活旧方向必须使用新实验 ID、说明原 REJECT 的假设为何失效，并重新预注册 gate。
+
+最终报告必须同时给出 incremental chain 和 ablation matrix，避免把后加入的优化收益错误
+归因给前置改动。
