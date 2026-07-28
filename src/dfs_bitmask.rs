@@ -156,9 +156,13 @@ fn split_once(board_mask: u64, tasks: Vec<Task>) -> Vec<Task> {
     children
 }
 
-fn make_tasks(n: usize, requested_threads: usize) -> (Vec<Task>, usize) {
+fn make_tasks(n: usize, requested_threads: usize) -> (Vec<Task>, usize, SearchMetrics) {
     let board_mask = (1_u64 << n) - 1;
     let mut tasks = seed_tasks(n);
+    let mut prefix_metrics = SearchMetrics {
+        recursive_nodes: 1,
+        candidate_placements: tasks.len() as u64,
+    };
     let target_tasks = if requested_threads == 1 {
         1
     } else {
@@ -169,7 +173,15 @@ fn make_tasks(n: usize, requested_threads: usize) -> (Vec<Task>, usize) {
     // One task is optimal for low-overhead serial search. Parallel runs split
     // far enough to give dynamic scheduling useful load-balancing granularity.
     while tasks.len() < target_tasks && split_depth < n.saturating_sub(1) {
+        prefix_metrics.recursive_nodes = prefix_metrics
+            .recursive_nodes
+            .checked_add(tasks.len() as u64)
+            .expect("DFS prefix node counter overflow");
         tasks = split_once(board_mask, tasks);
+        prefix_metrics.candidate_placements = prefix_metrics
+            .candidate_placements
+            .checked_add(tasks.len() as u64)
+            .expect("DFS prefix candidate counter overflow");
         split_depth += 1;
         if tasks.is_empty() {
             break;
@@ -182,7 +194,7 @@ fn make_tasks(n: usize, requested_threads: usize) -> (Vec<Task>, usize) {
         let available = board_mask & !(task.columns | task.diag_left | task.diag_right);
         std::cmp::Reverse(available.count_ones())
     });
-    (tasks, split_depth)
+    (tasks, split_depth, prefix_metrics)
 }
 
 fn run_task<const TRACK_METRICS: bool>(
@@ -241,11 +253,19 @@ fn count_dfs_bitmask_impl<const TRACK_METRICS: bool>(
     }
 
     let board_mask = (1_u64 << n) - 1;
-    let (tasks, split_depth) = make_tasks(n, threads);
+    let (tasks, split_depth, prefix_metrics) = make_tasks(n, threads);
     let worker_count = threads.min(tasks.len()).max(1);
     let mut total_count = 0_u128;
-    let mut total_nodes = 0_u128;
-    let mut total_candidates = 0_u128;
+    let mut total_nodes = if TRACK_METRICS {
+        u128::from(prefix_metrics.recursive_nodes)
+    } else {
+        0
+    };
+    let mut total_candidates = if TRACK_METRICS {
+        u128::from(prefix_metrics.candidate_placements)
+    } else {
+        0
+    };
 
     if worker_count == 1 {
         for &task in &tasks {
@@ -333,7 +353,7 @@ pub fn profile_dfs_bitmask(n: usize, threads: usize) -> Result<DfsResult, String
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_N, count_dfs_bitmask};
+    use super::{MAX_N, count_dfs_bitmask, profile_dfs_bitmask};
     use crate::known_count;
 
     #[test]
@@ -353,6 +373,14 @@ mod tests {
                 "N={n}"
             );
         }
+    }
+
+    #[test]
+    fn profiling_counts_the_same_search_tree_across_task_splits() {
+        let serial = profile_dfs_bitmask(12, 1).unwrap();
+        let parallel = profile_dfs_bitmask(12, 4).unwrap();
+        assert_eq!(serial.recursive_nodes, parallel.recursive_nodes);
+        assert_eq!(serial.candidate_placements, parallel.candidate_placements);
     }
 
     #[test]
