@@ -1,0 +1,3 @@
+N,count,known_count,verified,median_elapsed_s,min_elapsed_s,p10_elapsed_s,p90_elapsed_s,peak_rss_bytes,threads,split_depth,tasks,recursive_nodes,candidate_placements,metrics_elapsed_s,repeats,warmup,algorithm_class
+14,365596,365596,true,0.006306100,0.005915300,0.005915300,0.006700700,6381568,16,4,4816,13496479,13679276,0.007764000,9,1,conventional_dfs_comparator
+14,365596,365596,true,0.004885200,0.004667200,0.004667200,0.005141600,6758400,32,4,4816,13496479,13679276,0.006404100,9,1,conventional_dfs_comparator
