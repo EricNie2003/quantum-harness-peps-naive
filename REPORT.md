@@ -905,3 +905,13 @@ CRT、消融和最终 DFS benchmark 改为所有 KEEP 候选的强制工程阶�
 E19 明确采用“D4 外层 sector + 内层非对称路径搜索”的组合，但不假设必然有收益。候选集
 必须包含当前 D4 row baseline，并按 aggregate actual nnz、RSS 和 wall time 选择；sector
 拆分导致的跨 sector merge 损失也计入总成本。
+
+## 21. E19：D4-conditioned macro-tree
+
+D4 首行 orbit sectors 与 half-row tree 在数学和实现上可组合。相同 generic sparse tensor
+表示内，half-row 相对 left-fold row tree 在 N=5–7 快 20.9–24.1%，matching pairs 约降
+30%。但 peak support 不变，且相对 production D4 row macro 仍慢 3,919x–127,932x。
+
+所以“D4 基础上总能继续搜索合法路径”成立，但“必然得到整体性能收益”不成立；候选集选择
+原 D4 row baseline，**REJECT 当前 E19 production candidate**。完整报告：
+`experiments/e19_d4_macro_tree/REPORT.md`。

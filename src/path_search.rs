@@ -11,6 +11,7 @@ use crate::{SiteTensorC, VirtualLegs};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PathKind {
     RowBlocks,
+    HalfRowBlocks,
     ColumnBlocks,
     BalancedRectangles,
     SupportAwareGreedy,
@@ -60,13 +61,33 @@ fn push_leg(legs: &mut Vec<(u16, u8)>, id: u16, value: u8) {
     legs.push((id, value));
 }
 
-fn site_tensor(n: usize, row: usize, column: usize) -> Result<(SparseTensor, u128), String> {
+fn occupied(legs: VirtualLegs) -> bool {
+    legs.column_in == 0
+        && legs.column_out == 1
+        && legs.row_in == 0
+        && legs.row_out == 1
+        && legs.diag_dr_in == 0
+        && legs.diag_dr_out == 1
+        && legs.diag_dl_in == 0
+        && legs.diag_dl_out == 1
+}
+
+fn site_tensor(
+    n: usize,
+    row: usize,
+    column: usize,
+    top_queen: Option<usize>,
+) -> Result<(SparseTensor, u128), String> {
     let tensor = SiteTensorC::sec_vi();
     let mut accumulated = HashMap::<u128, u128>::new();
     let mut canonical_indices = None::<Vec<u16>>;
     let mut accepted_entries = 0_u128;
 
     for entry in tensor.entries() {
+        let is_occupied = occupied(entry.legs);
+        if row == 0 && top_queen.is_some_and(|queen| is_occupied != (column == queen)) {
+            continue;
+        }
         let VirtualLegs {
             column_in,
             column_out,
@@ -129,9 +150,20 @@ fn site_tensor(n: usize, row: usize, column: usize) -> Result<(SparseTensor, u12
             .fold(0_u128, |key, (position, &(_, value))| {
                 key | (u128::from(value) << position)
             });
+        let orbit_weight =
+            if row == 0 && is_occupied && top_queen.is_some_and(|queen| queen != n - 1 - queen) {
+                2
+            } else {
+                1
+            };
         let coefficient = accumulated.entry(key).or_insert(0);
         *coefficient = coefficient
-            .checked_add(entry.value)
+            .checked_add(
+                entry
+                    .value
+                    .checked_mul(orbit_weight)
+                    .ok_or_else(|| "D4 slice multiplicity overflow".to_owned())?,
+            )
             .ok_or_else(|| "local boundary contraction overflow".to_owned())?;
     }
 
@@ -364,7 +396,11 @@ fn support_aware_greedy(
     Ok(clusters.remove(0))
 }
 
-pub fn contract_with_path(n: usize, path: PathKind) -> Result<PathMetrics, String> {
+fn contract_with_path_slice(
+    n: usize,
+    path: PathKind,
+    top_queen: Option<usize>,
+) -> Result<PathMetrics, String> {
     if n == 0 {
         return Ok(PathMetrics {
             count: 1,
@@ -378,7 +414,7 @@ pub fn contract_with_path(n: usize, path: PathKind) -> Result<PathMetrics, Strin
     for row in 0..n {
         let mut grid_row = Vec::with_capacity(n);
         for column in 0..n {
-            let (tensor, accepted_entries) = site_tensor(n, row, column)?;
+            let (tensor, accepted_entries) = site_tensor(n, row, column, top_queen)?;
             metrics.local_tensor_entries_examined += 17;
             metrics.local_tensor_entries_accepted += accepted_entries;
             metrics.peak_support = metrics.peak_support.max(tensor.entries.len());
@@ -399,6 +435,22 @@ pub fn contract_with_path(n: usize, path: PathKind) -> Result<PathMetrics, Strin
                 .iter()
                 .map(|row| contract_sequence(row.clone(), &mut metrics))
                 .collect::<Result<Vec<_>, _>>()?;
+            contract_sequence(rows, &mut metrics)?
+        }
+        PathKind::HalfRowBlocks => {
+            let middle = n.div_ceil(2);
+            let rows = grid
+                .iter()
+                .map(|row| {
+                    let left = contract_sequence(row[..middle].to_vec(), &mut metrics)?;
+                    if middle == n {
+                        Ok(left)
+                    } else {
+                        let right = contract_sequence(row[middle..].to_vec(), &mut metrics)?;
+                        contract_clusters(left, right, &mut metrics)
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?;
             contract_sequence(rows, &mut metrics)?
         }
         PathKind::ColumnBlocks => {
@@ -429,6 +481,32 @@ pub fn contract_with_path(n: usize, path: PathKind) -> Result<PathMetrics, Strin
     Ok(metrics)
 }
 
+pub fn contract_with_path(n: usize, path: PathKind) -> Result<PathMetrics, String> {
+    contract_with_path_slice(n, path, None)
+}
+
+pub fn contract_with_d4_macro_path(n: usize, path: PathKind) -> Result<PathMetrics, String> {
+    if n == 0 {
+        return contract_with_path(n, path);
+    }
+    let mut aggregate = PathMetrics::default();
+    for queen in 0..n.div_ceil(2) {
+        let metrics = contract_with_path_slice(n, path, Some(queen))?;
+        aggregate.count = aggregate
+            .count
+            .checked_add(metrics.count)
+            .ok_or_else(|| "D4 macro count overflow".to_owned())?;
+        aggregate.peak_support = aggregate.peak_support.max(metrics.peak_support);
+        aggregate.peak_rank = aggregate.peak_rank.max(metrics.peak_rank);
+        aggregate.local_tensor_entries_examined += metrics.local_tensor_entries_examined;
+        aggregate.local_tensor_entries_accepted += metrics.local_tensor_entries_accepted;
+        aggregate.cartesian_pair_upper_bound += metrics.cartesian_pair_upper_bound;
+        aggregate.matching_entry_pairs += metrics.matching_entry_pairs;
+        aggregate.contractions += metrics.contractions;
+    }
+    Ok(aggregate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PathKind, contract_with_path};
@@ -438,6 +516,7 @@ mod tests {
     fn direct_sparse_paths_match_known_counts_through_n4() {
         for path in [
             PathKind::RowBlocks,
+            PathKind::HalfRowBlocks,
             PathKind::ColumnBlocks,
             PathKind::BalancedRectangles,
             PathKind::SupportAwareGreedy,
@@ -445,6 +524,19 @@ mod tests {
             for n in 0..=4 {
                 assert_eq!(
                     contract_with_path(n, path).unwrap().count,
+                    known_count(n).unwrap(),
+                    "path={path:?}, N={n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn d4_macro_slices_match_known_counts_through_n5() {
+        for path in [PathKind::RowBlocks, PathKind::HalfRowBlocks] {
+            for n in 0..=5 {
+                assert_eq!(
+                    super::contract_with_d4_macro_path(n, path).unwrap().count,
                     known_count(n).unwrap(),
                     "path={path:?}, N={n}"
                 );
