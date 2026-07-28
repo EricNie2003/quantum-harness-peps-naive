@@ -6,6 +6,7 @@
 //! complete row before moving the boundary down by one lattice spacing.
 
 pub mod dfs_bitmask;
+pub mod future_quotient;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
