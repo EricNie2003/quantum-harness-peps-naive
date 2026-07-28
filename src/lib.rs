@@ -8,7 +8,8 @@
 pub mod dfs_bitmask;
 pub mod weighted_dd;
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -835,6 +836,23 @@ pub fn contract_rows_d4_sharded_sparse_sort_reduce(
     contract_rows_d4_sharded_sparse_kernel(n, shards, shard_mode)
 }
 
+#[derive(Clone, Debug)]
+pub struct ChunkedContractionResult {
+    pub contraction: ContractionResult,
+    pub peak_live_candidates: usize,
+    pub peak_run_entries: usize,
+    pub max_runs_per_shard: usize,
+    pub merge_heap_operations: u128,
+}
+
+pub fn contract_rows_d4_chunked_runs(
+    n: usize,
+    shards: usize,
+    parent_chunk_size: usize,
+) -> Result<ChunkedContractionResult, String> {
+    contract_rows_d4_chunked_runs_kernel(n, shards, parent_chunk_size)
+}
+
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
 }
@@ -1154,6 +1172,248 @@ fn contract_rows_d4_sharded_sparse_kernel(
         row_operator_matched: total_operator_matched,
         peak_rss_bytes: peak_rss_bytes(),
         layers,
+    })
+}
+
+fn finish_candidate_chunk(
+    candidates: &mut [Vec<(PackedBoundary, u128)>],
+    runs: &mut [Vec<Vec<(PackedBoundary, u128)>>],
+    row: usize,
+) -> Result<usize, String> {
+    candidates
+        .par_iter_mut()
+        .try_for_each(|shard| -> Result<(), String> {
+            shard.sort_unstable_by_key(|(state, _)| state.0);
+            reduce_sorted_candidates(shard, row)
+        })?;
+    let mut entries = 0_usize;
+    for (candidate_shard, shard_runs) in candidates.iter_mut().zip(runs) {
+        if !candidate_shard.is_empty() {
+            entries += candidate_shard.len();
+            shard_runs.push(std::mem::take(candidate_shard));
+        }
+    }
+    Ok(entries)
+}
+
+fn merge_exact_runs(
+    runs: Vec<Vec<(PackedBoundary, u128)>>,
+    row: usize,
+) -> Result<(Vec<(PackedBoundary, u128)>, u128), String> {
+    let total_entries = runs.iter().map(Vec::len).sum();
+    let mut output = Vec::with_capacity(total_entries);
+    let mut heap = BinaryHeap::<Reverse<(u128, usize, usize)>>::new();
+    for (run_index, run) in runs.iter().enumerate() {
+        if let Some((state, _)) = run.first() {
+            heap.push(Reverse((state.0, run_index, 0)));
+        }
+    }
+    let mut heap_operations = heap.len() as u128;
+    while let Some(Reverse((key, run_index, position))) = heap.pop() {
+        heap_operations += 1;
+        let mut weight = runs[run_index][position].1;
+        let next_position = position + 1;
+        if next_position < runs[run_index].len() {
+            heap.push(Reverse((
+                runs[run_index][next_position].0.0,
+                run_index,
+                next_position,
+            )));
+            heap_operations += 1;
+        }
+        while heap.peek().is_some_and(|entry| entry.0.0 == key) {
+            let Reverse((_, duplicate_run, duplicate_position)) =
+                heap.pop().expect("peek established a heap entry");
+            heap_operations += 1;
+            weight = weight
+                .checked_add(runs[duplicate_run][duplicate_position].1)
+                .ok_or_else(|| format!("run-merge coefficient overflow after row {}", row + 1))?;
+            let duplicate_next = duplicate_position + 1;
+            if duplicate_next < runs[duplicate_run].len() {
+                heap.push(Reverse((
+                    runs[duplicate_run][duplicate_next].0.0,
+                    duplicate_run,
+                    duplicate_next,
+                )));
+                heap_operations += 1;
+            }
+        }
+        output.push((PackedBoundary(key), weight));
+    }
+    Ok((output, heap_operations))
+}
+
+fn contract_rows_d4_chunked_runs_kernel(
+    n: usize,
+    shards: usize,
+    parent_chunk_size: usize,
+) -> Result<ChunkedContractionResult, String> {
+    if n > 42 {
+        return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
+    }
+    if shards == 0 || !shards.is_power_of_two() || shards > 256 {
+        return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if parent_chunk_size == 0 {
+        return Err("parent chunk size must be positive".to_owned());
+    }
+    if n == 0 {
+        return Ok(ChunkedContractionResult {
+            contraction: ContractionResult {
+                n,
+                count: 1,
+                elapsed: Duration::ZERO,
+                peak_states: 1,
+                tensor_entries_examined: 0,
+                tensor_entries_matched: 0,
+                row_operator_candidates: 0,
+                row_operator_matched: 0,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            peak_live_candidates: 0,
+            peak_run_entries: 0,
+            max_runs_per_shard: 0,
+            merge_heap_operations: 0,
+        });
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let initial_packed = PackedBoundary::pack(initial, n);
+    let mut boundary = (0..shards)
+        .map(|_| Vec::<(PackedBoundary, u128)>::new())
+        .collect::<Vec<_>>();
+    boundary[shard_index(initial_packed.0, n, shards, ShardMode::Prefix)]
+        .push((initial_packed, 1_u128));
+    let mut peak_states = 1_usize;
+    let mut peak_live_candidates = 0_usize;
+    let mut peak_run_entries = 0_usize;
+    let mut max_runs_per_shard = 0_usize;
+    let mut merge_heap_operations = 0_u128;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n);
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states = boundary.iter().map(Vec::len).sum();
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0_u128;
+        let mut candidates = (0..shards)
+            .map(|_| Vec::<(PackedBoundary, u128)>::new())
+            .collect::<Vec<_>>();
+        let mut runs = (0..shards)
+            .map(|_| Vec::<Vec<(PackedBoundary, u128)>>::new())
+            .collect::<Vec<_>>();
+        let mut parents_in_chunk = 0_usize;
+        let mut run_entries = 0_usize;
+
+        for parent_shard in &boundary {
+            for &(packed_parent, parent_weight) in parent_shard {
+                completed_row_terms += append_compiled_sparse_sharded_d4(
+                    n,
+                    &operator,
+                    packed_parent.unpack(n),
+                    parent_weight,
+                    row == 0,
+                    ShardMode::Prefix,
+                    &mut counters,
+                    &mut candidates,
+                )? as u128;
+                parents_in_chunk += 1;
+                if parents_in_chunk == parent_chunk_size {
+                    let raw_entries = candidates.iter().map(Vec::len).sum::<usize>();
+                    peak_live_candidates =
+                        peak_live_candidates.max(run_entries.saturating_add(raw_entries));
+                    run_entries += finish_candidate_chunk(&mut candidates, &mut runs, row)?;
+                    peak_run_entries = peak_run_entries.max(run_entries);
+                    parents_in_chunk = 0;
+                }
+            }
+        }
+        if parents_in_chunk != 0 {
+            let raw_entries = candidates.iter().map(Vec::len).sum::<usize>();
+            peak_live_candidates =
+                peak_live_candidates.max(run_entries.saturating_add(raw_entries));
+            run_entries += finish_candidate_chunk(&mut candidates, &mut runs, row)?;
+            peak_run_entries = peak_run_entries.max(run_entries);
+        }
+        max_runs_per_shard = max_runs_per_shard.max(runs.iter().map(Vec::len).max().unwrap_or(0));
+        drop(boundary);
+        let merged = runs
+            .into_par_iter()
+            .map(|shard_runs| merge_exact_runs(shard_runs, row))
+            .collect::<Vec<_>>();
+        let mut next_boundary = Vec::with_capacity(shards);
+        let mut row_heap_operations = 0_u128;
+        for result in merged {
+            let (shard, operations) = result?;
+            row_heap_operations += operations;
+            next_boundary.push(shard);
+        }
+        merge_heap_operations += row_heap_operations;
+        let output_states = next_boundary.iter().map(Vec::len).sum();
+        peak_live_candidates = peak_live_candidates.max(run_entries.saturating_add(output_states));
+        let output_weight =
+            next_boundary
+                .iter()
+                .flatten()
+                .try_fold(0_u128, |sum, (_, value)| {
+                    sum.checked_add(*value)
+                        .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+                })?;
+        peak_states = peak_states.max(output_states);
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        boundary = next_boundary;
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states,
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .flatten()
+        .filter(|(state, _)| state.columns(n) == board_mask)
+        .try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| "final coefficient sum overflow".to_owned())
+        })?;
+    Ok(ChunkedContractionResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed: total_start.elapsed(),
+            peak_states,
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_operator_candidates,
+            row_operator_matched: total_operator_matched,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers,
+        },
+        peak_live_candidates,
+        peak_run_entries,
+        max_runs_per_shard,
+        merge_heap_operations,
     })
 }
 
@@ -2126,9 +2386,9 @@ mod e24_kernel_tests {
         PackedBoundary, ShardMode, contract_rows_d4_arena_sort_reduce,
         contract_rows_d4_batched_radix, contract_rows_d4_batched_sort_reduce,
         contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
-        contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_orbit_sort_reduce,
-        contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
-        sort_packed_radix,
+        contract_rows_d4_chunked_runs, contract_rows_d4_deferred_sparse_sort_reduce,
+        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sharded_sparse_sort_reduce,
+        contract_rows_d4_sparse_sort_reduce, sort_packed_radix,
     };
 
     #[test]
@@ -2249,6 +2509,30 @@ mod e24_kernel_tests {
                         "N={n}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn chunked_runs_match_sharded_contraction() {
+        for n in 0..=9 {
+            let baseline =
+                contract_rows_d4_sharded_sparse_sort_reduce(n, 8, ShardMode::Prefix).unwrap();
+            for parent_chunk_size in [1, 7, 1_000] {
+                let candidate = contract_rows_d4_chunked_runs(n, 8, parent_chunk_size).unwrap();
+                assert_eq!(candidate.contraction.count, baseline.count, "N={n}");
+                assert_eq!(
+                    candidate.contraction.peak_states, baseline.peak_states,
+                    "N={n}"
+                );
+                assert_eq!(
+                    candidate.contraction.row_operator_candidates, baseline.row_operator_candidates,
+                    "N={n}"
+                );
+                assert_eq!(
+                    candidate.contraction.row_operator_matched, baseline.row_operator_matched,
+                    "N={n}"
+                );
             }
         }
     }
