@@ -1,0 +1,5 @@
+variant,N,count,known_count,verified,median_elapsed_s,min_elapsed_s,peak_rss_bytes,peak_support,tensor_entries_examined,tensor_entries_matched,row_operator_candidates,row_operator_matched,repeats,threads
+arena_batched_sparse_parallel_sort,12,14200,14200,true,0.015920000,0.015578600,14163968,98939,17,17,403508,403508,3,8
+arena_batched_sparse_parallel_sort,13,73712,73712,true,0.067851800,0.065730600,58331136,541745,17,17,2334177,2334177,3,8
+arena_batched_sparse_parallel_sort,14,365596,365596,true,0.341980500,0.340196100,209657856,2847130,17,17,12359529,12359529,3,8
+arena_batched_sparse_parallel_sort,15,2279184,2279184,true,2.754886300,2.635938700,1712611328,18178233,17,17,80077350,80077350,3,8
