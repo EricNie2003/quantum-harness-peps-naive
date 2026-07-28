@@ -879,6 +879,35 @@ pub fn contract_rows_d4_compact_u64_promoting(
     contract_rows_d4_compact_u64_promoting_with_limit(n, shards, u64::MAX)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExplicitFrontierOrder {
+    RowMajor,
+    TopLeftDiamond,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExplicitFrontierResult {
+    pub n: usize,
+    pub order: ExplicitFrontierOrder,
+    pub complete: bool,
+    pub count: Option<u128>,
+    pub elapsed: Duration,
+    pub peak_states: usize,
+    pub peak_open_bonds: usize,
+    pub tensor_entries_examined: u128,
+    pub tensor_entries_accepted: u128,
+    pub contracted_sites: usize,
+    pub peak_rss_bytes: u64,
+}
+
+pub fn contract_explicit_c_frontier(
+    n: usize,
+    order: ExplicitFrontierOrder,
+    support_limit: usize,
+) -> Result<ExplicitFrontierResult, String> {
+    contract_explicit_c_frontier_kernel(n, order, support_limit)
+}
+
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
 }
@@ -1306,6 +1335,321 @@ fn append_compact_sparse_sharded_d4(
         appended += 1;
     }
     Ok(appended)
+}
+
+#[derive(Clone, Copy)]
+enum FrontierLeg {
+    Boundary(u8),
+    Edge(usize),
+}
+
+#[derive(Clone, Copy)]
+struct FrontierSite {
+    row: usize,
+    column: usize,
+    legs: [FrontierLeg; 8],
+}
+
+#[derive(Clone, Copy)]
+struct FrontierTransition {
+    required_mask: u128,
+    required_value: u128,
+    added_value: u128,
+    local_value: u128,
+}
+
+fn explicit_frontier_sites(n: usize) -> Vec<FrontierSite> {
+    let span = n.saturating_sub(1);
+    let row_offset = 0;
+    let column_offset = n * span;
+    let diag_dr_offset = column_offset + n * span;
+    let diag_dl_offset = diag_dr_offset + span * span;
+    let row_edge = |row: usize, left_column: usize| row_offset + row * span + left_column;
+    let column_edge = |top_row: usize, column: usize| column_offset + top_row * n + column;
+    let diag_dr_edge =
+        |top_row: usize, left_column: usize| diag_dr_offset + top_row * span + left_column;
+    let diag_dl_edge =
+        |top_row: usize, left_column: usize| diag_dl_offset + top_row * span + left_column;
+
+    let mut sites = Vec::with_capacity(n * n);
+    for row in 0..n {
+        for column in 0..n {
+            let column_in = if row == 0 {
+                FrontierLeg::Boundary(0b01)
+            } else {
+                FrontierLeg::Edge(column_edge(row - 1, column))
+            };
+            let column_out = if row + 1 == n {
+                FrontierLeg::Boundary(0b10)
+            } else {
+                FrontierLeg::Edge(column_edge(row, column))
+            };
+            let row_in = if column == 0 {
+                FrontierLeg::Boundary(0b01)
+            } else {
+                FrontierLeg::Edge(row_edge(row, column - 1))
+            };
+            let row_out = if column + 1 == n {
+                FrontierLeg::Boundary(0b10)
+            } else {
+                FrontierLeg::Edge(row_edge(row, column))
+            };
+            let diag_dr_in = if row == 0 || column == 0 {
+                FrontierLeg::Boundary(0b01)
+            } else {
+                FrontierLeg::Edge(diag_dr_edge(row - 1, column - 1))
+            };
+            let diag_dr_out = if row + 1 == n || column + 1 == n {
+                FrontierLeg::Boundary(0b11)
+            } else {
+                FrontierLeg::Edge(diag_dr_edge(row, column))
+            };
+            let diag_dl_in = if row == 0 || column + 1 == n {
+                FrontierLeg::Boundary(0b01)
+            } else {
+                FrontierLeg::Edge(diag_dl_edge(row - 1, column))
+            };
+            let diag_dl_out = if row + 1 == n || column == 0 {
+                FrontierLeg::Boundary(0b11)
+            } else {
+                FrontierLeg::Edge(diag_dl_edge(row, column - 1))
+            };
+            sites.push(FrontierSite {
+                row,
+                column,
+                legs: [
+                    column_in,
+                    column_out,
+                    row_in,
+                    row_out,
+                    diag_dr_in,
+                    diag_dr_out,
+                    diag_dl_in,
+                    diag_dl_out,
+                ],
+            });
+        }
+    }
+    sites
+}
+
+fn explicit_frontier_order(n: usize, order: ExplicitFrontierOrder) -> Vec<usize> {
+    let mut sites = (0..n * n).collect::<Vec<_>>();
+    if order == ExplicitFrontierOrder::TopLeftDiamond {
+        sites.sort_unstable_by_key(|&index| {
+            let row = index / n;
+            let column = index % n;
+            (row + column, row)
+        });
+    }
+    sites
+}
+
+fn c_entry_leg_values(entry: CEntry) -> [u8; 8] {
+    [
+        entry.legs.column_in,
+        entry.legs.column_out,
+        entry.legs.row_in,
+        entry.legs.row_out,
+        entry.legs.diag_dr_in,
+        entry.legs.diag_dr_out,
+        entry.legs.diag_dl_in,
+        entry.legs.diag_dl_out,
+    ]
+}
+
+fn contract_explicit_c_frontier_kernel(
+    n: usize,
+    order: ExplicitFrontierOrder,
+    support_limit: usize,
+) -> Result<ExplicitFrontierResult, String> {
+    if n > 21 {
+        return Err("explicit-C frontier key supports N <= 21".to_owned());
+    }
+    if support_limit == 0 {
+        return Err("explicit-C frontier support limit must be positive".to_owned());
+    }
+    if n == 0 {
+        return Ok(ExplicitFrontierResult {
+            n,
+            order,
+            complete: true,
+            count: Some(1),
+            elapsed: Duration::ZERO,
+            peak_states: 1,
+            peak_open_bonds: 0,
+            tensor_entries_examined: 0,
+            tensor_entries_accepted: 0,
+            contracted_sites: 0,
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    if tensor.entries().len() != 17 {
+        return Err("explicit-C frontier requires the Sec. VI 17-entry tensor".to_owned());
+    }
+    let sites = explicit_frontier_sites(n);
+    let ordering = explicit_frontier_order(n, order);
+    let mut boundary = HashMap::<u128, u128>::from([(0, 1)]);
+    let mut open_edges = Vec::<usize>::new();
+    let mut peak_states = 1_usize;
+    let mut peak_open_bonds = 0_usize;
+    let mut tensor_entries_examined = 0_u128;
+    let mut tensor_entries_accepted = 0_u128;
+    let total_start = Instant::now();
+
+    for (step, &site_index) in ordering.iter().enumerate() {
+        let site = sites[site_index];
+        debug_assert_eq!(site.row * n + site.column, site_index);
+        let old_positions = open_edges
+            .iter()
+            .enumerate()
+            .map(|(position, &edge)| (edge, position))
+            .collect::<HashMap<_, _>>();
+        let incident_edges = site
+            .legs
+            .iter()
+            .filter_map(|leg| match leg {
+                FrontierLeg::Edge(edge) => Some(*edge),
+                FrontierLeg::Boundary(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut next_open_edges = open_edges
+            .iter()
+            .copied()
+            .filter(|edge| !incident_edges.contains(edge))
+            .collect::<Vec<_>>();
+        for &edge in &incident_edges {
+            if !old_positions.contains_key(&edge) {
+                next_open_edges.push(edge);
+            }
+        }
+        next_open_edges.sort_unstable();
+        if next_open_edges.len() > 128 {
+            return Err(format!(
+                "explicit-C frontier exceeds 128 open bonds at site ({},{})",
+                site.row, site.column
+            ));
+        }
+        let next_positions = next_open_edges
+            .iter()
+            .enumerate()
+            .map(|(position, &edge)| (edge, position))
+            .collect::<HashMap<_, _>>();
+        let carry_positions = open_edges
+            .iter()
+            .enumerate()
+            .filter_map(|(old_position, edge)| {
+                next_positions
+                    .get(edge)
+                    .map(|&next_position| (old_position, next_position))
+            })
+            .collect::<Vec<_>>();
+
+        let transitions = tensor
+            .entries()
+            .iter()
+            .filter_map(|&entry| {
+                let values = c_entry_leg_values(entry);
+                let mut required_mask = 0_u128;
+                let mut required_value = 0_u128;
+                let mut added_value = 0_u128;
+                for (&leg, value) in site.legs.iter().zip(values) {
+                    match leg {
+                        FrontierLeg::Boundary(allowed) => {
+                            if allowed & (1 << value) == 0 {
+                                return None;
+                            }
+                        }
+                        FrontierLeg::Edge(edge) => {
+                            if let Some(&position) = old_positions.get(&edge) {
+                                required_mask |= 1_u128 << position;
+                                required_value |= u128::from(value) << position;
+                            } else {
+                                let position = next_positions[&edge];
+                                added_value |= u128::from(value) << position;
+                            }
+                        }
+                    }
+                }
+                Some(FrontierTransition {
+                    required_mask,
+                    required_value,
+                    added_value,
+                    local_value: entry.value,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut candidates = HashMap::<u128, u128>::new();
+        for (&key, &weight) in &boundary {
+            tensor_entries_examined += 17;
+            let mut carried = 0_u128;
+            for &(old_position, next_position) in &carry_positions {
+                carried |= ((key >> old_position) & 1) << next_position;
+            }
+            for transition in &transitions {
+                if key & transition.required_mask != transition.required_value {
+                    continue;
+                }
+                tensor_entries_accepted += 1;
+                let successor = carried | transition.added_value;
+                let contribution = weight.checked_mul(transition.local_value).ok_or_else(|| {
+                    format!(
+                        "explicit-C coefficient multiplication overflow at site ({},{})",
+                        site.row, site.column
+                    )
+                })?;
+                let accumulated = candidates.entry(successor).or_insert(0);
+                *accumulated = accumulated.checked_add(contribution).ok_or_else(|| {
+                    format!(
+                        "explicit-C coefficient addition overflow at site ({},{})",
+                        site.row, site.column
+                    )
+                })?;
+                if candidates.len() > support_limit {
+                    peak_states = peak_states.max(candidates.len());
+                    peak_open_bonds = peak_open_bonds.max(next_open_edges.len());
+                    return Ok(ExplicitFrontierResult {
+                        n,
+                        order,
+                        complete: false,
+                        count: None,
+                        elapsed: total_start.elapsed(),
+                        peak_states,
+                        peak_open_bonds,
+                        tensor_entries_examined,
+                        tensor_entries_accepted,
+                        contracted_sites: step,
+                        peak_rss_bytes: peak_rss_bytes(),
+                    });
+                }
+            }
+        }
+        boundary = candidates;
+        open_edges = next_open_edges;
+        peak_states = peak_states.max(boundary.len());
+        peak_open_bonds = peak_open_bonds.max(open_edges.len());
+    }
+
+    if !open_edges.is_empty() {
+        return Err("explicit-C contraction ended with uncontracted virtual bonds".to_owned());
+    }
+    let count = boundary.get(&0).copied().unwrap_or(0);
+    Ok(ExplicitFrontierResult {
+        n,
+        order,
+        complete: true,
+        count: Some(count),
+        elapsed: total_start.elapsed(),
+        peak_states,
+        peak_open_bonds,
+        tensor_entries_examined,
+        tensor_entries_accepted,
+        contracted_sites: n * n,
+        peak_rss_bytes: peak_rss_bytes(),
+    })
 }
 
 fn contract_rows_d4_compact_sharded_kernel(
@@ -3072,14 +3416,15 @@ pub fn peak_rss_bytes() -> u64 {
 #[cfg(test)]
 mod e24_kernel_tests {
     use super::{
-        PackedBoundary, ShardMode, contract_rows_d4_arena_sort_reduce,
-        contract_rows_d4_batched_radix, contract_rows_d4_batched_sort_reduce,
-        contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
-        contract_rows_d4_compact_parallel_generation, contract_rows_d4_compact_sharded_sort_reduce,
-        contract_rows_d4_compact_u64_promoting, contract_rows_d4_compact_u64_promoting_with_limit,
+        ExplicitFrontierOrder, PackedBoundary, ShardMode, contract_explicit_c_frontier,
+        contract_rows_d4_arena_sort_reduce, contract_rows_d4_batched_radix,
+        contract_rows_d4_batched_sort_reduce, contract_rows_d4_batched_sparse_parallel_sort,
+        contract_rows_d4_batched_sparse_sort_reduce, contract_rows_d4_compact_parallel_generation,
+        contract_rows_d4_compact_sharded_sort_reduce, contract_rows_d4_compact_u64_promoting,
+        contract_rows_d4_compact_u64_promoting_with_limit,
         contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_orbit_sort_reduce,
         contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
-        sort_packed_radix,
+        known_count, sort_packed_radix,
     };
 
     #[test]
@@ -3278,6 +3623,21 @@ mod e24_kernel_tests {
                 .contraction
                 .peak_states
         );
+    }
+
+    #[test]
+    fn generic_explicit_c_frontiers_match_known_counts() {
+        for n in 0..=6 {
+            for order in [
+                ExplicitFrontierOrder::RowMajor,
+                ExplicitFrontierOrder::TopLeftDiamond,
+            ] {
+                let result = contract_explicit_c_frontier(n, order, 5_000_000).unwrap();
+                assert!(result.complete, "N={n}, order={order:?}");
+                assert_eq!(result.count, known_count(n), "N={n}, order={order:?}");
+                assert_eq!(result.contracted_sites, n * n);
+            }
+        }
     }
 }
 
