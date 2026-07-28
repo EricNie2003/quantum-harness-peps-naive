@@ -813,3 +813,84 @@ path，而不能用 dense FLOP/width 代替。
 - `benchmarks/e11_sparse_position_iterator_release.csv`
 - `experiments/e12_d4_orbit_slicing/REPORT.md`
 - `benchmarks/e12_d4_orbit_slicing_release.csv`
+
+## 19. E13–E15：路径、future quotient 与 exact rank
+
+### 19.1 E13 Rust 简化 contraction-path exploration
+
+参考 OMEinsum 的 contraction-tree/cost 思路，在 Rust 中实现 row blocks、column blocks、
+balanced rectangles 和 support-aware greedy，并用直接吸收 v0/v1/v2 的显式 17-entry `C`
+sparse-tensor oracle 核验。没有安装 Julia，也没有复刻完整 TreeSA。
+
+greedy 在 generic site-tree 中显著胜出，但与 production row macro 公平比较后失败：
+
+| N | greedy support | D4 row support | ratio | greedy time | D4 time |
+|---:|---:|---:|---:|---:|---:|
+| 9 | 32,678 | 1,210 | 27.0x | 0.0452 s | 0.000589 s |
+| 10 | 111,800 | 4,510 | 24.8x | 0.1444 s | 0.001673 s |
+| 11 | 470,776 | 22,253 | 21.2x | 0.8277 s | 0.008891 s |
+
+原因是 site-level tree 暴露更多 open virtual legs，而 production operator 已对完整一行的
+显式 `C` contraction 做结构性 partial evaluation。**REJECT 当前路径候选**；保留 Rust
+path oracle 作为未来候选生成/否决工具。
+
+### 19.2 E14 exact future-equivalence
+
+从 bottom acceptance 反向按完整 successor-class/multiplicity map 做 exact bisimulation：
+
+| N | peak concrete states | peak future classes | ratio | build (s) | replay (s) |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 4,510 | 735 | 16.30% | 0.00709 | 0.000083 |
+| 11 | 22,253 | 3,462 | 15.56% | 0.04429 | 0.000257 |
+| 12 | 98,939 | 14,570 | 14.73% | 0.21529 | 0.001253 |
+| 13 | 541,745 | 57,215 | 10.56% | 1.75930 | 0.008917 |
+
+future-class growth 明显慢于 support，且 quotient DAG replay 很快。但当前必须先枚举完整
+concrete graph、再反向遍历一次，总 build 比 direct D4 慢 4.3–6.7x。因此
+**KEEP 结构证据，不作为 production solver**。
+
+### 19.3 E15 exact finite-field rank
+
+将 peak boundary coefficient tensor 按空间左右半列 flatten，在素域
+1,000,000,007 和 1,000,000,009 上做 exact sparse Gaussian elimination：
+
+| N | support | rank（两域一致） | rank/support | diagnostic time |
+|---:|---:|---:|---:|---:|
+| 10 | 4,510 | 1,370 | 30.38% | 0.0048 s |
+| 11 | 22,253 | 2,484 | 11.16% | 0.0213 s |
+| 12 | 98,939 | 8,334 | 8.42% | 1.3302 s |
+| 13 | 541,745 | 20,443 | 3.77% | 11.0167 s |
+
+N=10–13 rank growth 为 1.81x、3.35x、2.45x，而 support growth 为
+4.93x、4.45x、5.48x，远过预注册 slope gate。**KEEP exact-low-rank 研究方向**，但当前
+Gaussian 先 materialize full boundary 且 N=13 比 direct D4 慢约 42x，不能当生产收益。
+
+原始报告/数据：
+
+- `experiments/e13_support_aware_path_search/REPORT.md`
+- `benchmarks/e13_path_search_release.csv`
+- `experiments/e14_future_equivalence_quotient/REPORT.md`
+- `benchmarks/e14_future_quotient_release.csv`
+- `benchmarks/e14_future_quotient_layers.csv`
+- `experiments/e15_finite_field_rank/REPORT.md`
+- `benchmarks/e15_finite_field_rank_release.csv`
+
+## 20. E11–E15 强制五方向复盘
+
+本轮最重要的结论不是某个 production speedup，而是成本模型被证据重写：
+
+1. E11 证明“少做局域 predicate”不足以减少 sort/merge；
+2. E12 证明 cut-preserving D4 orbit 能通过减少真实 state/candidate 稳定得到约 2x；
+3. E13 证明 generic site-tree width/support 不能替代 row macro 的 tensor-value structure；
+4. E14 证明 frontier 有 6–10x exact future-equivalence 压缩；
+5. E15 进一步证明 peak boundary 有 3–26x exact finite-field linear compression，并且
+   rank growth 显著慢于 support。
+
+因此新的主假设是：要超过 DFS，必须把显式 `C` row operator 直接作用在 exact
+rank-factorized boundary 上，并在**不展开 full sparse support**的条件下维持有限域低秩。
+只做更多线程、hash tuning、局域 iterator 或更细 site contraction order 不再优先。
+
+下一轮 E16–E20、exactness/CRT 义务、keep/kill gate 和最小区分实验已写入
+`nqueens_issue34_autoresearch_plan.md`。按 gate，E16 必须先做单素域、无阈值、由 `C`
+自动生成的 factorized row apply；若任何一层需要 full-support materialization，立即拒绝，
+不得用 E15 的事后低 rank 冒充可用算法。

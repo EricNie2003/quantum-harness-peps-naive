@@ -2524,6 +2524,74 @@ rank 是否远低于 support。它们分别对应 `Q&A.md` 提出的三类可能
 
 完成 E15 后必须再次执行 five-direction review gate；在此之前不得启动 E16。
 
+## M. E11–E15 强制五方向复盘（2026-07-28）
+
+本节在 E11–E15 全部完成后写入，满足 five-direction review gate；以下新顺序取代先前所有
+E16 以后优先级。复盘时 main baseline 为 `cb227b0` 的 exact D4 orbit contraction，所有实验
+均有独立 worktree/branch、自包含报告和 raw CSV。
+
+### M.1 结果总表
+
+| 方向 | 核心结果 | 机制判断 | 决策 |
+|:---|:---|:---|:---|
+| E11 C-derived sparse iterator | N=15 checks 1.783B→143.1M（12.46x），serial 仅 1.38x，16t 1.04x | predicate 已非主瓶颈；candidate write/sort/merge 主导 | REJECT standalone |
+| E12 D4 orbit contraction | N=13–15 serial 1.78–1.93x；support 降 43–48%；N=15 RSS 2.88→1.63 GiB | 只有 `{I, vertical reflection}` 保持 interior row cut；首行 projected slices 真正减半后续 work | KEEP，已作为默认 |
+| E13 Rust simple path search | greedy 胜 generic row tree，但 N=11 support 470,776，production D4 仅 22,253 | site-level tree 暴露过多 open legs；row macro 的 partial evaluation 比简单 OMEinsum-style tree 更重要 | REJECT 当前候选 |
+| E14 future-equivalence | N=10–13 peak classes/support 16.3%、15.6%、14.7%、10.6%；replay 极快 | 存在巨大 exact suffix bisimulation；但 concrete graph prebuild 使总时间慢 4.3–6.7x | KEEP 结构证据，非 production |
+| E15 finite-field rank | N=10–13 rank/support 30.4%、11.2%、8.4%、3.77%；两素域一致 | boundary coefficient tensor 有强 exact linear low-rank 结构；普通 sparse support 严重高估最小线性状态 | KEEP 新主线，非 production |
+
+### M.2 原假设与实测机制
+
+“必须同时引入稀疏性和对称性”被部分验证，但需要把“稀疏性”重新定义：
+
+1. **局域 transition 稀疏不足。** E11 将检查次数降低一个数量级，却不降低 materialized
+   support，故 serial/parallel 都未达到 gate。
+2. **D4 是可靠常数项。** E12 的收益几乎完全由 cut-preserving orbit 真正减少 candidate
+   与 state 数产生；其余 D4 元素只能复用反向/转置 task，不能虚报 8x。
+3. **简单换 contraction tree 不够。** E13 验证了类似 OMEinsum 的 tree/cost 搜索框架很适合
+   产生和否决候选，但 production row macro 已利用 tensor 值结构，site-level width 不是公平
+   成本模型。
+4. **有价值的稀疏性是语义商和线性秩。** E14/E15 首次给出可能改变有效状态增长率的证据。
+5. **诊断压缩不等于求解加速。** E14/E15 都先 materialize full support，因此其 replay/rank
+   数不能直接拿来与 DFS 比；下一轮唯一目标是避免 full-support prebuild。
+
+E9 的排序 locality、E10 的并行和 E11 的局域 iterator 都不应立即重做。只有 boundary
+representation 被 E16 改变后，旧消融结论才可能失效。
+
+### M.3 新主假设
+
+Sec. VI PEPS 的 row boundary 在空间左右 flattening 上具有远低于 sparse support 的 exact
+finite-field rank。若把 compiled row operator 表示为由显式 `C` 机械生成的 exact MPO，并在
+每行后以有限域行消元/秩分解做**无阈值**压缩，则可能把有效 bond dimension 的增长从约
+5x/N 降到实测 2–3x/N。D4 projected first-row slices 应在该表示上继续成立。
+
+反证条件：任何实现若必须先展开完整 boundary support 才能重新分解，便没有 production
+价值；若 apply 后的 exact rank 快速回到 support，E15 的低秩只是一种不稳定的事后性质。
+
+### M.4 E16–E20 新顺序
+
+| ID | 方向 | exact PEPS 义务 | feasibility / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E16 | **单素域 exact rank-factorized row apply 原型** | row MPO 必须从 17-entry C 自动生成；零阈值 Gaussian/rank factorization | 中 / 5 | N=8–10 不 materialize full boundary；每层 rank 与事后 oracle 一致；总时间 ≤ direct sparse 的 10x | 任一层需 full support 或 rank mismatch；N=9 已不可运行 |
+| E17 | **61-bit multi-prime + CRT certified factorized contraction** | 模数乘积显式大于 N!，至少一冗余 prime；每素域 rank/apply 独立核验 | 中低 / 5 | N=10–12 exact integer count；同硬件总时间开始随 N 改善，RSS 低于 D4 sparse | CRT/多 prime 常数使两档均慢 >20x，或 rank 不稳定导致爆炸 |
+| E18 | **在线 future-signature / quotient apply** | signature 必须等于完整 successor-class map，不能用 completion count 碰撞 | 中低 / 5 | 不预建 concrete suffix graph时，N=10–12 class数接近 E14 的 1.5x 内，build+apply ≤ direct 的 2x | 仍需枚举全部 concrete transitions 两遍，或 class ratio >0.5 |
+| E19 | **D4 × rank/quotient × sparse iterator 消融** | fixed orbit、multiplicity、各 prime 和 tensor equivalence 全部保留 | 中 / 4 | 至少两个正交机制有 >10% 边际；选出唯一 production stack | 组合收益只是测量噪声或破坏 exactness |
+| E20 | **production exact compressed PEPS vs DFS** | release、同硬件、相同线程；raw CSV/RSS/support/rank/entries | 取决于 E16–19 | N=13–16 至少两档超过 DFS；否则给出 crossover/resource projection | scaling 仍不优于 DFS 或 projected Q(28) 资源不可行 |
+
+### M.5 E16 的最小区分实验
+
+E16 不能从 full sparse matrix 做 SVD/Gaussian 后宣称成功。最小合规实验必须：
+
+1. 从 rank-1 top boundary 开始；
+2. 把一行 N 个显式 `C` tensor 编译成 exact finite-field MPO；
+3. 直接作用于 factorized/MPS boundary；
+4. 每个 spatial bond 做无阈值 exact compression；
+5. 仅为验证，在旁路 materialize 小 N sparse boundary 并比较所有 coefficient/rank；
+6. 分别记录 pre/post rank、field operations、fill-in、wall time、RSS；
+7. N=8–10 若不能避免 full support 或两档 rank mismatch，立即停止。
+
+只有 E16 通过后才允许 E17。不得因为 E15 的事后 rank 很低就提前宣称能计算 Q(28)。
+
 ### 强制消融与“错误 REJECT”复查
 
 从 E11 开始，每个 KEEP 候选必须做同 revision、同编译配置的消融，而不是只与很早的
