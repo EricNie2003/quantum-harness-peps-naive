@@ -2734,3 +2734,13 @@ C-derived sparse position iterator 将 N=12--15 serial runtime 改善
 6. E30 可借鉴 OMEinsum/treeSA 的 cost-search 思路，但只实现本项目需要的
    greedy/local moves，暂不引入 Julia runtime；
 7. 完成 E30 后再次执行 five-direction review，复盘前不得启动 E31。
+
+### O.4 当前进度
+
+E26 已完成并 **KEEP Prefix/256**。N=14/15 相对 E24 同线程全局 sort
+分别快 24.5%/32.5%（8 threads），N=15 RSS 降 26.6%；count、support
+和 C-derived transition work 完全一致。完整报告见
+`experiments/e26_prefix_sharded_reduce/REPORT.md`。
+
+下一方向严格为 E27 parent-chunk sorted runs + exact k-way merge；不得
+把继续调 shard 数量计为新方向。

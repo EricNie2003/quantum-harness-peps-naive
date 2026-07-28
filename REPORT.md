@@ -1089,3 +1089,30 @@ deferred layout 的失败。E29/E30 只有在小 N 不产生 N² candidate blow-
 
 五方向 review 已完成，允许启动 E26；完整 gates 同步写入
 `nqueens_issue34_autoresearch_plan.md`。
+
+## 28. E26：key-sharded sparse sort-reduce
+
+E26 从 E24 KEEP kernel 出发，把完整 packed virtual-key 空间确定性地
+分为 256 个不重叠 prefix buckets；successor 仍逐个由 17-entry C
+compiled relation 生成。各 bucket 独立 exact sort/checked-u128 reduce，
+下一 row 保持 sharded boundary，因此没有改变 candidate multiset、
+support 或张量约束。
+
+**KEEP fixed Prefix/256**。相对 E24：
+
+| N | E24 1t | E26 1t | 改善 | E24 8t | E26 8t | 改善 | E26 RSS |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 14 | 0.71181 s | 0.51378 s | 27.8% | 0.34198 s | 0.25820 s | 24.5% | 206,209,024 |
+| 15 | 4.82235 s | 3.63108 s | 24.7% | 2.75489 s | 1.85859 s | 32.5% | 1,256,726,528 |
+
+N=15 RSS 相对 E24 8t 从 1,712,611,328 降 26.6%。33 个 release
+tests 与 Clippy 通过；N=15 count=2,279,184、peak support=18,178,233、
+accepted C transitions=80,077,350 均不变。
+
+收益来自 smaller sorts、parallel bucket reduce、cache locality 和更低的
+bucket capacity over-reservation，不是 exponent 改善。8-thread DFS
+仍为 0.06609 s，因此 gap 从 41.68x 缩至 28.12x，尚未超过基线。
+
+完整报告：`experiments/e26_prefix_sharded_reduce/REPORT.md`；raw CSV：
+`benchmarks/e26_shard_grid_8t_release.csv`、
+`benchmarks/e26_selected_release.csv`。
