@@ -173,6 +173,174 @@ pub struct BoundaryState {
     pub diag_dl: u64,
 }
 
+/// The eight automorphisms of the square board.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum D4Symmetry {
+    Identity,
+    Rotate90,
+    Rotate180,
+    Rotate270,
+    ReflectVertical,
+    ReflectHorizontal,
+    ReflectMainDiagonal,
+    ReflectAntiDiagonal,
+}
+
+impl D4Symmetry {
+    pub const ALL: [Self; 8] = [
+        Self::Identity,
+        Self::Rotate90,
+        Self::Rotate180,
+        Self::Rotate270,
+        Self::ReflectVertical,
+        Self::ReflectHorizontal,
+        Self::ReflectMainDiagonal,
+        Self::ReflectAntiDiagonal,
+    ];
+
+    pub fn transform_coordinate(self, n: usize, row: usize, column: usize) -> (usize, usize) {
+        debug_assert!(row < n && column < n);
+        match self {
+            Self::Identity => (row, column),
+            Self::Rotate90 => (column, n - 1 - row),
+            Self::Rotate180 => (n - 1 - row, n - 1 - column),
+            Self::Rotate270 => (n - 1 - column, row),
+            Self::ReflectVertical => (row, n - 1 - column),
+            Self::ReflectHorizontal => (n - 1 - row, column),
+            Self::ReflectMainDiagonal => (column, row),
+            Self::ReflectAntiDiagonal => (n - 1 - column, n - 1 - row),
+        }
+    }
+
+    /// Whether this action maps the already-contracted row prefix `[0, cut)`
+    /// to itself as a set.
+    pub fn stabilizes_top_row_cut(self, n: usize, cut: usize) -> bool {
+        debug_assert!(cut <= n);
+        (0..n).all(|row| {
+            (0..n).all(|column| {
+                let (mapped_row, _) = self.transform_coordinate(n, row, column);
+                (row < cut) == (mapped_row < cut)
+            })
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstraintFamily {
+    Row,
+    Column,
+    DiagDownRight,
+    DiagDownLeft,
+}
+
+impl D4Symmetry {
+    pub fn transform_constraint_family(self, family: ConstraintFamily) -> ConstraintFamily {
+        use ConstraintFamily::{Column, DiagDownLeft, DiagDownRight, Row};
+        match (self, family) {
+            (
+                Self::Identity | Self::Rotate180 | Self::ReflectVertical | Self::ReflectHorizontal,
+                Row,
+            ) => Row,
+            (
+                Self::Identity | Self::Rotate180 | Self::ReflectVertical | Self::ReflectHorizontal,
+                Column,
+            ) => Column,
+            (
+                Self::Rotate90
+                | Self::Rotate270
+                | Self::ReflectMainDiagonal
+                | Self::ReflectAntiDiagonal,
+                Row,
+            ) => Column,
+            (
+                Self::Rotate90
+                | Self::Rotate270
+                | Self::ReflectMainDiagonal
+                | Self::ReflectAntiDiagonal,
+                Column,
+            ) => Row,
+            (
+                Self::Rotate90 | Self::Rotate270 | Self::ReflectVertical | Self::ReflectHorizontal,
+                DiagDownRight,
+            ) => DiagDownLeft,
+            (
+                Self::Rotate90 | Self::Rotate270 | Self::ReflectVertical | Self::ReflectHorizontal,
+                DiagDownLeft,
+            ) => DiagDownRight,
+            (
+                Self::Identity
+                | Self::Rotate180
+                | Self::ReflectMainDiagonal
+                | Self::ReflectAntiDiagonal,
+                diagonal,
+            ) => diagonal,
+        }
+    }
+
+    /// Permute the four directed channel pairs under this board action.
+    ///
+    /// Each mapped constraint line is oriented so that the transformed start
+    /// endpoint still carries v0 and the transformed end carries v1/v2.
+    /// Thus `in` and `out` move together; this is the allowed simultaneous
+    /// reversal of a line and its boundary endpoints.
+    pub fn transform_virtual_legs(self, legs: VirtualLegs) -> VirtualLegs {
+        use ConstraintFamily::{Column, DiagDownLeft, DiagDownRight, Row};
+
+        fn channel(legs: VirtualLegs, family: ConstraintFamily) -> (u8, u8) {
+            match family {
+                ConstraintFamily::Row => (legs.row_in, legs.row_out),
+                ConstraintFamily::Column => (legs.column_in, legs.column_out),
+                ConstraintFamily::DiagDownRight => (legs.diag_dr_in, legs.diag_dr_out),
+                ConstraintFamily::DiagDownLeft => (legs.diag_dl_in, legs.diag_dl_out),
+            }
+        }
+
+        fn set_channel(
+            legs: &mut VirtualLegs,
+            family: ConstraintFamily,
+            (incoming, outgoing): (u8, u8),
+        ) {
+            match family {
+                ConstraintFamily::Row => {
+                    legs.row_in = incoming;
+                    legs.row_out = outgoing;
+                }
+                ConstraintFamily::Column => {
+                    legs.column_in = incoming;
+                    legs.column_out = outgoing;
+                }
+                ConstraintFamily::DiagDownRight => {
+                    legs.diag_dr_in = incoming;
+                    legs.diag_dr_out = outgoing;
+                }
+                ConstraintFamily::DiagDownLeft => {
+                    legs.diag_dl_in = incoming;
+                    legs.diag_dl_out = outgoing;
+                }
+            }
+        }
+
+        let mut transformed = VirtualLegs {
+            column_in: 0,
+            column_out: 0,
+            row_in: 0,
+            row_out: 0,
+            diag_dr_in: 0,
+            diag_dr_out: 0,
+            diag_dl_in: 0,
+            diag_dl_out: 0,
+        };
+        for family in [Row, Column, DiagDownRight, DiagDownLeft] {
+            set_channel(
+                &mut transformed,
+                self.transform_constraint_family(family),
+                channel(legs, family),
+            );
+        }
+        transformed
+    }
+}
+
 /// Packed hash key for the three groups of open virtual indices.
 ///
 /// For a board of width `n`, bits `[0,n)`, `[n,2n)`, and `[2n,3n)` store
@@ -465,6 +633,117 @@ fn contract_one_row_compiled(
     Ok(outputs)
 }
 
+fn contract_one_row_compiled_sparse(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    counters: &mut RowCounters,
+) -> Result<Vec<(BoundaryState, u128)>, String> {
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    if legs.row_in != 0 {
+        return Err(
+            "sparse row iterator requires occupied row_in to match the left v0 boundary".to_owned(),
+        );
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let matching_bits = |mask: u64, required: u8| -> Result<u64, String> {
+        match required {
+            0 => Ok((!mask) & board_mask),
+            1 => Ok(mask & board_mask),
+            _ => Err("compiled C entry contains a non-binary incoming signal".to_owned()),
+        }
+    };
+    let mut positions = matching_bits(parent.columns, legs.column_in)?
+        & matching_bits(parent.diag_dr, legs.diag_dr_in)?
+        & matching_bits(parent.diag_dl, legs.diag_dl_in)?;
+    let mut outputs = Vec::with_capacity(positions.count_ones() as usize);
+    let weight = parent_weight
+        .checked_mul(occupied.value)
+        .ok_or_else(|| "coefficient overflow in sparse compiled row operator".to_owned())?;
+
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        let column = selected.trailing_zeros() as usize;
+        positions &= positions - 1;
+        counters.operator_candidates += 1;
+        counters.operator_matched += 1;
+        let columns_out = replace_bit(parent.columns, column, legs.column_out);
+        let diag_dr_at_sites = replace_bit(parent.diag_dr, column, legs.diag_dr_out);
+        let diag_dl_at_sites = replace_bit(parent.diag_dl, column, legs.diag_dl_out);
+        outputs.push((
+            BoundaryState {
+                columns: columns_out,
+                diag_dr: (diag_dr_at_sites << 1) & board_mask,
+                diag_dl: diag_dl_at_sites >> 1,
+            },
+            weight,
+        ));
+    }
+    Ok(outputs)
+}
+
+#[derive(Clone, Copy)]
+enum PositionMode {
+    Dense,
+    Sparse,
+}
+
+fn contract_one_row_with_position_mode(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    counters: &mut RowCounters,
+    position_mode: PositionMode,
+) -> Result<Vec<(BoundaryState, u128)>, String> {
+    match position_mode {
+        PositionMode::Dense => {
+            contract_one_row_compiled(n, operator, parent, parent_weight, counters)
+        }
+        PositionMode::Sparse => {
+            contract_one_row_compiled_sparse(n, operator, parent, parent_weight, counters)
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SymmetryMode {
+    None,
+    TopRowVerticalOrbits,
+}
+
+fn top_row_vertical_orbit_weight(n: usize, successor: BoundaryState) -> Option<u128> {
+    debug_assert_eq!(successor.columns.count_ones(), 1);
+    let column = successor.columns.trailing_zeros() as usize;
+    let mirror = n - 1 - column;
+    if column > mirror {
+        None
+    } else if column == mirror {
+        Some(1)
+    } else {
+        Some(2)
+    }
+}
+
+fn apply_top_row_symmetry(
+    n: usize,
+    row_terms: Vec<(BoundaryState, u128)>,
+) -> Result<Vec<(BoundaryState, u128)>, String> {
+    row_terms
+        .into_iter()
+        .filter_map(|(successor, weight)| {
+            top_row_vertical_orbit_weight(n, successor).map(|multiplicity| {
+                weight
+                    .checked_mul(multiplicity)
+                    .map(|weighted| (successor, weighted))
+                    .ok_or_else(|| "coefficient overflow in D4 orbit weighting".to_owned())
+            })
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy)]
 enum RowBackend {
     Sitewise,
@@ -485,6 +764,36 @@ pub fn contract_rows_hash_materialization(n: usize) -> Result<ContractionResult,
 /// Exactly contract the same compiled row operator, materializing each layer
 /// as a sorted vector and reducing equal packed boundary keys in place.
 pub fn contract_rows_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_sort_reduce_with_modes(n, SymmetryMode::None, PositionMode::Dense)
+}
+
+pub fn contract_rows_sparse_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_sort_reduce_with_modes(n, SymmetryMode::None, PositionMode::Sparse)
+}
+
+/// Exact row contraction sliced by the vertical-reflection orbits of the
+/// occupied tensor entry on the first row.
+///
+/// Only `{identity, vertical reflection}` preserves an interior top-down row
+/// cut. The other six D4 actions are validated separately and are not used as
+/// an invalid blanket factor of eight.
+pub fn contract_rows_d4_orbit_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_sort_reduce_with_modes(n, SymmetryMode::TopRowVerticalOrbits, PositionMode::Dense)
+}
+
+pub fn contract_rows_d4_sparse_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_sort_reduce_with_modes(
+        n,
+        SymmetryMode::TopRowVerticalOrbits,
+        PositionMode::Sparse,
+    )
+}
+
+fn contract_rows_sort_reduce_with_modes(
+    n: usize,
+    symmetry_mode: SymmetryMode,
+    position_mode: PositionMode,
+) -> Result<ContractionResult, String> {
     if n > 42 {
         return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
     }
@@ -527,8 +836,17 @@ pub fn contract_rows_sort_reduce(n: usize) -> Result<ContractionResult, String> 
 
         for (packed_parent, parent_weight) in std::mem::take(&mut boundary) {
             let parent = packed_parent.unpack(n);
-            let row_terms =
-                contract_one_row_compiled(n, &operator, parent, parent_weight, &mut counters)?;
+            let mut row_terms = contract_one_row_with_position_mode(
+                n,
+                &operator,
+                parent,
+                parent_weight,
+                &mut counters,
+                position_mode,
+            )?;
+            if row == 0 && matches!(symmetry_mode, SymmetryMode::TopRowVerticalOrbits) {
+                row_terms = apply_top_row_symmetry(n, row_terms)?;
+            }
             completed_row_terms += row_terms.len() as u128;
             candidates.extend(
                 row_terms
@@ -608,6 +926,57 @@ pub fn contract_rows_parallel_sort_reduce(
     n: usize,
     threads: usize,
 ) -> Result<ContractionResult, String> {
+    contract_rows_parallel_sort_reduce_with_modes(
+        n,
+        threads,
+        SymmetryMode::None,
+        PositionMode::Dense,
+    )
+}
+
+pub fn contract_rows_sparse_parallel_sort_reduce(
+    n: usize,
+    threads: usize,
+) -> Result<ContractionResult, String> {
+    contract_rows_parallel_sort_reduce_with_modes(
+        n,
+        threads,
+        SymmetryMode::None,
+        PositionMode::Sparse,
+    )
+}
+
+/// Parallel sort-reduce after exact first-row vertical-reflection orbit slicing.
+pub fn contract_rows_d4_orbit_parallel_sort_reduce(
+    n: usize,
+    threads: usize,
+) -> Result<ContractionResult, String> {
+    contract_rows_parallel_sort_reduce_with_modes(
+        n,
+        threads,
+        SymmetryMode::TopRowVerticalOrbits,
+        PositionMode::Dense,
+    )
+}
+
+pub fn contract_rows_d4_sparse_parallel_sort_reduce(
+    n: usize,
+    threads: usize,
+) -> Result<ContractionResult, String> {
+    contract_rows_parallel_sort_reduce_with_modes(
+        n,
+        threads,
+        SymmetryMode::TopRowVerticalOrbits,
+        PositionMode::Sparse,
+    )
+}
+
+fn contract_rows_parallel_sort_reduce_with_modes(
+    n: usize,
+    threads: usize,
+    symmetry_mode: SymmetryMode,
+    position_mode: PositionMode,
+) -> Result<ContractionResult, String> {
     if threads == 0 {
         return Err("parallel sort-reduce requires at least one thread".to_owned());
     }
@@ -661,13 +1030,17 @@ pub fn contract_rows_parallel_sort_reduce(
                     let mut counters = RowCounters::default();
                     for &(packed_parent, parent_weight) in parents {
                         let parent = packed_parent.unpack(n);
-                        let row_terms = contract_one_row_compiled(
+                        let mut row_terms = contract_one_row_with_position_mode(
                             n,
                             &operator,
                             parent,
                             parent_weight,
                             &mut counters,
+                            position_mode,
                         )?;
+                        if row == 0 && matches!(symmetry_mode, SymmetryMode::TopRowVerticalOrbits) {
+                            row_terms = apply_top_row_symmetry(n, row_terms)?;
+                        }
                         local.extend(row_terms.into_iter().map(|(successor, weight)| {
                             (PackedBoundary::pack(successor, n), weight)
                         }));
@@ -984,12 +1357,16 @@ pub fn peak_rss_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundaryState, CompiledRowOperator, PackedBoundary, RowCounters, SiteTensorB, SiteTensorC,
-        VirtualLegs, contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
-        contract_rows_sitewise, contract_rows_sort_reduce, known_count,
+        BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
+        RowCounters, SiteTensorB, SiteTensorC, VirtualLegs, contract_one_row_compiled,
+        contract_one_row_sitewise, contract_rows, contract_rows_d4_orbit_parallel_sort_reduce,
+        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sparse_parallel_sort_reduce,
+        contract_rows_d4_sparse_sort_reduce, contract_rows_hash_materialization,
+        contract_rows_parallel_sort_reduce, contract_rows_sitewise, contract_rows_sort_reduce,
+        contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce, known_count,
+        top_row_vertical_orbit_weight,
     };
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     fn brute_force_count(n: usize) -> u128 {
         fn place(row: usize, n: usize, queens: &mut Vec<usize>, count: &mut u128) {
@@ -1331,6 +1708,226 @@ mod tests {
             ];
             for state in states {
                 assert_eq!(PackedBoundary::pack(state, n).unpack(n), state, "N={n}");
+            }
+        }
+    }
+
+    #[test]
+    fn all_d4_actions_are_distinct_bijections_and_preserve_solutions() {
+        let n = 8;
+        let sample_solution = [0, 4, 7, 5, 2, 6, 1, 3];
+        let mut action_maps = HashSet::new();
+        for symmetry in D4Symmetry::ALL {
+            let action_map = (0..n)
+                .flat_map(|row| {
+                    (0..n).map(move |column| symmetry.transform_coordinate(n, row, column))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                action_map.iter().copied().collect::<HashSet<_>>().len(),
+                n * n
+            );
+            action_maps.insert(action_map);
+
+            let transformed = sample_solution
+                .iter()
+                .enumerate()
+                .map(|(row, &column)| symmetry.transform_coordinate(n, row, column))
+                .collect::<HashSet<_>>();
+            assert_eq!(transformed.len(), n);
+            for &(row_a, column_a) in &transformed {
+                for &(row_b, column_b) in &transformed {
+                    if (row_a, column_a) != (row_b, column_b) {
+                        assert_ne!(row_a, row_b);
+                        assert_ne!(column_a, column_b);
+                        assert_ne!(row_a.abs_diff(row_b), column_a.abs_diff(column_b));
+                    }
+                }
+            }
+        }
+        assert_eq!(action_maps.len(), 8);
+    }
+
+    #[test]
+    fn d4_constraint_family_permutations_match_square_geometry() {
+        use ConstraintFamily::{Column, DiagDownLeft, DiagDownRight, Row};
+        assert_eq!(
+            D4Symmetry::Rotate90.transform_constraint_family(Row),
+            Column
+        );
+        assert_eq!(
+            D4Symmetry::Rotate90.transform_constraint_family(Column),
+            Row
+        );
+        assert_eq!(
+            D4Symmetry::Rotate90.transform_constraint_family(DiagDownRight),
+            DiagDownLeft
+        );
+        assert_eq!(
+            D4Symmetry::ReflectVertical.transform_constraint_family(DiagDownLeft),
+            DiagDownRight
+        );
+        assert_eq!(
+            D4Symmetry::ReflectMainDiagonal.transform_constraint_family(DiagDownRight),
+            DiagDownRight
+        );
+    }
+
+    #[test]
+    fn every_d4_action_preserves_the_explicit_local_b_and_c_tensors() {
+        let tensor_b = SiteTensorB::sec_vi();
+        let tensor_c = SiteTensorC::sec_vi();
+        for symmetry in D4Symmetry::ALL {
+            for entry in tensor_b.entries() {
+                assert!(
+                    tensor_b.entries().iter().any(|candidate| {
+                        candidate.alpha == entry.alpha
+                            && candidate.value == entry.value
+                            && candidate.legs == symmetry.transform_virtual_legs(entry.legs)
+                    }),
+                    "B is not invariant under {symmetry:?}: {entry:?}"
+                );
+            }
+            for entry in tensor_c.entries() {
+                assert!(
+                    tensor_c.entries().iter().any(|candidate| {
+                        candidate.value == entry.value
+                            && candidate.legs == symmetry.transform_virtual_legs(entry.legs)
+                    }),
+                    "C is not invariant under {symmetry:?}: {entry:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_identity_and_vertical_reflection_stabilize_interior_row_cuts() {
+        for n in 2..=9 {
+            for cut in 1..n {
+                let stabilizer = D4Symmetry::ALL
+                    .into_iter()
+                    .filter(|symmetry| symmetry.stabilizes_top_row_cut(n, cut))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    stabilizer,
+                    vec![D4Symmetry::Identity, D4Symmetry::ReflectVertical],
+                    "N={n}, cut={cut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn top_row_orbit_weights_handle_even_pairs_and_odd_fixed_point() {
+        for n in 1..=12 {
+            let weights = (0..n)
+                .filter_map(|column| {
+                    top_row_vertical_orbit_weight(
+                        n,
+                        BoundaryState {
+                            columns: 1_u64 << column,
+                            diag_dr: 0,
+                            diag_dl: 0,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(weights.len(), n.div_ceil(2));
+            assert_eq!(weights.iter().sum::<u128>(), n as u128);
+            assert_eq!(weights.iter().filter(|&&weight| weight == 1).count(), n % 2);
+        }
+    }
+
+    #[test]
+    fn d4_orbit_slicing_is_exact_and_reduces_support_through_n11() {
+        for n in 0..=11 {
+            let dense = contract_rows_sort_reduce(n).unwrap();
+            let orbit = contract_rows_d4_orbit_sort_reduce(n).unwrap();
+            assert_eq!(orbit.count, dense.count, "count mismatch at N={n}");
+            if n >= 2 {
+                assert!(
+                    orbit.peak_states < dense.peak_states,
+                    "support did not fall at N={n}"
+                );
+                if n >= 4 {
+                    assert!(
+                        orbit.row_operator_matched < dense.row_operator_matched,
+                        "accepted work did not fall at N={n}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_d4_orbit_slicing_matches_serial_through_n10() {
+        for threads in [1, 2, 4] {
+            for n in 0..=10 {
+                let serial = contract_rows_d4_orbit_sort_reduce(n).unwrap();
+                let parallel = contract_rows_d4_orbit_parallel_sort_reduce(n, threads).unwrap();
+                assert_eq!(parallel.count, serial.count, "N={n}, threads={threads}");
+                assert_eq!(
+                    parallel.peak_states, serial.peak_states,
+                    "N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    parallel.row_operator_matched, serial.row_operator_matched,
+                    "N={n}, threads={threads}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_and_d4_ablation_variants_are_exact_through_n10() {
+        for n in 0..=10 {
+            let dense = contract_rows_sort_reduce(n).unwrap();
+            let sparse = contract_rows_sparse_sort_reduce(n).unwrap();
+            let d4 = contract_rows_d4_orbit_sort_reduce(n).unwrap();
+            let d4_sparse = contract_rows_d4_sparse_sort_reduce(n).unwrap();
+            assert_eq!(sparse.count, dense.count, "sparse count at N={n}");
+            assert_eq!(d4.count, dense.count, "D4 count at N={n}");
+            assert_eq!(d4_sparse.count, dense.count, "D4+sparse count at N={n}");
+            assert_eq!(
+                sparse.peak_states, dense.peak_states,
+                "sparse support N={n}"
+            );
+            assert_eq!(d4_sparse.peak_states, d4.peak_states, "D4 support N={n}");
+            assert_eq!(
+                sparse.row_operator_candidates, sparse.row_operator_matched,
+                "sparse iterator work N={n}"
+            );
+            assert_eq!(
+                d4_sparse.row_operator_candidates, d4_sparse.row_operator_matched,
+                "D4+sparse iterator work N={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_sparse_and_d4_interaction_matches_serial_through_n9() {
+        for threads in [1, 2, 4] {
+            for n in 0..=9 {
+                let sparse = contract_rows_sparse_sort_reduce(n).unwrap();
+                let sparse_parallel =
+                    contract_rows_sparse_parallel_sort_reduce(n, threads).unwrap();
+                assert_eq!(sparse_parallel.count, sparse.count, "N={n}, t={threads}");
+                assert_eq!(
+                    sparse_parallel.peak_states, sparse.peak_states,
+                    "N={n}, t={threads}"
+                );
+
+                let d4_sparse = contract_rows_d4_sparse_sort_reduce(n).unwrap();
+                let d4_sparse_parallel =
+                    contract_rows_d4_sparse_parallel_sort_reduce(n, threads).unwrap();
+                assert_eq!(
+                    d4_sparse_parallel.count, d4_sparse.count,
+                    "D4 N={n}, t={threads}"
+                );
+                assert_eq!(
+                    d4_sparse_parallel.peak_states, d4_sparse.peak_states,
+                    "D4 N={n}, t={threads}"
+                );
             }
         }
     }
