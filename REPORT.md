@@ -11,7 +11,8 @@ Sec. VI 定义的局域张量：
 - 对 physical index 求和得到 rank-8 张量 \(C\)，同样恰有 17 个非零元；
 - 每个格点通过查询 \(C\) 的稀疏非零元完成收缩；
 - 行、列和对角线端点分别使用论文的 \(v_0,v_1,v_2\)；
-- 全程使用 checked `u128`，没有浮点、SVD、截断或对称剪枝。
+- 全程使用 checked `u128`，没有浮点、SVD 或截断；E12 起默认入口使用经过逐 orbit
+  验证的首行左右反射 projected tensor slices。
 
 Release benchmark 正确复现了 \(Q(4)\) 到 \(Q(14)\)。在测试机器上：
 
@@ -22,8 +23,9 @@ Release benchmark 正确复现了 \(Q(4)\) 到 \(Q(14)\)。在测试机器上：
   \(Q(14)\) 五次中位 3.085 s，峰值 RSS 444.28 MiB，相对初始 naive 约 8.17x 加速；
 - E10 exact parallel slicing：\(Q(14)\) 在 16/32 线程分别为 0.625/0.605 s，
   但同线程 DFS 分别为 0.00631/0.00489 s，仍慢 99.1x/123.8x；
-- 十个方向均未降低 N=14 的 peak sparse support 5,479,934，因此尚未达到超过 DFS
-  或计算 \(Q(28)\) 的目标。
+- E12 D4 cut-stabilizer orbit contraction 将 N=14 serial 从 2.709 s 降到 1.406 s，
+  peak support 从 5,479,934 降到 2,847,130，RSS 从 443.5 MiB 降到 226.6 MiB；
+- 当前仍未超过 DFS，也尚不能计算 \(Q(28)\)。
 
 另加入了一个严格分离的、传统 DFS bitmask comparator。它不是 PEPS 实现，也不参与上述
 张量收缩路径。native release benchmark 中，DFS 单线程 \(Q(16)\) 的 9 次中位数为
@@ -755,3 +757,59 @@ hash、allocator 或更多线程无法解决主要差距。
 
 更新后的 E11–E15 顺序、D4 stabilizer 处理、OMEinsum 路径候选规则和消融矩阵已记录在
 `nqueens_issue34_autoresearch_plan.md`。
+
+## 18. E11–E12：稀疏迭代与 D4 orbit contraction
+
+### 18.1 E11：C-derived sparse legal-position iterator
+
+E11 从显式 17-entry `C` 的唯一 occupied entry 读取 incoming/outgoing predicate，用 bitset
+只枚举 nonzero local transitions。N=15 的 position checks 从 1,783,273,650 降到
+143,138,637，即 12.46x；count、support、layer weight 和 accepted transitions 与 dense
+compiled operator 完全一致。
+
+但端到端收益没有达到预注册门槛：
+
+| backend | N | dense (s) | sparse (s) | speedup |
+|:---|---:|---:|---:|---:|
+| serial sort-reduce | 13 | 0.459743 | 0.323348 | 1.42x |
+| serial sort-reduce | 14 | 2.742460 | 1.935670 | 1.42x |
+| serial sort-reduce | 15 | 16.906128 | 12.286512 | 1.38x |
+| 16-thread sort-reduce | 15 | 3.725102 | 3.566500 | 1.04x |
+
+结论是 **REJECT as standalone**：检查量下降后，candidate materialization、sorting 和 merge
+占据主导；E11 保留为诊断/消融 backend，不单独作为默认实现。
+
+### 18.2 E12：完整 D4 action 与 cut stabilizer
+
+实现和测试覆盖全部 8 个 D4 坐标作用、四类 constraint channel 的置换、显式 B/C entry
+不变性和每个 interior row cut 的 stabilizer。后者恰为
+`{identity, vertical reflection}`；其余六个元素映射到 bottom-up/column/反向 task，不能
+对同一个 boundary 盲目除以 8。
+
+首行 occupied tensor terms 按左右反射 orbit 取代表：二元素 orbit multiplicity 2，奇数 N
+的 center fixed point multiplicity 1。随后继续收缩同一个 `C` operator和 v0/v1/v2 边界。
+
+| N | dense serial (s) | D4 serial (s) | speedup | dense support | D4 support | dense RSS (MiB) | D4 RSS (MiB) |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 13 | 0.465995 | 0.255967 | 1.82x | 978,362 | 541,745 | 101.7 | 55.3 |
+| 14 | 2.708757 | 1.406227 | 1.93x | 5,479,934 | 2,847,130 | 443.5 | 226.6 |
+| 15 | 17.071132 | 9.578511 | 1.78x | 32,120,057 | 18,178,233 | 2,884.4 | 1,633.2 |
+
+16-thread N=15 从 3.744197 s 降到 2.054081 s，RSS 从 2,168.0 MiB 降到
+1,220.3 MiB。N=13–15 candidate work 下降 42.1–46.4%，三档 runtime 均超过 1.5x
+gate，因此 **KEEP D4-only**。
+
+同 revision 的消融显示 E11 在 D4 后的 serial 边际为 1.41–1.43x、parallel 仅
+1.06–1.08x，仍未达到 E11 自己的 1.5x gate，所以默认 `contract_rows` 选择 D4-only。
+
+与 DFS 的距离仍很大：N=15 D4-only serial 9.578511 s 对 DFS 0.499690 s（慢 19.2x）；
+16-thread 为 2.054081 s 对 0.036802 s（慢 55.8x）。E12 降低 support 常数但没有证明
+support slope 改善；E13 必须以 actual sparse support/accepted work 为准探索 contraction
+path，而不能用 dense FLOP/width 代替。
+
+完整报告和原始数据：
+
+- `experiments/e11_sparse_position_iterator/REPORT.md`
+- `benchmarks/e11_sparse_position_iterator_release.csv`
+- `experiments/e12_d4_orbit_slicing/REPORT.md`
+- `benchmarks/e12_d4_orbit_slicing_release.csv`

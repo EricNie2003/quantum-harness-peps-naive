@@ -752,7 +752,7 @@ enum RowBackend {
 
 /// Exactly contract the rank-8 `C` network row by row.
 pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
-    contract_rows_sort_reduce(n)
+    contract_rows_d4_orbit_sort_reduce(n)
 }
 
 /// Retained exact HashMap materialization backend used as an implementation-

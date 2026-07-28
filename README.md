@@ -9,7 +9,10 @@ Liu--Liao--Wang, *Statistical mechanics of the N-queens problem*.
 - The solver applies sparse entries of `C` site by site, contracts each row,
   and uses the `v0`, `v1`, and `v2` boundary conditions from the paper.
 - Coefficients use checked `u128` integer arithmetic. There is no floating
-  point arithmetic, SVD, truncation, symmetry reduction, or DFS in the solver.
+  point arithmetic, SVD, truncation, or DFS in the solver.
+- The default solver contracts exact first-row orbits of the cut-preserving
+  vertical-reflection subgroup. It handles odd-N fixed points explicitly and
+  never applies a blanket D4 multiplicity.
 
 Run:
 
