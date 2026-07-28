@@ -842,6 +842,21 @@ pub fn contract_rows_d4_compact_sharded_sort_reduce(
     contract_rows_d4_compact_sharded_kernel(n, shards)
 }
 
+#[derive(Clone, Debug)]
+pub struct MacroContractionResult {
+    pub contraction: ContractionResult,
+    pub first_row_transitions: u128,
+    pub second_row_transitions: u128,
+    pub peak_macro_candidates: usize,
+}
+
+pub fn contract_rows_d4_two_row_macro(
+    n: usize,
+    shards: usize,
+) -> Result<MacroContractionResult, String> {
+    contract_rows_d4_two_row_macro_kernel(n, shards)
+}
+
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
 }
@@ -1388,6 +1403,165 @@ fn contract_rows_d4_compact_sharded_kernel(
         row_operator_matched: total_operator_matched,
         peak_rss_bytes: peak_rss_bytes(),
         layers,
+    })
+}
+
+fn contract_rows_d4_two_row_macro_kernel(
+    n: usize,
+    shards: usize,
+) -> Result<MacroContractionResult, String> {
+    if n > 21 {
+        return Err("the compact u64 virtual-boundary backend supports N <= 21".to_owned());
+    }
+    if shards == 0 || !shards.is_power_of_two() || shards > 256 {
+        return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if n == 0 {
+        return Ok(MacroContractionResult {
+            contraction: ContractionResult {
+                n,
+                count: 1,
+                elapsed: Duration::ZERO,
+                peak_states: 1,
+                tensor_entries_examined: 0,
+                tensor_entries_matched: 0,
+                row_operator_candidates: 0,
+                row_operator_matched: 0,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            first_row_transitions: 0,
+            second_row_transitions: 0,
+            peak_macro_candidates: 0,
+        });
+    }
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let initial_key = u64::try_from(PackedBoundary::pack(initial, n).0)
+        .map_err(|_| "initial compact key does not fit u64".to_owned())?;
+    let mut boundary = (0..shards)
+        .map(|_| Vec::<CompactEntry>::new())
+        .collect::<Vec<_>>();
+    boundary[shard_index(u128::from(initial_key), n, shards, ShardMode::Prefix)]
+        .push(CompactEntry::new(initial_key, 1));
+    let mut candidates = (0..shards)
+        .map(|_| Vec::<CompactEntry>::new())
+        .collect::<Vec<_>>();
+    let mut peak_states = 1_usize;
+    let mut peak_macro_candidates = 0_usize;
+    let mut first_row_transitions = 0_u128;
+    let mut second_row_transitions = 0_u128;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n.div_ceil(2));
+    let total_start = Instant::now();
+    let mut row = 0_usize;
+
+    while row < n {
+        let layer_start = Instant::now();
+        let input_states = boundary.iter().map(Vec::len).sum();
+        let mut counters = RowCounters::default();
+        for shard in &mut candidates {
+            shard.clear();
+        }
+        let has_second_row = row + 1 < n;
+        for parent_shard in &boundary {
+            for &parent in parent_shard {
+                let mut first = vec![Vec::<CompactEntry>::new()];
+                let first_count = append_compact_sparse_sharded_d4(
+                    n,
+                    &operator,
+                    PackedBoundary(u128::from(parent.key)).unpack(n),
+                    parent.weight(),
+                    row == 0,
+                    &mut counters,
+                    &mut first,
+                )?;
+                first_row_transitions += first_count as u128;
+                if has_second_row {
+                    for intermediate in first.pop().expect("one temporary shard") {
+                        let second_count = append_compact_sparse_sharded_d4(
+                            n,
+                            &operator,
+                            PackedBoundary(u128::from(intermediate.key)).unpack(n),
+                            intermediate.weight(),
+                            false,
+                            &mut counters,
+                            &mut candidates,
+                        )?;
+                        second_row_transitions += second_count as u128;
+                    }
+                } else {
+                    for successor in first.pop().expect("one temporary shard") {
+                        let selected_shard =
+                            shard_index(u128::from(successor.key), n, shards, ShardMode::Prefix);
+                        candidates[selected_shard].push(successor);
+                    }
+                }
+            }
+        }
+        let raw_candidates = candidates.iter().map(Vec::len).sum();
+        peak_macro_candidates = peak_macro_candidates.max(raw_candidates);
+        candidates
+            .par_iter_mut()
+            .try_for_each(|shard| -> Result<(), String> {
+                shard.sort_unstable_by_key(|entry| entry.key);
+                reduce_sorted_compact(shard, row)
+            })?;
+        let output_states = candidates.iter().map(Vec::len).sum();
+        let output_weight = candidates.iter().flatten().try_fold(0_u128, |sum, entry| {
+            sum.checked_add(entry.weight())
+                .ok_or_else(|| format!("macro coefficient sum overflow after row {}", row + 1))
+        })?;
+        peak_states = peak_states.max(output_states);
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        std::mem::swap(&mut boundary, &mut candidates);
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms: raw_candidates as u128,
+            output_states,
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+        row += if has_second_row { 2 } else { 1 };
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .flatten()
+        .filter(|entry| PackedBoundary(u128::from(entry.key)).columns(n) == board_mask)
+        .try_fold(0_u128, |sum, entry| {
+            sum.checked_add(entry.weight())
+                .ok_or_else(|| "final macro coefficient sum overflow".to_owned())
+        })?;
+    Ok(MacroContractionResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed: total_start.elapsed(),
+            peak_states,
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_operator_candidates,
+            row_operator_matched: total_operator_matched,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers,
+        },
+        first_row_transitions,
+        second_row_transitions,
+        peak_macro_candidates,
     })
 }
 
@@ -2362,7 +2536,7 @@ mod e24_kernel_tests {
         contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
         contract_rows_d4_compact_sharded_sort_reduce, contract_rows_d4_deferred_sparse_sort_reduce,
         contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sharded_sparse_sort_reduce,
-        contract_rows_d4_sparse_sort_reduce, sort_packed_radix,
+        contract_rows_d4_sparse_sort_reduce, contract_rows_d4_two_row_macro, sort_packed_radix,
     };
 
     #[test]
@@ -2504,6 +2678,15 @@ mod e24_kernel_tests {
                 candidate.row_operator_matched, baseline.row_operator_matched,
                 "N={n}"
             );
+        }
+    }
+
+    #[test]
+    fn two_row_macro_matches_single_row_compact_contraction() {
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_compact_sharded_sort_reduce(n, 8).unwrap();
+            let candidate = contract_rows_d4_two_row_macro(n, 8).unwrap();
+            assert_eq!(candidate.contraction.count, baseline.count, "N={n}");
         }
     }
 }
