@@ -22,5 +22,13 @@ cargo run --release -- bench 11 --min 4 --repeats 3 --csv
 Both commands report peak resident memory on Windows using
 `GetProcessMemoryInfo`.
 
+An independent optimized DFS bitmask comparator is also available. It is a
+classic search baseline, not part of the PEPS implementation:
+
+```powershell
+cargo run --release --bin dfs_bitmask -- solve 16 --threads 1
+cargo run --release --bin dfs_bitmask -- bench 17 --min 8 --threads 16 --repeats 9 --warmup 2 --csv
+```
+
 See [`REPORT.md`](REPORT.md) for the construction, boundary convention,
 correctness checks, and measured benchmarks.

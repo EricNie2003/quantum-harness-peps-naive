@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Exact naive row-by-row sparse contraction of the N-Queens PEPS"
 license = "MIT"
+default-run = "nqueens-peps-naive"
 
 [profile.release]
 codegen-units = 1
 lto = "thin"
-
