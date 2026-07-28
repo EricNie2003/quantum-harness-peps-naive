@@ -1,0 +1,4 @@
+backend,threads,N,count,known_count,verified,median_elapsed_s,min_elapsed_s,peak_rss_bytes,peak_support,tensor_entries_examined,tensor_entries_matched,row_operator_candidates,row_operator_matched,d4_group_size,cut_stabilizer_size,top_row_orbit_representatives,top_row_fixed_points,repeats
+d4_orbit_serial_sort_reduce,1,7,40,40,true,0.000047500,0.000044600,5443584,86,17,17,1925,309,8,2,4,1,5
+d4_orbit_serial_sort_reduce,1,8,92,92,true,0.000091700,0.000072900,5505024,272,17,17,7272,1005,8,2,4,0,5
+d4_orbit_serial_sort_reduce,1,9,352,352,true,0.000430000,0.000408100,5644288,1210,17,17,37260,4540,8,2,5,1,5
