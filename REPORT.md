@@ -18,8 +18,12 @@ Release benchmark 正确复现了 \(Q(4)\) 到 \(Q(14)\)。在测试机器上：
 - \(Q(8)=92\)：三次中位 0.981 ms，峰值 RSS 5.32 MiB；
 - \(Q(12)=14\,200\)：三次中位 0.575 s，峰值 RSS 37.30 MiB；
 - 初始 naive \(Q(14)=365\,596\)：三次中位 25.192 s，峰值 RSS 986.34 MiB；
-- 完成 E1、E3、E5a 后的当前 baseline：三次中位 11.090 s，峰值 RSS
-  666.17 MiB，累计约 2.27x 加速并降低约 32.5% RSS。
+- 完成 E1–E10 后的串行 production baseline（E9 exact sort-reduce）：
+  \(Q(14)\) 五次中位 3.085 s，峰值 RSS 444.28 MiB，相对初始 naive 约 8.17x 加速；
+- E10 exact parallel slicing：\(Q(14)\) 在 16/32 线程分别为 0.625/0.605 s，
+  但同线程 DFS 分别为 0.00631/0.00489 s，仍慢 99.1x/123.8x；
+- 十个方向均未降低 N=14 的 peak sparse support 5,479,934，因此尚未达到超过 DFS
+  或计算 \(Q(28)\) 的目标。
 
 另加入了一个严格分离的、传统 DFS bitmask comparator。它不是 PEPS 实现，也不参与上述
 张量收缩路径。native release benchmark 中，DFS 单线程 \(Q(16)\) 的 9 次中位数为
@@ -163,7 +167,7 @@ incoming virtual bits 生成 16 个索引桶。收缩时查找对应桶，并把
 cargo test --release
 ```
 
-加入 DFS comparator 后，实测 13 个测试全部通过；其中 DFS 额外对
+完成 E10 后，实测 17 个 release tests 全部通过；其中 DFS 额外对
 \(Q(0)\ldots Q(16)\) 做已知值核验，并验证 1 线程和 4 线程结果一致、不同任务拆分的
 processed-state 指标一致。
 
@@ -227,9 +231,9 @@ cargo run --release -- bench 14 --min 14 --repeats 3 --csv
 
 原始数据位于 `benchmarks/naive_release.csv`。
 
-### 7.1 当前 promoted baseline
+### 7.1 第一轮 promoted baseline（历史）
 
-当前 HEAD 包含三个通过 gate 的改动：
+第一轮停止点包含三个通过 gate 的改动：
 
 - E1：由显式 \(C\) 自动生成 incoming-signature index；
 - E3：三个开放 virtual masks 打包为单个 `u128` hash key；
@@ -240,7 +244,7 @@ cargo run --release -- bench 14 --min 14 --repeats 3 --csv
 | 初始 naive | 25.1915 | 986.34 | 5,479,934 | 冻结基线 |
 | E1 后 | 19.3084 | 986.67 | 5,479,934 | KEEP |
 | E3 后 | 17.6112 | 666.17 | 5,479,934 | KEEP |
-| E5a 后（当前） | 11.0897 | 666.17 | 5,479,934 | KEEP |
+| E5a 后（第一轮停止点） | 11.0897 | 666.17 | 5,479,934 | KEEP |
 
 各阶段的独立原始数据与报告位于 `experiments/e1_c_input_index/`、
 `experiments/e3_packed_u128/` 和 `experiments/e5a_partial_buffer_reuse/`。
@@ -282,23 +286,25 @@ cargo run --release -- bench 14 --min 14 --repeats 3 --csv
 cargo test --release
 cargo run --release -- solve 8 --layers
 cargo run --release -- bench 14 --min 4 --repeats 3 --csv
+cargo run --release --bin sort_reduce -- sort-reduce 12 14 5
+cargo run --release --bin parallel_slicing -- 16 12 14 5
 ```
 
 ## 10. 当前范围
 
-这是严格 Sec. VI PEPS baseline，已经完成第一轮低风险常数优化，但尚未达到 Issue #34
-的完整验收：
+这是严格 Sec. VI PEPS baseline，已经完成 E1–E10 两组研究方向，但尚未达到 Issue #34
+的最终性能目标：
 
 - 当前只 benchmark 到 \(N=14\)；
 - 未复现 \(Q(16),Q(20),Q(27)\)；
 - 未加入有限域/CRT；
-- 未比较其他 contraction ordering；
-- 未实现 checkpoint、切片或并行。
+- 已实现 exact row-operator compilation、sort-reduce、并行 slicing，并用通用
+  direct-TN oracle 比较 row/snake/diagonal ordering；
+- 未实现 checkpoint、外存 contraction 或足以降低 support 的结构 quotient；
+- 未超过独立 DFS bitmask comparator。
 
-按当前停止点，完整 row-operator fusion（E5b）及 E6 之后的方向尚未尝试。
-
-下一步优化必须继续从显式 \(C\) 机械推导，并通过本版本逐项核验，不能退化为把经典 DFS
-重新标记成 PEPS。
+下一步只能按第 15 节修订计划从显式 \(C\) 机械推导，并通过逐项核验，不能退化为把经典
+DFS 重新标记成 PEPS。
 
 ## 11. 优化 DFS bitmask comparator baseline
 
@@ -399,3 +405,206 @@ cargo build --release --bin dfs_bitmask
 4. 在 serial gap 显著缩小前，不用并行度掩盖算法差距。
 
 第六方向开始前的所有 review 和修订要求均已记录。
+
+## 13. E6–E10 实验与 benchmark 汇总
+
+第二组五个方向均在独立 Git worktree/branch 中完成。E7、E8 被 gate 拒绝，未把实验代码
+合入 production baseline；E6、E9、E10 通过 correctness 和性能 gate 后合入。
+
+### 13.1 十方向总表
+
+| 方向 | 核心假设 | 关键 benchmark / 观测 | 决策 |
+|:---|:---|:---|:---:|
+| E1 | 从显式 \(C\) 机械生成 input-signature index | N=14 25.1915→19.3084 s；局域扫描减少 93.8% | KEEP |
+| E2 | 按 input support 预留 `HashMap` | N=13 仅约 3.4% 改善，RSS 无稳定下降 | REJECT |
+| E3 | 三组 virtual masks 打包成 `u128` | N=14 RSS 986.67→666.17 MiB，时间 19.3084→17.6112 s | KEEP |
+| E4a | 替换确定性 hasher | N=13 中位数约慢 2.1%，RSS 不变 | REJECT |
+| E5a | 复用逐格点 partial-row buffers | N=14 17.6112→11.0897 s，support 不变 | KEEP |
+| E6 | 从 17-entry \(C\) 编译 exact row operator | N=14 11.0897→5.8532 s；286,010,088 row candidates | KEEP |
+| E7 | weighted ADD/ZDD 压缩 boundary function | N=11 最佳 ZDD 48,302 nodes / 39,307 states=1.23；约慢 15x | REJECT |
+| E8 | snake/diagonal direct-TN ordering 降 support | N=6 row/snake=72，diagonal=125；波前 support 高 73.6% | REJECT |
+| E9 | exact sort-reduce 替代 hash materialization | N=14 6.0380→3.0850 s；RSS 666.17→444.28 MiB | KEEP |
+| E10 | boundary slicing + parallel expansion/sort | N=14：1t 3.1559，16t 0.6249，32t 0.6046 s | KEEP |
+
+十个方向共 6 个 KEEP、4 个 REJECT。所有 KEEP 都保持同一显式 \(B/C\)、边界向量、
+exact coefficient 和最终 count；DFS 始终是独立 comparator。
+
+### 13.2 E6：由显式 C 编译 exact row operator
+
+`CompiledRowOperator::compile` 遍历实际 `SiteTensorC.entries()`，只有在确认 16 个
+identity pass-through、唯一四通道 \(0\to1\) occupied entry 且所有 coefficient 为 1 时
+才成功。N≤8 对每个可达 parent boundary 与逐格点 contraction 的完整输出 map 比较，
+N≤10 完整计数比较。
+
+| N | sitewise E5a (s) | compiled E6 (s) | speedup | RSS (MiB) | peak support |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 0.008197 | 0.004330 | 1.89x | 6.73 | 8,838 |
+| 11 | 0.043204 | 0.020335 | 2.12x | 11.36 | 39,307 |
+| 12 | 0.245592 | 0.112681 | 2.18x | 26.80 | 188,100 |
+| 13 | 1.741573 | 0.823089 | 2.12x | 138.24 | 978,362 |
+| 14 | 11.089654 | 5.853217 | 1.89x | 666.16 | 5,479,934 |
+
+N=14 从逐格点 matched C steps 464,957,208 降为 286,010,088 row candidates，其中
+23,859,616 合法。E6 证明局域 automaton 开销很大，但 support/materialization 仍主导。
+原始数据和自包含报告位于 `experiments/e6_compiled_row_operator/`。
+镜像原始 CSV：`benchmarks/e6_compiled_row_operator_release.csv`。
+
+### 13.3 E7：exact weighted ADD/ZDD
+
+E7 在 E6 完整 boundary coefficient map 上构造 exact weighted ADD/ZDD，terminal 保存
+`u128`，分别比较 grouped/interleaved 变量顺序。
+
+| N | explicit peak support | best diagram | best nodes | nodes/support | profile total (s) | E6 contraction (s) |
+|---:|---:|:---|---:|---:|---:|---:|
+| 10 | 8,838 | interleaved ZDD | 13,103 | 1.48 | 0.0664 | 0.00433 |
+| 11 | 39,307 | interleaved ZDD | 48,302 | 1.23 | 0.3073 | 0.02033 |
+
+节点数、时间和 RSS 均未过 gate，故在 N=11 停止。失败原因不是 coefficient 种类过多，
+而是固定变量顺序下 boundary bit-pattern 的子函数共享不足。实验保存在
+`codex/exp-boundary-diagram` 分支。
+主分支镜像原始 CSV：`benchmarks/e7_boundary_diagram_release.csv`。
+
+### 13.4 E8：direct-TN ordering oracle
+
+E8 每格直接从 17-entry `C` 构造 factor，按通用 sparse join/project 比较三种 site ordering；
+使用 `BigUint`，严格施加 \(v_0,v_1,v_2\)。
+
+| N | ordering | count | peak support | frontier vars | candidate pairs | matched pairs |
+|---:|:---|---:|---:|---:|---:|---:|
+| 5 | row-major | 10 | 23 | 14 | 3,096 | 289 |
+| 5 | snake | 10 | 23 | 14 | 3,096 | 289 |
+| 5 | diagonal | 10 | 38 | 16 | 4,355 | 422 |
+| 6 | row-major | 4 | 72 | 17 | 13,122 | 1,088 |
+| 6 | snake | 4 | 72 | 17 | 13,122 | 1,088 |
+| 6 | diagonal | 4 | 125 | 20 | 20,691 | 1,782 |
+
+snake 与 row-major 完全相同，diagonal-wavefront 同时切穿更多四族 constraint lines，使
+support 在 N=5/6 高 65.2%/73.6%。实验保存在 `codex/exp-ordering-oracle` 分支。
+主分支镜像原始 CSV：`benchmarks/e8_ordering_oracle_release.csv`。
+
+### 13.5 E9：exact sort-reduce materialization
+
+E9 不改变 candidate 生成，只把层输出改为连续 vector，按完整 packed virtual-boundary key
+排序并用 checked `u128` 原地 reduce。测试在 N=0–10 逐层核对 hash/sort 的 count、support、
+completed terms、output weights 和 operator work。
+
+| N | hash median (s) | sort median (s) | speedup | hash RSS (MiB) | sort RSS (MiB) | support |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10 | 0.004926 | 0.003407 | 1.45x | 6.68 | 6.32 | 8,838 |
+| 11 | 0.021051 | 0.016333 | 1.29x | 11.37 | 9.72 | 39,307 |
+| 12 | 0.113696 | 0.081879 | 1.39x | 26.82 | 21.02 | 188,100 |
+| 13 | 0.868104 | 0.457664 | 1.90x | 138.23 | 102.48 | 978,362 |
+| 14 | 6.038000 | 3.085015 | 1.96x | 666.17 | 444.28 | 5,479,934 |
+
+原计划因 merge ratio 低而降低了 sort-reduce 优先级，但实测推翻了该成本模型：主要收益来自
+连续写入、紧凑 entry 和避免近乎唯一 key 的 HashMap probing，而不是 state merge。
+原始数据和报告位于 `experiments/e9_sort_reduce/`。
+镜像原始 CSV：`benchmarks/e9_sort_reduce_release.csv`。
+
+### 13.6 E10：exact slicing 与 parallel sort
+
+E10 把 unique parent boundary vector 切为约 `4*threads` slices；每个 worker 调用同一个
+compiled-C row operator，合并 candidate 后 parallel sort，最后 checked-add reduce。
+threads=1/2/4、N=0–10 的逐层等价测试通过。
+
+| N | threads | median (s) | min (s) | speedup | RSS (MiB) | support |
+|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 1 | 0.090255 | 0.088089 | 1.00x | 20.71 | 188,100 |
+| 12 | 8 | 0.027684 | 0.026098 | 3.26x | 27.34 | 188,100 |
+| 12 | 16 | 0.026349 | 0.024647 | 3.43x | 29.93 | 188,100 |
+| 12 | 32 | 0.026530 | 0.025790 | 3.40x | 32.09 | 188,100 |
+| 13 | 1 | 0.468509 | 0.463875 | 1.00x | 102.17 | 978,362 |
+| 13 | 8 | 0.127353 | 0.125342 | 3.68x | 82.40 | 978,362 |
+| 13 | 16 | 0.114947 | 0.111997 | 4.08x | 94.01 | 978,362 |
+| 13 | 32 | 0.116107 | 0.113085 | 4.04x | 101.70 | 978,362 |
+| 14 | 1 | 3.155874 | 3.009632 | 1.00x | 444.36 | 5,479,934 |
+| 14 | 8 | 0.717977 | 0.677335 | 4.40x | 386.89 | 5,479,934 |
+| 14 | 16 | 0.624911 | 0.597097 | 5.05x | 388.78 | 5,479,934 |
+| 14 | 32 | 0.604584 | 0.574414 | 5.22x | 421.90 | 5,479,934 |
+
+同 revision、顺序无竞争的 DFS N=14 comparator 为 16t 0.006306 s、32t 0.004885 s；
+PEPS 分别慢 99.1x、123.8x。32t 相对 16t 仅再快 3.4%，表明 memory traffic、candidate
+拼接及串行 reduce 已饱和。原始数据和报告位于 `experiments/e10_parallel_slicing/`。
+镜像原始 CSV：`benchmarks/e10_parallel_slicing_release.csv` 和
+`benchmarks/e10_dfs_comparator_release.csv`。
+
+## 14. 前十方向强制研究复盘
+
+### 14.1 总体进展
+
+保持同一个 N=14 peak support 的情况下，性能演化为：
+
+| 阶段 | threads | N=14 median (s) | RSS (MiB) | support | 相对初始 naive |
+|:---|---:|---:|---:|---:|---:|
+| initial explicit-C naive | 1 | 25.1915 | 986.34 | 5,479,934 | 1.00x |
+| E1 indexed C | 1 | 19.3084 | 986.67 | 5,479,934 | 1.30x |
+| E3 packed boundary | 1 | 17.6112 | 666.17 | 5,479,934 | 1.43x |
+| E5a buffer reuse | 1 | 11.0897 | 666.17 | 5,479,934 | 2.27x |
+| E6 compiled row operator | 1 | 5.8532 | 666.16 | 5,479,934 | 4.30x |
+| E9 exact sort-reduce | 1 | 3.0850 | 444.28 | 5,479,934 | 8.17x |
+| E10 parallel slicing | 16 | 0.6249 | 388.78 | 5,479,934 | 40.31x |
+| E10 parallel slicing | 32 | 0.6046 | 421.90 | 5,479,934 | 41.67x |
+
+串行实现累计快约 8.17x，并行 wall time 累计快约 41.7x；但没有一个方向减少 support。
+因此过去十轮成功的是常数、布局和吞吐，不是渐近复杂度。
+
+### 14.2 各类机制为何成功或失败
+
+- **局域工作成功下降：** E1 和 E6 分别消除 17-entry 线性扫描及逐格 horizontal automaton，
+  说明机械 partial evaluation 是合规且高收益的。
+- **bytes/state 成功下降：** E3 的单个 `u128` key 和 E9 的连续 vector 减少容器元数据、
+  probing 与 allocator 压力；N=14 RSS 从约 986 MiB 降至 444 MiB。
+- **调度成功但已饱和：** E10 对大层获得 5.22x，但 16→32 threads 只有 3.4%，符合
+  memory-bound/materialization-bound 特征。
+- **容器微调失败：** E2 reserve 和 E4a hasher 不改变 entry 数或访问局部性，收益被扩容
+  时机、hash quality/代码生成和 memory traffic 淹没。
+- **普通 symbolic sharing 失败：** E7 的 fixed-order ADD/ZDD node 数高于 explicit support，
+  表明当前 bit ordering 下几乎没有足够子函数共享。
+- **朴素二维 ordering 失败：** E8 diagonal wavefront 增加四族 constraint lines 的同时
+  cutwidth；只看几何“波前”而不计算活跃约束线是错误成本模型。
+- **原 merge-ratio 模型被推翻：** E9 在 merge ratio 低时仍接近 2x，说明 sort-reduce 的
+  主要价值是顺序内存和紧凑表示，而不是重复 key 的数量。
+
+### 14.3 与原假设和目标的比较
+
+第一轮复盘正确预测：局域算术、HashMap materialization 和 support 是三类不同瓶颈；E6/E9
+确实依次解决前两类的相当部分。它低估了 sort-reduce 的 locality 收益，也高估了普通
+decision diagram 和朴素 wavefront 的结构潜力。
+
+最终目标仍未达到：
+
+- best serial PEPS N=14 仍比 1-thread DFS 约慢 43.8x；
+- best 16/32-thread PEPS 比同线程 DFS 慢 99.1x/123.8x；
+- N=13→14 support 从 978,362 增至 5,479,934，约 5.60x；
+- 当前没有可信路径外推至 \(Q(28)\)。即使常数再降一个数量级，support 的指数增长仍会先
+  耗尽内存。
+
+最大 verified PEPS 仍是 N=14；精确 bottleneck 是 5,479,934 个物化 boundary states、
+286,010,088 row candidates，以及随 N 约 5–6x/step 增长的 support/work。
+
+## 15. 十轮后的修订研究计划
+
+本复盘推翻“继续做通用容器/线程微调即可追上 DFS”的计划。下一阶段的主假设改为：
+
+> 必须在不破坏显式 Sec. VI \(C\) 和 exact boundary contraction 的前提下，找到可证明的
+> future-equivalence quotient 或显著更低的四族 constraint-line cutwidth；否则不能靠
+> 常数优化跨越当前 40–120x 的 DFS gap。
+
+按优先级排列的后续方向：
+
+1. **Geometry-aware cutwidth search oracle。** 在 E8 direct-TN oracle 上按四族活跃约束线数
+   搜索/评估 ordering；必须同时降低 actual sparse support，而不只降低 dense proxy。
+   kill：两个连续可测 N 未降低 support 25%。
+2. **Future-signature quotient。** 从 compiled-C transfer 自动构造“对所有剩余行具有相同
+   行为”的 exact 等价类，并在小 N 穷举证明；不是重复 fixed-order BDD。
+   kill：N=10、11 canonical classes 不低于 explicit states 的 70%。
+3. **分层/动态变量顺序 decision diagram。** 只有在 quotient 或 geometry 分析给出共享
+   结构后才重访；kill：节点数或 apply cost 任一连续两档不优于 E9 explicit vector。
+4. **CRT/finite-field backend。** 用于 coefficient 超过 `u128` 前的 exactness 和 SIMD/GPU
+   准备，不把它描述为 support 优化；必须以多个 primes 重建并交叉验证小 N。
+5. **外存/分布式 sort 与 checkpoint。** 仅在结构方向已降低增长率、资源投影允许更大 N
+   时启动；否则只会把不可行的指数 materialization 推迟一两个 N。
+
+在任何新方向开始前记录 hypothesis、branch/worktree、correctness gate、keep/kill 和资源
+上限。下一组五方向完成前不得绕过下一次 review gate。当前按用户要求在 E10 与本复盘后
+停止，不启动 E11。

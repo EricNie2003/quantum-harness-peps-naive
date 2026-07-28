@@ -2364,3 +2364,23 @@ notes:
 ```text
 OFFICIAL_ACCEPTANCE_READY
 ```
+
+---
+
+## 第二次五方向 gate：E6–E10 已完成
+
+E6–E10 已全部在独立 worktree/branch 中执行，第二次强制复盘也已完成。完整假设、commit、
+benchmark 表、RSS/support/work 指标、KEEP/REJECT 原因和修订计划统一记录在
+`REPORT.md` 第 13–15 节；机器可读数据镜像在 `benchmarks/e6_*` 至 `benchmarks/e10_*`。
+
+执行结论：
+
+- E6 compiled row operator：KEEP；
+- E7 exact weighted ADD/ZDD：REJECT；
+- E8 generic direct-TN ordering：REJECT；
+- E9 exact sort-reduce：KEEP，并成为默认串行 backend；
+- E10 exact parallel slicing：KEEP，16 threads 为推荐吞吐配置。
+
+十轮后仍没有方向降低 N=14 peak support 5,479,934，也没有超过同线程 DFS。下一阶段不再
+把 hasher、reserve 或增加线程数作为主方向；优先验证 geometry-aware cutwidth 和可证明的
+future-equivalence quotient。开始 E11 前必须沿用 `REPORT.md` 第 15 节的 keep/kill gates。

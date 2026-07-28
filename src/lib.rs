@@ -473,6 +473,12 @@ enum RowBackend {
 
 /// Exactly contract the rank-8 `C` network row by row.
 pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_sort_reduce(n)
+}
+
+/// Retained exact HashMap materialization backend used as an implementation-
+/// independent layer-materialization reference for sort-reduce tests.
+pub fn contract_rows_hash_materialization(n: usize) -> Result<ContractionResult, String> {
     contract_rows_with_backend(n, RowBackend::Compiled)
 }
 
@@ -980,8 +986,8 @@ mod tests {
     use super::{
         BoundaryState, CompiledRowOperator, PackedBoundary, RowCounters, SiteTensorB, SiteTensorC,
         VirtualLegs, contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_parallel_sort_reduce, contract_rows_sitewise, contract_rows_sort_reduce,
-        known_count,
+        contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
+        contract_rows_sitewise, contract_rows_sort_reduce, known_count,
     };
     use std::collections::HashMap;
 
@@ -1182,7 +1188,7 @@ mod tests {
     #[test]
     fn sort_reduce_matches_hash_materialization_through_n10() {
         for n in 0..=10 {
-            let hash = contract_rows(n).unwrap();
+            let hash = contract_rows_hash_materialization(n).unwrap();
             let sorted = contract_rows_sort_reduce(n).unwrap();
             assert_eq!(sorted.count, hash.count, "count mismatch at N={n}");
             assert_eq!(

@@ -1,0 +1,7 @@
+N,ordering,count,verified,elapsed_s,peak_rss_bytes,peak_support,peak_frontier_variables,candidate_pairs,matched_pairs
+5,row_major,10,true,0.000041800,5390336,23,14,3096,289
+5,snake,10,true,0.000036400,5406720,23,14,3096,289
+5,diagonal_wavefront,10,true,0.000048600,5410816,38,16,4355,422
+6,row_major,4,true,0.000110800,5414912,72,17,13122,1088
+6,snake,4,true,0.000099800,5447680,72,17,13122,1088
+6,diagonal_wavefront,4,true,0.000128900,5447680,125,20,20691,1782

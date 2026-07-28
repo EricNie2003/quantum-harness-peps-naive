@@ -1,5 +1,5 @@
 use nqueens_peps_naive::{
-    ContractionResult, contract_rows, contract_rows_sort_reduce, known_count,
+    ContractionResult, contract_rows_hash_materialization, contract_rows_sort_reduce, known_count,
 };
 use std::env;
 use std::process::ExitCode;
@@ -29,7 +29,7 @@ impl Backend {
 
     fn run(self, n: usize) -> Result<ContractionResult, String> {
         match self {
-            Self::Hash => contract_rows(n),
+            Self::Hash => contract_rows_hash_materialization(n),
             Self::SortReduce => contract_rows_sort_reduce(n),
         }
     }
