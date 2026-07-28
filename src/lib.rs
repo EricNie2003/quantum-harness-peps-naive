@@ -790,6 +790,546 @@ pub fn contract_rows_d4_sparse_sort_reduce(n: usize) -> Result<ContractionResult
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum D4KernelVariant {
+    Arena,
+    ArenaBatched,
+    ArenaBatchedSparse,
+    ArenaBatchedSparseParallelSort,
+    ArenaBatchedRadix,
+}
+
+pub fn contract_rows_d4_arena_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_d4_optimized_kernel(n, D4KernelVariant::Arena)
+}
+
+pub fn contract_rows_d4_batched_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatched)
+}
+
+pub fn contract_rows_d4_batched_sparse_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedSparse)
+}
+
+pub fn contract_rows_d4_deferred_sparse_sort_reduce(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_d4_deferred_sparse_kernel(n)
+}
+
+pub fn contract_rows_d4_batched_sparse_parallel_sort(
+    n: usize,
+) -> Result<ContractionResult, String> {
+    contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedSparseParallelSort)
+}
+
+pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
+    contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
+}
+
+fn append_compiled_dense_d4(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    top_row: bool,
+    counters: &mut RowCounters,
+    output: &mut Vec<(PackedBoundary, u128)>,
+) -> Result<usize, String> {
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    let board_mask = (1_u64 << n) - 1;
+    let start_len = output.len();
+    for column in 0..n {
+        counters.operator_candidates += 1;
+        if bit(parent.columns, column) != legs.column_in
+            || bit(parent.diag_dr, column) != legs.diag_dr_in
+            || bit(parent.diag_dl, column) != legs.diag_dl_in
+        {
+            continue;
+        }
+        counters.operator_matched += 1;
+        let columns_out = replace_bit(parent.columns, column, legs.column_out);
+        let diag_dr_at_sites = replace_bit(parent.diag_dr, column, legs.diag_dr_out);
+        let diag_dl_at_sites = replace_bit(parent.diag_dl, column, legs.diag_dl_out);
+        let successor = BoundaryState {
+            columns: columns_out,
+            diag_dr: (diag_dr_at_sites << 1) & board_mask,
+            diag_dl: diag_dl_at_sites >> 1,
+        };
+        let mut weight = parent_weight
+            .checked_mul(occupied.value)
+            .ok_or_else(|| "coefficient overflow in batched row operator".to_owned())?;
+        if top_row {
+            let Some(multiplicity) = top_row_vertical_orbit_weight(n, successor) else {
+                continue;
+            };
+            weight = weight
+                .checked_mul(multiplicity)
+                .ok_or_else(|| "coefficient overflow in batched D4 weighting".to_owned())?;
+        }
+        output.push((PackedBoundary::pack(successor, n), weight));
+    }
+    Ok(output.len() - start_len)
+}
+
+fn append_compiled_sparse_d4(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    top_row: bool,
+    counters: &mut RowCounters,
+    output: &mut Vec<(PackedBoundary, u128)>,
+) -> Result<usize, String> {
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    if legs.row_in != 0 {
+        return Err(
+            "sparse batched iterator requires occupied row_in to match the left v0 boundary"
+                .to_owned(),
+        );
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let matching_bits = |mask: u64, required: u8| -> Result<u64, String> {
+        match required {
+            0 => Ok((!mask) & board_mask),
+            1 => Ok(mask & board_mask),
+            _ => Err("compiled C entry contains a non-binary incoming signal".to_owned()),
+        }
+    };
+    let mut positions = matching_bits(parent.columns, legs.column_in)?
+        & matching_bits(parent.diag_dr, legs.diag_dr_in)?
+        & matching_bits(parent.diag_dl, legs.diag_dl_in)?;
+    let base_weight = parent_weight
+        .checked_mul(occupied.value)
+        .ok_or_else(|| "coefficient overflow in sparse batched row operator".to_owned())?;
+    let start_len = output.len();
+
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        let column = selected.trailing_zeros() as usize;
+        positions &= positions - 1;
+        counters.operator_candidates += 1;
+        counters.operator_matched += 1;
+        let columns_out = replace_bit(parent.columns, column, legs.column_out);
+        let diag_dr_at_sites = replace_bit(parent.diag_dr, column, legs.diag_dr_out);
+        let diag_dl_at_sites = replace_bit(parent.diag_dl, column, legs.diag_dl_out);
+        let successor = BoundaryState {
+            columns: columns_out,
+            diag_dr: (diag_dr_at_sites << 1) & board_mask,
+            diag_dl: diag_dl_at_sites >> 1,
+        };
+        let mut weight = base_weight;
+        if top_row {
+            let Some(multiplicity) = top_row_vertical_orbit_weight(n, successor) else {
+                continue;
+            };
+            weight = weight
+                .checked_mul(multiplicity)
+                .ok_or_else(|| "coefficient overflow in sparse batched D4 weighting".to_owned())?;
+        }
+        output.push((PackedBoundary::pack(successor, n), weight));
+    }
+    Ok(output.len() - start_len)
+}
+
+#[derive(Clone, Copy)]
+struct DeferredCandidate {
+    state: u64,
+    parent_index: u32,
+    multiplicity: u8,
+}
+
+fn append_deferred_sparse_d4(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_index: u32,
+    top_row: bool,
+    counters: &mut RowCounters,
+    output: &mut Vec<DeferredCandidate>,
+) -> Result<usize, String> {
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    if legs.row_in != 0 || occupied.value != 1 {
+        return Err(
+            "deferred sparse kernel requires the unit occupied entry derived from Sec. VI C"
+                .to_owned(),
+        );
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let matching_bits = |mask: u64, required: u8| -> Result<u64, String> {
+        match required {
+            0 => Ok((!mask) & board_mask),
+            1 => Ok(mask & board_mask),
+            _ => Err("compiled C entry contains a non-binary incoming signal".to_owned()),
+        }
+    };
+    let mut positions = matching_bits(parent.columns, legs.column_in)?
+        & matching_bits(parent.diag_dr, legs.diag_dr_in)?
+        & matching_bits(parent.diag_dl, legs.diag_dl_in)?;
+    let start_len = output.len();
+
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        let column = selected.trailing_zeros() as usize;
+        positions &= positions - 1;
+        counters.operator_candidates += 1;
+        counters.operator_matched += 1;
+        let successor = BoundaryState {
+            columns: replace_bit(parent.columns, column, legs.column_out),
+            diag_dr: (replace_bit(parent.diag_dr, column, legs.diag_dr_out) << 1) & board_mask,
+            diag_dl: replace_bit(parent.diag_dl, column, legs.diag_dl_out) >> 1,
+        };
+        let multiplicity = if top_row {
+            let Some(value) = top_row_vertical_orbit_weight(n, successor) else {
+                continue;
+            };
+            u8::try_from(value).map_err(|_| "D4 multiplicity does not fit u8".to_owned())?
+        } else {
+            1
+        };
+        let packed = PackedBoundary::pack(successor, n).0;
+        let state = u64::try_from(packed)
+            .map_err(|_| "deferred sparse boundary key does not fit u64".to_owned())?;
+        output.push(DeferredCandidate {
+            state,
+            parent_index,
+            multiplicity,
+        });
+    }
+    Ok(output.len() - start_len)
+}
+
+fn contract_rows_d4_deferred_sparse_kernel(n: usize) -> Result<ContractionResult, String> {
+    if n > 21 {
+        return Err("the compact deferred-candidate backend supports N <= 21".to_owned());
+    }
+    if n == 0 {
+        return Ok(ContractionResult {
+            n,
+            count: 1,
+            elapsed: Duration::ZERO,
+            peak_states: 1,
+            tensor_entries_examined: 0,
+            tensor_entries_matched: 0,
+            row_operator_candidates: 0,
+            row_operator_matched: 0,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        });
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let mut boundary = vec![(PackedBoundary::pack(initial, n), 1_u128)];
+    let mut next_boundary = Vec::<(PackedBoundary, u128)>::new();
+    let mut candidates = Vec::<DeferredCandidate>::new();
+    let mut peak_states = 1;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n);
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states = boundary.len();
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0_u128;
+        candidates.clear();
+        next_boundary.clear();
+
+        for (parent_index, &(packed_parent, _)) in boundary.iter().enumerate() {
+            let parent_index = u32::try_from(parent_index)
+                .map_err(|_| "deferred sparse parent index exceeds u32".to_owned())?;
+            completed_row_terms += append_deferred_sparse_d4(
+                n,
+                &operator,
+                packed_parent.unpack(n),
+                parent_index,
+                row == 0,
+                &mut counters,
+                &mut candidates,
+            )? as u128;
+        }
+
+        candidates.sort_unstable_by_key(|candidate| candidate.state);
+        let mut read = 0_usize;
+        while read < candidates.len() {
+            let state = candidates[read].state;
+            let mut weight = 0_u128;
+            while read < candidates.len() && candidates[read].state == state {
+                let candidate = candidates[read];
+                let parent_weight = boundary[candidate.parent_index as usize].1;
+                let contribution = parent_weight
+                    .checked_mul(u128::from(candidate.multiplicity))
+                    .ok_or_else(|| {
+                        format!("deferred coefficient overflow after row {}", row + 1)
+                    })?;
+                weight = weight.checked_add(contribution).ok_or_else(|| {
+                    format!("deferred coefficient sum overflow after row {}", row + 1)
+                })?;
+                read += 1;
+            }
+            next_boundary.push((PackedBoundary(u128::from(state)), weight));
+        }
+        std::mem::swap(&mut boundary, &mut next_boundary);
+
+        let output_weight = boundary.iter().try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+        })?;
+        peak_states = peak_states.max(boundary.len());
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states: boundary.len(),
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .filter(|(state, _)| state.columns(n) == board_mask)
+        .try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| "final coefficient sum overflow".to_owned())
+        })?;
+    Ok(ContractionResult {
+        n,
+        count,
+        elapsed: total_start.elapsed(),
+        peak_states,
+        tensor_entries_examined: 17,
+        tensor_entries_matched: 17,
+        row_operator_candidates: total_operator_candidates,
+        row_operator_matched: total_operator_matched,
+        peak_rss_bytes: peak_rss_bytes(),
+        layers,
+    })
+}
+
+fn radix_sort_msd(values: &mut [(PackedBoundary, u128)], shift: i32) {
+    if values.len() <= 64 || shift < 0 {
+        values.sort_unstable_by_key(|(state, _)| state.0);
+        return;
+    }
+    let mut counts = [0_usize; 256];
+    for &(state, _) in values.iter() {
+        counts[((state.0 >> shift) & 0xff) as usize] += 1;
+    }
+    let mut starts = [0_usize; 256];
+    for bucket in 1..256 {
+        starts[bucket] = starts[bucket - 1] + counts[bucket - 1];
+    }
+    let mut next = starts;
+    for bucket in 0..256 {
+        let end = starts[bucket] + counts[bucket];
+        while next[bucket] < end {
+            let selected = ((values[next[bucket]].0.0 >> shift) & 0xff) as usize;
+            if selected == bucket {
+                next[bucket] += 1;
+            } else {
+                let target = next[selected];
+                values.swap(next[bucket], target);
+                next[selected] += 1;
+            }
+        }
+    }
+    if shift >= 8 {
+        for bucket in 0..256 {
+            let start = starts[bucket];
+            let end = start + counts[bucket];
+            if end - start > 1 {
+                radix_sort_msd(&mut values[start..end], shift - 8);
+            }
+        }
+    }
+}
+
+fn sort_packed_radix(values: &mut [(PackedBoundary, u128)], n: usize) {
+    let key_bits = 3 * n;
+    let highest_shift = ((key_bits.saturating_sub(1)) / 8 * 8) as i32;
+    radix_sort_msd(values, highest_shift);
+}
+
+fn reduce_sorted_candidates(
+    candidates: &mut Vec<(PackedBoundary, u128)>,
+    row: usize,
+) -> Result<(), String> {
+    let mut write = 0_usize;
+    for read in 0..candidates.len() {
+        let (state, weight) = candidates[read];
+        if write > 0 && candidates[write - 1].0 == state {
+            candidates[write - 1].1 = candidates[write - 1]
+                .1
+                .checked_add(weight)
+                .ok_or_else(|| format!("coefficient overflow after row {}", row + 1))?;
+        } else {
+            candidates[write] = (state, weight);
+            write += 1;
+        }
+    }
+    candidates.truncate(write);
+    Ok(())
+}
+
+fn contract_rows_d4_optimized_kernel(
+    n: usize,
+    variant: D4KernelVariant,
+) -> Result<ContractionResult, String> {
+    if n > 42 {
+        return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
+    }
+    if n == 0 {
+        return Ok(ContractionResult {
+            n,
+            count: 1,
+            elapsed: Duration::ZERO,
+            peak_states: 1,
+            tensor_entries_examined: 0,
+            tensor_entries_matched: 0,
+            row_operator_candidates: 0,
+            row_operator_matched: 0,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        });
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let mut boundary = vec![(PackedBoundary::pack(initial, n), 1_u128)];
+    let mut candidates = Vec::<(PackedBoundary, u128)>::new();
+    let mut peak_states = 1;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n);
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states = boundary.len();
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0_u128;
+        candidates.clear();
+
+        for (packed_parent, parent_weight) in boundary.drain(..) {
+            let parent = packed_parent.unpack(n);
+            if variant == D4KernelVariant::Arena {
+                let mut row_terms =
+                    contract_one_row_compiled(n, &operator, parent, parent_weight, &mut counters)?;
+                if row == 0 {
+                    row_terms = apply_top_row_symmetry(n, row_terms)?;
+                }
+                completed_row_terms += row_terms.len() as u128;
+                candidates.extend(
+                    row_terms
+                        .into_iter()
+                        .map(|(state, weight)| (PackedBoundary::pack(state, n), weight)),
+                );
+            } else {
+                let appended = if matches!(
+                    variant,
+                    D4KernelVariant::ArenaBatchedSparse
+                        | D4KernelVariant::ArenaBatchedSparseParallelSort
+                ) {
+                    append_compiled_sparse_d4(
+                        n,
+                        &operator,
+                        parent,
+                        parent_weight,
+                        row == 0,
+                        &mut counters,
+                        &mut candidates,
+                    )?
+                } else {
+                    append_compiled_dense_d4(
+                        n,
+                        &operator,
+                        parent,
+                        parent_weight,
+                        row == 0,
+                        &mut counters,
+                        &mut candidates,
+                    )?
+                };
+                completed_row_terms += appended as u128;
+            }
+        }
+
+        if variant == D4KernelVariant::ArenaBatchedRadix {
+            sort_packed_radix(&mut candidates, n);
+        } else if variant == D4KernelVariant::ArenaBatchedSparseParallelSort {
+            candidates.par_sort_unstable_by_key(|(state, _)| state.0);
+        } else {
+            candidates.sort_unstable_by_key(|(state, _)| state.0);
+        }
+        reduce_sorted_candidates(&mut candidates, row)?;
+        std::mem::swap(&mut boundary, &mut candidates);
+
+        let output_weight = boundary.iter().try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+        })?;
+        peak_states = peak_states.max(boundary.len());
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states: boundary.len(),
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .filter(|(state, _)| state.columns(n) == board_mask)
+        .try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| "final coefficient sum overflow".to_owned())
+        })?;
+    Ok(ContractionResult {
+        n,
+        count,
+        elapsed: total_start.elapsed(),
+        peak_states,
+        tensor_entries_examined: 17,
+        tensor_entries_matched: 17,
+        row_operator_candidates: total_operator_candidates,
+        row_operator_matched: total_operator_matched,
+        peak_rss_bytes: peak_rss_bytes(),
+        layers,
+    })
+}
+
 fn contract_rows_sort_reduce_with_modes(
     n: usize,
     symmetry_mode: SymmetryMode,
@@ -1353,6 +1893,115 @@ pub fn peak_rss_bytes() -> u64 {
 #[cfg(not(target_os = "windows"))]
 pub fn peak_rss_bytes() -> u64 {
     0
+}
+
+#[cfg(test)]
+mod e24_kernel_tests {
+    use super::{
+        PackedBoundary, contract_rows_d4_arena_sort_reduce, contract_rows_d4_batched_radix,
+        contract_rows_d4_batched_sort_reduce, contract_rows_d4_batched_sparse_parallel_sort,
+        contract_rows_d4_batched_sparse_sort_reduce, contract_rows_d4_deferred_sparse_sort_reduce,
+        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sparse_sort_reduce, sort_packed_radix,
+    };
+
+    #[test]
+    fn in_place_radix_matches_standard_u128_key_sort() {
+        let mut radix = (0..10_000_u128)
+            .map(|index| {
+                let key = index
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .rotate_left((index % 127) as u32)
+                    & ((1_u128 << 45) - 1);
+                (PackedBoundary(key), index)
+            })
+            .rev()
+            .collect::<Vec<_>>();
+        let mut expected = radix.clone();
+        expected.sort_unstable_by_key(|(state, _)| state.0);
+        sort_packed_radix(&mut radix, 15);
+        assert_eq!(
+            radix.iter().map(|entry| entry.0.0).collect::<Vec<_>>(),
+            expected.iter().map(|entry| entry.0.0).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn e24_variants_preserve_counts_support_and_operator_work() {
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_orbit_sort_reduce(n).unwrap();
+            for candidate in [
+                contract_rows_d4_arena_sort_reduce(n).unwrap(),
+                contract_rows_d4_batched_sort_reduce(n).unwrap(),
+                contract_rows_d4_batched_radix(n).unwrap(),
+            ] {
+                assert_eq!(candidate.count, baseline.count, "N={n}");
+                assert_eq!(candidate.peak_states, baseline.peak_states, "N={n}");
+                assert_eq!(
+                    candidate.row_operator_candidates, baseline.row_operator_candidates,
+                    "N={n}"
+                );
+                assert_eq!(
+                    candidate.row_operator_matched, baseline.row_operator_matched,
+                    "N={n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_batched_variant_matches_existing_sparse_contraction() {
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_sparse_sort_reduce(n).unwrap();
+            let candidate = contract_rows_d4_batched_sparse_sort_reduce(n).unwrap();
+            assert_eq!(candidate.count, baseline.count, "N={n}");
+            assert_eq!(candidate.peak_states, baseline.peak_states, "N={n}");
+            assert_eq!(
+                candidate.row_operator_candidates, baseline.row_operator_candidates,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.row_operator_matched, baseline.row_operator_matched,
+                "N={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn deferred_sparse_variant_matches_existing_sparse_contraction() {
+        assert_eq!(std::mem::size_of::<super::DeferredCandidate>(), 16);
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_sparse_sort_reduce(n).unwrap();
+            let candidate = contract_rows_d4_deferred_sparse_sort_reduce(n).unwrap();
+            assert_eq!(candidate.count, baseline.count, "N={n}");
+            assert_eq!(candidate.peak_states, baseline.peak_states, "N={n}");
+            assert_eq!(
+                candidate.row_operator_candidates, baseline.row_operator_candidates,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.row_operator_matched, baseline.row_operator_matched,
+                "N={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_sort_variant_matches_serial_sparse_contraction() {
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_sparse_sort_reduce(n).unwrap();
+            let candidate = contract_rows_d4_batched_sparse_parallel_sort(n).unwrap();
+            assert_eq!(candidate.count, baseline.count, "N={n}");
+            assert_eq!(candidate.peak_states, baseline.peak_states, "N={n}");
+            assert_eq!(
+                candidate.row_operator_candidates, baseline.row_operator_candidates,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.row_operator_matched, baseline.row_operator_matched,
+                "N={n}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
