@@ -835,6 +835,13 @@ pub fn contract_rows_d4_sharded_sparse_sort_reduce(
     contract_rows_d4_sharded_sparse_kernel(n, shards, shard_mode)
 }
 
+pub fn contract_rows_d4_compact_sharded_sort_reduce(
+    n: usize,
+    shards: usize,
+) -> Result<ContractionResult, String> {
+    contract_rows_d4_compact_sharded_kernel(n, shards)
+}
+
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
 }
@@ -1142,6 +1149,233 @@ fn contract_rows_d4_sharded_sparse_kernel(
         .try_fold(0_u128, |sum, (_, value)| {
             sum.checked_add(*value)
                 .ok_or_else(|| "final coefficient sum overflow".to_owned())
+        })?;
+    Ok(ContractionResult {
+        n,
+        count,
+        elapsed: total_start.elapsed(),
+        peak_states,
+        tensor_entries_examined: 17,
+        tensor_entries_matched: 17,
+        row_operator_candidates: total_operator_candidates,
+        row_operator_matched: total_operator_matched,
+        peak_rss_bytes: peak_rss_bytes(),
+        layers,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct CompactEntry {
+    key: u64,
+    weight_low: u64,
+    weight_high: u64,
+}
+
+impl CompactEntry {
+    fn new(key: u64, weight: u128) -> Self {
+        Self {
+            key,
+            weight_low: weight as u64,
+            weight_high: (weight >> 64) as u64,
+        }
+    }
+
+    fn weight(self) -> u128 {
+        u128::from(self.weight_low) | (u128::from(self.weight_high) << 64)
+    }
+
+    fn set_weight(&mut self, weight: u128) {
+        self.weight_low = weight as u64;
+        self.weight_high = (weight >> 64) as u64;
+    }
+}
+
+fn reduce_sorted_compact(entries: &mut Vec<CompactEntry>, row: usize) -> Result<(), String> {
+    let mut write = 0_usize;
+    for read in 0..entries.len() {
+        let selected = entries[read];
+        if write > 0 && entries[write - 1].key == selected.key {
+            let combined = entries[write - 1]
+                .weight()
+                .checked_add(selected.weight())
+                .ok_or_else(|| format!("compact coefficient overflow after row {}", row + 1))?;
+            entries[write - 1].set_weight(combined);
+        } else {
+            entries[write] = selected;
+            write += 1;
+        }
+    }
+    entries.truncate(write);
+    Ok(())
+}
+
+fn append_compact_sparse_sharded_d4(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    top_row: bool,
+    counters: &mut RowCounters,
+    output: &mut [Vec<CompactEntry>],
+) -> Result<usize, String> {
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    if legs.row_in != 0 {
+        return Err(
+            "compact sparse iterator requires occupied row_in to match the left v0 boundary"
+                .to_owned(),
+        );
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let matching_bits = |mask: u64, required: u8| -> Result<u64, String> {
+        match required {
+            0 => Ok((!mask) & board_mask),
+            1 => Ok(mask & board_mask),
+            _ => Err("compiled C entry contains a non-binary incoming signal".to_owned()),
+        }
+    };
+    let mut positions = matching_bits(parent.columns, legs.column_in)?
+        & matching_bits(parent.diag_dr, legs.diag_dr_in)?
+        & matching_bits(parent.diag_dl, legs.diag_dl_in)?;
+    let base_weight = parent_weight
+        .checked_mul(occupied.value)
+        .ok_or_else(|| "coefficient overflow in compact sparse row operator".to_owned())?;
+    let mut appended = 0_usize;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        let column = selected.trailing_zeros() as usize;
+        positions &= positions - 1;
+        counters.operator_candidates += 1;
+        counters.operator_matched += 1;
+        let successor = BoundaryState {
+            columns: replace_bit(parent.columns, column, legs.column_out),
+            diag_dr: (replace_bit(parent.diag_dr, column, legs.diag_dr_out) << 1) & board_mask,
+            diag_dl: replace_bit(parent.diag_dl, column, legs.diag_dl_out) >> 1,
+        };
+        let mut weight = base_weight;
+        if top_row {
+            let Some(multiplicity) = top_row_vertical_orbit_weight(n, successor) else {
+                continue;
+            };
+            weight = weight
+                .checked_mul(multiplicity)
+                .ok_or_else(|| "coefficient overflow in compact D4 weighting".to_owned())?;
+        }
+        let packed = PackedBoundary::pack(successor, n).0;
+        let key = u64::try_from(packed)
+            .map_err(|_| "compact virtual boundary key does not fit u64".to_owned())?;
+        let selected_shard = shard_index(u128::from(key), n, output.len(), ShardMode::Prefix);
+        output[selected_shard].push(CompactEntry::new(key, weight));
+        appended += 1;
+    }
+    Ok(appended)
+}
+
+fn contract_rows_d4_compact_sharded_kernel(
+    n: usize,
+    shards: usize,
+) -> Result<ContractionResult, String> {
+    if n > 21 {
+        return Err("the compact u64 virtual-boundary backend supports N <= 21".to_owned());
+    }
+    if shards == 0 || !shards.is_power_of_two() || shards > 256 {
+        return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if n == 0 {
+        return Ok(ContractionResult {
+            n,
+            count: 1,
+            elapsed: Duration::ZERO,
+            peak_states: 1,
+            tensor_entries_examined: 0,
+            tensor_entries_matched: 0,
+            row_operator_candidates: 0,
+            row_operator_matched: 0,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        });
+    }
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let initial_key = u64::try_from(PackedBoundary::pack(initial, n).0)
+        .map_err(|_| "initial compact key does not fit u64".to_owned())?;
+    let mut boundary = (0..shards)
+        .map(|_| Vec::<CompactEntry>::new())
+        .collect::<Vec<_>>();
+    boundary[shard_index(u128::from(initial_key), n, shards, ShardMode::Prefix)]
+        .push(CompactEntry::new(initial_key, 1));
+    let mut candidates = (0..shards)
+        .map(|_| Vec::<CompactEntry>::new())
+        .collect::<Vec<_>>();
+    let mut peak_states = 1_usize;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n);
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states = boundary.iter().map(Vec::len).sum();
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0_u128;
+        for shard in &mut candidates {
+            shard.clear();
+        }
+        for parent_shard in &boundary {
+            for &parent in parent_shard {
+                completed_row_terms += append_compact_sparse_sharded_d4(
+                    n,
+                    &operator,
+                    PackedBoundary(u128::from(parent.key)).unpack(n),
+                    parent.weight(),
+                    row == 0,
+                    &mut counters,
+                    &mut candidates,
+                )? as u128;
+            }
+        }
+        candidates
+            .par_iter_mut()
+            .try_for_each(|shard| -> Result<(), String> {
+                shard.sort_unstable_by_key(|entry| entry.key);
+                reduce_sorted_compact(shard, row)
+            })?;
+        let output_states = candidates.iter().map(Vec::len).sum();
+        let output_weight = candidates.iter().flatten().try_fold(0_u128, |sum, entry| {
+            sum.checked_add(entry.weight())
+                .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+        })?;
+        peak_states = peak_states.max(output_states);
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        std::mem::swap(&mut boundary, &mut candidates);
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states,
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .flatten()
+        .filter(|entry| PackedBoundary(u128::from(entry.key)).columns(n) == board_mask)
+        .try_fold(0_u128, |sum, entry| {
+            sum.checked_add(entry.weight())
+                .ok_or_else(|| "final compact coefficient sum overflow".to_owned())
         })?;
     Ok(ContractionResult {
         n,
@@ -2126,9 +2360,9 @@ mod e24_kernel_tests {
         PackedBoundary, ShardMode, contract_rows_d4_arena_sort_reduce,
         contract_rows_d4_batched_radix, contract_rows_d4_batched_sort_reduce,
         contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
-        contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_orbit_sort_reduce,
-        contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
-        sort_packed_radix,
+        contract_rows_d4_compact_sharded_sort_reduce, contract_rows_d4_deferred_sparse_sort_reduce,
+        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sharded_sparse_sort_reduce,
+        contract_rows_d4_sparse_sort_reduce, sort_packed_radix,
     };
 
     #[test]
@@ -2250,6 +2484,26 @@ mod e24_kernel_tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn compact_sharded_layout_matches_e26() {
+        assert_eq!(std::mem::size_of::<super::CompactEntry>(), 24);
+        for n in 0..=10 {
+            let baseline =
+                contract_rows_d4_sharded_sparse_sort_reduce(n, 8, ShardMode::Prefix).unwrap();
+            let candidate = contract_rows_d4_compact_sharded_sort_reduce(n, 8).unwrap();
+            assert_eq!(candidate.count, baseline.count, "N={n}");
+            assert_eq!(candidate.peak_states, baseline.peak_states, "N={n}");
+            assert_eq!(
+                candidate.row_operator_candidates, baseline.row_operator_candidates,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.row_operator_matched, baseline.row_operator_matched,
+                "N={n}"
+            );
         }
     }
 }
