@@ -1,0 +1,4 @@
+threads,shards,N,count,verified,elapsed_s,peak_rss_bytes,peak_support,row_operator_candidates,row_operator_matched,entry_bytes,repeats
+8,256,10,724,true,0.003171400,7090176,4510,17119,17119,16,1
+8,256,11,2680,true,0.004304900,9465856,22253,87160,87160,16,1
+8,256,12,14200,true,0.009829500,14983168,98939,403508,403508,16,1
