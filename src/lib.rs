@@ -10,6 +10,8 @@ pub mod dfs_bitmask;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use rayon::prelude::*;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct VirtualLegs {
     pub column_in: u8,
@@ -593,6 +595,162 @@ pub fn contract_rows_sort_reduce(n: usize) -> Result<ContractionResult, String> 
     })
 }
 
+/// Contract the exact compiled row operator with sliced parallel expansion and
+/// parallel sorting. The final reduce remains serial and uses checked integer
+/// addition in sorted key order.
+pub fn contract_rows_parallel_sort_reduce(
+    n: usize,
+    threads: usize,
+) -> Result<ContractionResult, String> {
+    if threads == 0 {
+        return Err("parallel sort-reduce requires at least one thread".to_owned());
+    }
+    if n > 42 {
+        return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
+    }
+    if n == 0 {
+        return Ok(ContractionResult {
+            n,
+            count: 1,
+            elapsed: Duration::ZERO,
+            peak_states: 1,
+            tensor_entries_examined: 0,
+            tensor_entries_matched: 0,
+            row_operator_candidates: 0,
+            row_operator_matched: 0,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        });
+    }
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|error| format!("failed to build Rayon pool: {error}"))?;
+    pool.install(|| {
+        let tensor = SiteTensorC::sec_vi();
+        debug_assert_eq!(tensor.entries().len(), 17);
+        let operator = CompiledRowOperator::compile(&tensor)?;
+        let initial = BoundaryState {
+            columns: 0,
+            diag_dr: 0,
+            diag_dl: 0,
+        };
+        let mut boundary = vec![(PackedBoundary::pack(initial, n), 1_u128)];
+        let mut peak_states = 1;
+        let mut total_operator_candidates = 0;
+        let mut total_operator_matched = 0;
+        let mut layers = Vec::with_capacity(n);
+        let total_start = Instant::now();
+
+        for row in 0..n {
+            let layer_start = Instant::now();
+            let input_states = boundary.len();
+            let target_slices = threads.saturating_mul(4).max(1);
+            let chunk_size = input_states.div_ceil(target_slices).max(1);
+            let chunks = boundary
+                .par_chunks(chunk_size)
+                .map(|parents| {
+                    let mut local = Vec::<(PackedBoundary, u128)>::new();
+                    let mut counters = RowCounters::default();
+                    for &(packed_parent, parent_weight) in parents {
+                        let parent = packed_parent.unpack(n);
+                        let row_terms = contract_one_row_compiled(
+                            n,
+                            &operator,
+                            parent,
+                            parent_weight,
+                            &mut counters,
+                        )?;
+                        local.extend(row_terms.into_iter().map(|(successor, weight)| {
+                            (PackedBoundary::pack(successor, n), weight)
+                        }));
+                    }
+                    Ok::<_, String>((local, counters))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let completed_row_terms = chunks
+                .iter()
+                .map(|(terms, _)| terms.len() as u128)
+                .sum::<u128>();
+            let candidate_capacity = usize::try_from(completed_row_terms)
+                .map_err(|_| format!("row {} candidate count exceeds usize", row + 1))?;
+            let mut candidates = Vec::with_capacity(candidate_capacity);
+            let mut counters = RowCounters::default();
+            for (mut terms, local) in chunks {
+                candidates.append(&mut terms);
+                counters.tensor_examined += local.tensor_examined;
+                counters.tensor_matched += local.tensor_matched;
+                counters.operator_candidates += local.operator_candidates;
+                counters.operator_matched += local.operator_matched;
+            }
+            drop(std::mem::take(&mut boundary));
+
+            candidates.par_sort_unstable_by_key(|(state, _)| state.0);
+            let mut write = 0_usize;
+            for read in 0..candidates.len() {
+                let (state, weight) = candidates[read];
+                if write > 0 && candidates[write - 1].0 == state {
+                    candidates[write - 1].1 = candidates[write - 1]
+                        .1
+                        .checked_add(weight)
+                        .ok_or_else(|| format!("coefficient overflow after row {}", row + 1))?;
+                } else {
+                    candidates[write] = (state, weight);
+                    write += 1;
+                }
+            }
+            candidates.truncate(write);
+            boundary = candidates;
+
+            let output_weight = boundary.iter().try_fold(0_u128, |sum, (_, value)| {
+                sum.checked_add(*value)
+                    .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+            })?;
+            peak_states = peak_states.max(boundary.len());
+            total_operator_candidates += counters.operator_candidates;
+            total_operator_matched += counters.operator_matched;
+            let layer_peak_rss = peak_rss_bytes();
+            layers.push(LayerMetric {
+                row,
+                input_states,
+                tensor_entries_examined: counters.tensor_examined,
+                tensor_entries_matched: counters.tensor_matched,
+                row_operator_candidates: counters.operator_candidates,
+                row_operator_matched: counters.operator_matched,
+                completed_row_terms,
+                output_states: boundary.len(),
+                output_weight,
+                elapsed: layer_start.elapsed(),
+                peak_rss_bytes: layer_peak_rss,
+            });
+        }
+
+        let board_mask = (1_u64 << n) - 1;
+        let count = boundary
+            .iter()
+            .filter(|(state, _)| state.columns(n) == board_mask)
+            .try_fold(0_u128, |sum, (_, value)| {
+                sum.checked_add(*value)
+                    .ok_or_else(|| "final coefficient sum overflow".to_owned())
+            })?;
+
+        Ok(ContractionResult {
+            n,
+            count,
+            elapsed: total_start.elapsed(),
+            peak_states,
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_operator_candidates,
+            row_operator_matched: total_operator_matched,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers,
+        })
+    })
+}
+
 /// Reference backend retained for tensor-level verification.
 pub fn contract_rows_sitewise(n: usize) -> Result<ContractionResult, String> {
     contract_rows_with_backend(n, RowBackend::Sitewise)
@@ -822,7 +980,8 @@ mod tests {
     use super::{
         BoundaryState, CompiledRowOperator, PackedBoundary, RowCounters, SiteTensorB, SiteTensorC,
         VirtualLegs, contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_sitewise, contract_rows_sort_reduce, known_count,
+        contract_rows_parallel_sort_reduce, contract_rows_sitewise, contract_rows_sort_reduce,
+        known_count,
     };
     use std::collections::HashMap;
 
@@ -1063,6 +1222,60 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(sorted_layers, hash_layers, "layer mismatch at N={n}");
+        }
+    }
+
+    #[test]
+    fn parallel_slices_match_serial_sort_reduce_through_n10() {
+        for threads in [1, 2, 4] {
+            for n in 0..=10 {
+                let serial = contract_rows_sort_reduce(n).unwrap();
+                let parallel = contract_rows_parallel_sort_reduce(n, threads).unwrap();
+                assert_eq!(
+                    parallel.count, serial.count,
+                    "count mismatch at N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    parallel.peak_states, serial.peak_states,
+                    "support mismatch at N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    parallel.row_operator_candidates, serial.row_operator_candidates,
+                    "candidate mismatch at N={n}, threads={threads}"
+                );
+                assert_eq!(
+                    parallel.row_operator_matched, serial.row_operator_matched,
+                    "matched mismatch at N={n}, threads={threads}"
+                );
+                let serial_layers = serial
+                    .layers
+                    .iter()
+                    .map(|layer| {
+                        (
+                            layer.input_states,
+                            layer.completed_row_terms,
+                            layer.output_states,
+                            layer.output_weight,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let parallel_layers = parallel
+                    .layers
+                    .iter()
+                    .map(|layer| {
+                        (
+                            layer.input_states,
+                            layer.completed_row_terms,
+                            layer.output_states,
+                            layer.output_weight,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    parallel_layers, serial_layers,
+                    "layer mismatch at N={n}, threads={threads}"
+                );
+            }
         }
     }
 

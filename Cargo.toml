@@ -6,6 +6,9 @@ description = "Exact naive row-by-row sparse contraction of the N-Queens PEPS"
 license = "MIT"
 default-run = "nqueens-peps-naive"
 
+[dependencies]
+rayon = "1.10"
+
 [profile.release]
 codegen-units = 1
 lto = "thin"
