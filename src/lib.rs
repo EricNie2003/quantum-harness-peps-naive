@@ -8,6 +8,7 @@
 pub mod dfs_bitmask;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -177,6 +178,9 @@ pub struct BoundaryState {
 /// column, down-right diagonal, and down-left diagonal signals respectively.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct PackedBoundary(u128);
+
+type BoundaryMap = HashMap<PackedBoundary, u128>;
+type BoundaryObserver<'a> = dyn FnMut(usize, &BoundaryMap) + 'a;
 
 impl PackedBoundary {
     fn pack(state: BoundaryState, n: usize) -> Self {
@@ -471,17 +475,18 @@ enum RowBackend {
 
 /// Exactly contract the rank-8 `C` network row by row.
 pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
-    contract_rows_with_backend(n, RowBackend::Compiled)
+    contract_rows_with_backend(n, RowBackend::Compiled, None)
 }
 
 /// Reference backend retained for tensor-level verification.
 pub fn contract_rows_sitewise(n: usize) -> Result<ContractionResult, String> {
-    contract_rows_with_backend(n, RowBackend::Sitewise)
+    contract_rows_with_backend(n, RowBackend::Sitewise, None)
 }
 
 fn contract_rows_with_backend(
     n: usize,
     row_backend: RowBackend,
+    mut boundary_observer: Option<&mut BoundaryObserver<'_>>,
 ) -> Result<ContractionResult, String> {
     if n > 42 {
         return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
@@ -570,6 +575,9 @@ fn contract_rows_with_backend(
             elapsed: layer_start.elapsed(),
             peak_rss_bytes: layer_peak_rss,
         });
+        if let Some(observer) = boundary_observer.as_deref_mut() {
+            observer(row, &next);
+        }
         boundary = next;
     }
 
@@ -594,6 +602,282 @@ fn contract_rows_with_backend(
         row_operator_candidates: total_operator_candidates,
         row_operator_matched: total_operator_matched,
         peak_rss_bytes: peak_rss_bytes(),
+        layers,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiagramReduction {
+    Add,
+    Zdd,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DiagramNode {
+    Terminal(u128),
+    Branch { variable: u8, low: u32, high: u32 },
+}
+
+struct DiagramBuilder {
+    reduction: DiagramReduction,
+    zero: u32,
+    nodes: Vec<DiagramNode>,
+    terminals: HashMap<u128, u32>,
+    branches: HashMap<(u8, u32, u32), u32>,
+}
+
+impl DiagramBuilder {
+    fn new(reduction: DiagramReduction) -> Self {
+        let mut terminals = HashMap::new();
+        terminals.insert(0, 0);
+        Self {
+            reduction,
+            zero: 0,
+            nodes: vec![DiagramNode::Terminal(0)],
+            terminals,
+            branches: HashMap::new(),
+        }
+    }
+
+    fn terminal(&mut self, value: u128) -> u32 {
+        if let Some(&node) = self.terminals.get(&value) {
+            return node;
+        }
+        let node = self.nodes.len() as u32;
+        self.nodes.push(DiagramNode::Terminal(value));
+        self.terminals.insert(value, node);
+        node
+    }
+
+    fn branch(&mut self, variable: u8, low: u32, high: u32) -> u32 {
+        match self.reduction {
+            DiagramReduction::Add if low == high => return low,
+            DiagramReduction::Zdd if high == self.zero => return low,
+            _ => {}
+        }
+        let key = (variable, low, high);
+        if let Some(&node) = self.branches.get(&key) {
+            return node;
+        }
+        let node = self.nodes.len() as u32;
+        self.nodes.push(DiagramNode::Branch {
+            variable,
+            low,
+            high,
+        });
+        self.branches.insert(key, node);
+        node
+    }
+
+    fn build(&mut self, entries: &[(u128, u128)], bit_index: i32) -> u32 {
+        if entries.is_empty() {
+            return self.zero;
+        }
+        if bit_index < 0 {
+            debug_assert_eq!(entries.len(), 1);
+            return self.terminal(entries[0].1);
+        }
+
+        let selected = 1_u128 << bit_index;
+        let middle = entries.partition_point(|(key, _)| key & selected == 0);
+        let low = self.build(&entries[..middle], bit_index - 1);
+        let high = self.build(&entries[middle..], bit_index - 1);
+        self.branch(bit_index as u8, low, high)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BoundaryVariableOrder {
+    Grouped,
+    Interleaved,
+}
+
+pub struct WeightedBoundaryDiagram {
+    reduction: DiagramReduction,
+    nodes: Vec<DiagramNode>,
+    root: u32,
+    total_bits: usize,
+}
+
+impl WeightedBoundaryDiagram {
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn evaluate(&self, key: u128) -> u128 {
+        self.evaluate_node(self.root, key, self.total_bits as i32 - 1)
+    }
+
+    fn evaluate_node(&self, node: u32, key: u128, expected_variable: i32) -> u128 {
+        match self.nodes[node as usize] {
+            DiagramNode::Terminal(value) => {
+                if self.reduction == DiagramReduction::Zdd
+                    && expected_variable >= 0
+                    && key & mask_through(expected_variable) != 0
+                {
+                    0
+                } else {
+                    value
+                }
+            }
+            DiagramNode::Branch {
+                variable,
+                low,
+                high,
+            } => {
+                if self.reduction == DiagramReduction::Zdd {
+                    let skipped =
+                        mask_through(expected_variable) & !mask_through(i32::from(variable));
+                    if key & skipped != 0 {
+                        return 0;
+                    }
+                }
+                let child = if key & (1_u128 << variable) == 0 {
+                    low
+                } else {
+                    high
+                };
+                self.evaluate_node(child, key, i32::from(variable) - 1)
+            }
+        }
+    }
+}
+
+fn mask_through(bit_index: i32) -> u128 {
+    if bit_index < 0 {
+        0
+    } else {
+        (1_u128 << (bit_index + 1)) - 1
+    }
+}
+
+fn reordered_boundary_key(packed: PackedBoundary, n: usize, order: BoundaryVariableOrder) -> u128 {
+    match order {
+        BoundaryVariableOrder::Grouped => packed.0,
+        BoundaryVariableOrder::Interleaved => {
+            let state = packed.unpack(n);
+            let mut reordered = 0_u128;
+            for column in 0..n {
+                reordered |= u128::from(bit(state.columns, column)) << (3 * column);
+                reordered |= u128::from(bit(state.diag_dr, column)) << (3 * column + 1);
+                reordered |= u128::from(bit(state.diag_dl, column)) << (3 * column + 2);
+            }
+            reordered
+        }
+    }
+}
+
+fn build_boundary_diagram(
+    boundary: &HashMap<PackedBoundary, u128>,
+    n: usize,
+    reduction: DiagramReduction,
+    order: BoundaryVariableOrder,
+) -> WeightedBoundaryDiagram {
+    let mut entries: Vec<_> = boundary
+        .iter()
+        .map(|(&key, &value)| (reordered_boundary_key(key, n, order), value))
+        .collect();
+    entries.sort_unstable_by_key(|(key, _)| *key);
+    let mut builder = DiagramBuilder::new(reduction);
+    let root = builder.build(&entries, (3 * n) as i32 - 1);
+    WeightedBoundaryDiagram {
+        reduction,
+        nodes: builder.nodes,
+        root,
+        total_bits: 3 * n,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BoundaryDiagramLayerMetric {
+    pub row: usize,
+    pub support: usize,
+    pub unique_coefficients: usize,
+    pub grouped_add_nodes: usize,
+    pub grouped_zdd_nodes: usize,
+    pub interleaved_add_nodes: usize,
+    pub interleaved_zdd_nodes: usize,
+    pub grouped_add_s: f64,
+    pub grouped_zdd_s: f64,
+    pub interleaved_add_s: f64,
+    pub interleaved_zdd_s: f64,
+    pub peak_rss_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct BoundaryDiagramProfile {
+    pub n: usize,
+    pub count: u128,
+    pub total_elapsed: Duration,
+    pub layers: Vec<BoundaryDiagramLayerMetric>,
+}
+
+/// Diagnostic-only exact ADD/ZDD construction over each explicit boundary.
+///
+/// This profiles whether a decision diagram can compress the exact boundary
+/// coefficient function before investing in a diagram-native apply operator.
+pub fn profile_boundary_diagrams(n: usize) -> Result<BoundaryDiagramProfile, String> {
+    let mut layers = Vec::with_capacity(n);
+    let mut observer = |row: usize, boundary: &HashMap<PackedBoundary, u128>| {
+        let unique_coefficients = boundary.values().copied().collect::<HashSet<_>>().len();
+
+        let start = Instant::now();
+        let grouped_add = build_boundary_diagram(
+            boundary,
+            n,
+            DiagramReduction::Add,
+            BoundaryVariableOrder::Grouped,
+        );
+        let grouped_add_s = start.elapsed().as_secs_f64();
+
+        let start = Instant::now();
+        let grouped_zdd = build_boundary_diagram(
+            boundary,
+            n,
+            DiagramReduction::Zdd,
+            BoundaryVariableOrder::Grouped,
+        );
+        let grouped_zdd_s = start.elapsed().as_secs_f64();
+
+        let start = Instant::now();
+        let interleaved_add = build_boundary_diagram(
+            boundary,
+            n,
+            DiagramReduction::Add,
+            BoundaryVariableOrder::Interleaved,
+        );
+        let interleaved_add_s = start.elapsed().as_secs_f64();
+
+        let start = Instant::now();
+        let interleaved_zdd = build_boundary_diagram(
+            boundary,
+            n,
+            DiagramReduction::Zdd,
+            BoundaryVariableOrder::Interleaved,
+        );
+        let interleaved_zdd_s = start.elapsed().as_secs_f64();
+
+        layers.push(BoundaryDiagramLayerMetric {
+            row,
+            support: boundary.len(),
+            unique_coefficients,
+            grouped_add_nodes: grouped_add.node_count(),
+            grouped_zdd_nodes: grouped_zdd.node_count(),
+            interleaved_add_nodes: interleaved_add.node_count(),
+            interleaved_zdd_nodes: interleaved_zdd.node_count(),
+            grouped_add_s,
+            grouped_zdd_s,
+            interleaved_add_s,
+            interleaved_zdd_s,
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    };
+
+    let contraction = contract_rows_with_backend(n, RowBackend::Compiled, Some(&mut observer))?;
+    Ok(BoundaryDiagramProfile {
+        n,
+        count: contraction.count,
+        total_elapsed: contraction.elapsed,
         layers,
     })
 }
@@ -701,9 +985,10 @@ pub fn peak_rss_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundaryState, CompiledRowOperator, PackedBoundary, RowCounters, SiteTensorB, SiteTensorC,
-        VirtualLegs, contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_sitewise, known_count,
+        BoundaryState, BoundaryVariableOrder, CompiledRowOperator, DiagramReduction,
+        PackedBoundary, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs, build_boundary_diagram,
+        contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
+        contract_rows_sitewise, known_count, profile_boundary_diagrams, reordered_boundary_key,
     };
     use std::collections::HashMap;
 
@@ -899,6 +1184,69 @@ mod tests {
                 "N={n}"
             );
         }
+    }
+
+    #[test]
+    fn weighted_add_and_zdd_exactly_represent_sparse_boundary_function() {
+        let n = 4;
+        let states = [
+            (
+                BoundaryState {
+                    columns: 0b0001,
+                    diag_dr: 0b0010,
+                    diag_dl: 0b0100,
+                },
+                3_u128,
+            ),
+            (
+                BoundaryState {
+                    columns: 0b1010,
+                    diag_dr: 0b0101,
+                    diag_dl: 0b0011,
+                },
+                7_u128,
+            ),
+            (
+                BoundaryState {
+                    columns: 0b1111,
+                    diag_dr: 0b0000,
+                    diag_dl: 0b1000,
+                },
+                3_u128,
+            ),
+        ];
+        let boundary: HashMap<_, _> = states
+            .into_iter()
+            .map(|(state, value)| (PackedBoundary::pack(state, n), value))
+            .collect();
+
+        for reduction in [DiagramReduction::Add, DiagramReduction::Zdd] {
+            for order in [
+                BoundaryVariableOrder::Grouped,
+                BoundaryVariableOrder::Interleaved,
+            ] {
+                let diagram = build_boundary_diagram(&boundary, n, reduction, order);
+                let expected: HashMap<_, _> = boundary
+                    .iter()
+                    .map(|(&key, &value)| (reordered_boundary_key(key, n, order), value))
+                    .collect();
+                for key in 0_u128..(1_u128 << (3 * n)) {
+                    assert_eq!(
+                        diagram.evaluate(key),
+                        expected.get(&key).copied().unwrap_or(0),
+                        "reduction={reduction:?}, key={key:012b}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn diagram_profiler_preserves_q8() {
+        let profile = profile_boundary_diagrams(8).unwrap();
+        assert_eq!(profile.count, 92);
+        assert_eq!(profile.layers.len(), 8);
+        assert!(profile.layers.iter().all(|layer| layer.support > 0));
     }
 
     #[test]
