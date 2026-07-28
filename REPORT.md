@@ -905,3 +905,35 @@ CRT、消融和最终 DFS benchmark 改为所有 KEEP 候选的强制工程阶�
 E19 明确采用“D4 外层 sector + 内层非对称路径搜索”的组合，但不假设必然有收益。候选集
 必须包含当前 D4 row baseline，并按 aggregate actual nnz、RSS 和 wall time 选择；sector
 拆分导致的跨 sector merge 损失也计入总成本。
+
+## 21. E16：single-prime streaming exact MPS/MPO
+
+E16 已在独立 worktree `.worktrees/e16-streaming-exact-mps`、分支
+`codex/exp-streaming-exact-mps` 实作。它从 rank-1 top boundary 开始，把显式 17-entry `C`
+机械生成的 row MPO 直接作用于有限域 exact MPS；每次 compression 都是零阈值列基消元，
+没有浮点、SVD、截断、手写 queen recurrence，也没有 production full sparse boundary。
+首行同时保留 E12 的 vertical-reflection D4 projected slices。
+
+结构结果是正面的：N=1–8 全部得到正确计数模 1,000,000,007；N=8 最大 shifted bond rank
+为 163，恰好等于 E15 独立测得的 peak spatial flattening rank。N=8 峰值 RSS 仅
+24,866,816 bytes，证明无需展开完整 `8^N` boundary。
+
+性能结果则触发 hard kill：
+
+| N | E16 (s) | D4 sparse row median (s) | slowdown | peak shifted rank |
+|---:|---:|---:|---:|---:|
+| 6 | 0.0134591 | 0.0000143 | 941x | 17 |
+| 7 | 0.9410345 | 0.0000450 | 20,912x | 51 |
+| 8 | 40.7896195 | 0.0000879 | 464,046x | 163 |
+
+瓶颈不是 rank 或 RSS 本身，而是 dense finite-field column elimination，以及为移动两族
+diagonal virtual wires 而执行的 O(N²) adjacent-SWAP/refactorization 网络。按预注册 gate，
+**REJECT 当前 E16 实现并停止 N=9**；这不否决 E17，因为 E17 正是用左右 two-block
+skeleton/PLUQ 和 bulk relabeling 避开此开销。
+
+完整自包含报告与 raw CSV：
+
+- `experiments/e16_streaming_exact_mps/REPORT.md`
+- `benchmarks/e16_streaming_exact_mps_release.csv`
+- `benchmarks/e16_streaming_exact_mps_layers.csv`
+- `benchmarks/e16_d4_baseline_release.csv`
