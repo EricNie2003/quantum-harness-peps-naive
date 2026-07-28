@@ -1,0 +1,5 @@
+N,order,count,known_count,verified,elapsed_s,peak_rss_bytes,peak_live_nodes,peak_boundary_nodes,peak_relation_nodes,allocated_nodes,terminal_count,unique_lookups,unique_hits,apply_lookups,apply_hits,relprod_lookups,relprod_hits
+7,FamilyPaired-Reverse-201,40,40,true,0.005869900,8585216,785,466,321,16296,16,18488,2208,15831,3564,9892,513
+8,FamilyPaired-Reverse-201,92,92,true,0.012472100,11649024,1393,969,425,29657,18,34268,4629,26257,5529,27313,1902
+9,FamilyPaired-Reverse-201,352,352,true,0.043247400,19562496,3983,3441,544,73164,48,87945,14829,49756,8752,102603,8125
+10,FamilyPaired-Reverse-201,724,724,true,0.134405300,49111040,10844,10167,678,179404,47,223213,43856,109331,16206,307187,30030

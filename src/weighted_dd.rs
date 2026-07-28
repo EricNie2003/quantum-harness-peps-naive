@@ -11,6 +11,121 @@ use crate::{SiteTensorC, VirtualLegs, peak_rss_bytes};
 
 type NodeId = usize;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DdColumnOrder {
+    Forward,
+    Reverse,
+    CenterOut,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DdOrderMode {
+    SiteBlocked,
+    Paired,
+    FamilyPaired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DdOrderSpec {
+    pub families: [usize; 3],
+    pub columns: DdColumnOrder,
+    pub mode: DdOrderMode,
+}
+
+impl Default for DdOrderSpec {
+    fn default() -> Self {
+        Self {
+            families: [0, 1, 2],
+            columns: DdColumnOrder::Forward,
+            mode: DdOrderMode::SiteBlocked,
+        }
+    }
+}
+
+impl DdOrderSpec {
+    pub fn label(self) -> String {
+        format!(
+            "{:?}-{:?}-{}{}{}",
+            self.mode, self.columns, self.families[0], self.families[1], self.families[2]
+        )
+    }
+}
+
+struct VariableLayout {
+    input: Vec<[u16; 3]>,
+    output: Vec<[u16; 3]>,
+    is_input: Vec<bool>,
+    output_to_input: Vec<Option<u16>>,
+}
+
+impl VariableLayout {
+    fn new(n: usize, spec: DdOrderSpec) -> Result<Self, String> {
+        let mut columns = (0..n).collect::<Vec<_>>();
+        match spec.columns {
+            DdColumnOrder::Forward => {}
+            DdColumnOrder::Reverse => columns.reverse(),
+            DdColumnOrder::CenterOut => {
+                columns.sort_unstable_by_key(|&column| (column.abs_diff((n - 1) / 2), column));
+            }
+        }
+        let mut logical = Vec::<(usize, usize)>::with_capacity(3 * n);
+        match spec.mode {
+            DdOrderMode::FamilyPaired => {
+                for family in spec.families {
+                    for &column in &columns {
+                        logical.push((column, family));
+                    }
+                }
+            }
+            DdOrderMode::SiteBlocked | DdOrderMode::Paired => {
+                for &column in &columns {
+                    for family in spec.families {
+                        logical.push((column, family));
+                    }
+                }
+            }
+        }
+        let mut input = vec![[0_u16; 3]; n];
+        let mut output = vec![[0_u16; 3]; n];
+        let mut next = 0_u16;
+        if spec.mode == DdOrderMode::SiteBlocked {
+            for chunk in logical.chunks(3) {
+                for &(column, family) in chunk {
+                    input[column][family] = next;
+                    next += 1;
+                }
+                for &(column, family) in chunk {
+                    output[column][family] = next;
+                    next += 1;
+                }
+            }
+        } else {
+            for &(column, family) in &logical {
+                input[column][family] = next;
+                output[column][family] = next + 1;
+                next += 2;
+            }
+        }
+        if usize::from(next) != 6 * n {
+            return Err("DD variable layout has the wrong size".to_owned());
+        }
+        let mut is_input = vec![false; 6 * n];
+        let mut output_to_input = vec![None; 6 * n];
+        for column in 0..n {
+            for family in 0..3 {
+                is_input[usize::from(input[column][family])] = true;
+                output_to_input[usize::from(output[column][family])] = Some(input[column][family]);
+            }
+        }
+        Ok(Self {
+            input,
+            output,
+            is_input,
+            output_to_input,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Node {
     Terminal(u128),
@@ -159,6 +274,7 @@ impl AddStore {
         right: NodeId,
         level: u16,
         variables: u16,
+        is_input: &[bool],
     ) -> Result<NodeId, String> {
         let zero = self.terminal(0);
         if left == zero || right == zero {
@@ -176,8 +292,8 @@ impl AddStore {
         }
         let top = self.var(left).min(self.var(right));
         let result = if level < top {
-            let child = self.relprod(left, right, level + 1, variables)?;
-            if level % 6 < 3 {
+            let child = self.relprod(left, right, level + 1, variables, is_input)?;
+            if is_input[usize::from(level)] {
                 self.add(child, child)?
             } else {
                 child
@@ -186,9 +302,9 @@ impl AddStore {
             debug_assert_eq!(level, top);
             let (left_low, left_high) = self.children_at(left, top);
             let (right_low, right_high) = self.children_at(right, top);
-            let low = self.relprod(left_low, right_low, level + 1, variables)?;
-            let high = self.relprod(left_high, right_high, level + 1, variables)?;
-            if level % 6 < 3 {
+            let low = self.relprod(left_low, right_low, level + 1, variables, is_input)?;
+            let high = self.relprod(left_high, right_high, level + 1, variables, is_input)?;
+            if is_input[usize::from(level)] {
                 self.add(low, high)?
             } else {
                 self.branch(level, low, high)
@@ -223,6 +339,7 @@ impl AddStore {
         &mut self,
         root: NodeId,
         cache: &mut HashMap<NodeId, NodeId>,
+        layout: &VariableLayout,
     ) -> Result<NodeId, String> {
         if let Some(&renamed) = cache.get(&root) {
             return Ok(renamed);
@@ -230,12 +347,12 @@ impl AddStore {
         let renamed = match self.nodes[root] {
             Node::Terminal(_) => root,
             Node::Branch { var, low, high } => {
-                if var % 6 < 3 {
+                let Some(renamed_var) = layout.output_to_input[usize::from(var)] else {
                     return Err("relational product retained an input variable".to_owned());
-                }
-                let low = self.rename_output_to_input(low, cache)?;
-                let high = self.rename_output_to_input(high, cache)?;
-                self.branch(var - 3, low, high)
+                };
+                let low = self.rename_output_to_input(low, cache, layout)?;
+                let high = self.rename_output_to_input(high, cache, layout)?;
+                self.branch(renamed_var, low, high)
             }
         };
         cache.insert(root, renamed);
@@ -311,14 +428,6 @@ impl AddStore {
     }
 }
 
-fn input_var(column: usize, family: usize) -> u16 {
-    (6 * column + family) as u16
-}
-
-fn output_var(column: usize, family: usize) -> u16 {
-    (6 * column + 3 + family) as u16
-}
-
 fn occupied(legs: VirtualLegs) -> bool {
     legs.column_in == 0
         && legs.column_out == 1
@@ -333,6 +442,7 @@ fn occupied(legs: VirtualLegs) -> bool {
 struct RelationBuild<'a> {
     n: usize,
     tensor: &'a SiteTensorC,
+    layout: &'a VariableLayout,
     d4_top: bool,
     memo: HashMap<(usize, u8), NodeId>,
     entries_examined: u128,
@@ -374,16 +484,16 @@ impl RelationBuild<'_> {
             };
             self.entries_accepted += 1;
             let mut assignments = vec![
-                (input_var(column, 0), entry.legs.column_in),
-                (input_var(column, 1), entry.legs.diag_dr_in),
-                (input_var(column, 2), entry.legs.diag_dl_in),
-                (output_var(column, 0), entry.legs.column_out),
+                (self.layout.input[column][0], entry.legs.column_in),
+                (self.layout.input[column][1], entry.legs.diag_dr_in),
+                (self.layout.input[column][2], entry.legs.diag_dl_in),
+                (self.layout.output[column][0], entry.legs.column_out),
             ];
             if column + 1 < self.n {
-                assignments.push((output_var(column + 1, 1), entry.legs.diag_dr_out));
+                assignments.push((self.layout.output[column + 1][1], entry.legs.diag_dr_out));
             }
             if column > 0 {
-                assignments.push((output_var(column - 1, 2), entry.legs.diag_dl_out));
+                assignments.push((self.layout.output[column - 1][2], entry.legs.diag_dl_out));
             }
             let local = store.cube(
                 &assignments,
@@ -405,18 +515,20 @@ fn build_relation(
     store: &mut AddStore,
     n: usize,
     tensor: &SiteTensorC,
+    layout: &VariableLayout,
     d4_top: bool,
 ) -> Result<(NodeId, u128, u128), String> {
     let mut build = RelationBuild {
         n,
         tensor,
+        layout,
         d4_top,
         memo: HashMap::new(),
         entries_examined: 0,
         entries_accepted: 0,
     };
     let relation = build.suffix(store, 0, 0)?;
-    let fixed_edges = store.cube(&[(output_var(0, 1), 0), (output_var(n - 1, 2), 0)], 1)?;
+    let fixed_edges = store.cube(&[(layout.output[0][1], 0), (layout.output[n - 1][2], 0)], 1)?;
     Ok((
         store.mul(relation, fixed_edges)?,
         build.entries_examined,
@@ -433,6 +545,7 @@ pub struct DdLayerMetric {
 #[derive(Clone, Debug)]
 pub struct WeightedDdResult {
     pub n: usize,
+    pub order: String,
     pub count: u128,
     pub elapsed: Duration,
     pub peak_rss_bytes: u64,
@@ -452,10 +565,14 @@ pub struct WeightedDdResult {
     pub layers: Vec<DdLayerMetric>,
 }
 
-pub fn contract_weighted_dd(n: usize) -> Result<WeightedDdResult, String> {
+pub fn contract_weighted_dd_with_order(
+    n: usize,
+    order: DdOrderSpec,
+) -> Result<WeightedDdResult, String> {
     if n == 0 {
         return Ok(WeightedDdResult {
             n,
+            order: order.label(),
             count: 1,
             elapsed: Duration::ZERO,
             peak_rss_bytes: peak_rss_bytes(),
@@ -479,14 +596,19 @@ pub fn contract_weighted_dd(n: usize) -> Result<WeightedDdResult, String> {
         return Err("weighted DD currently supports N<=21 variable indices".to_owned());
     }
     let start = Instant::now();
+    let layout = VariableLayout::new(n, order)?;
     let tensor = SiteTensorC::sec_vi();
     let mut store = AddStore::default();
     let (normal_relation, normal_examined, normal_accepted) =
-        build_relation(&mut store, n, &tensor, false)?;
-    let (top_relation, top_examined, top_accepted) = build_relation(&mut store, n, &tensor, true)?;
-    let initial = (0..n)
-        .flat_map(|column| (0..3).map(move |family| (input_var(column, family), 0_u8)))
-        .collect::<Vec<_>>();
+        build_relation(&mut store, n, &tensor, &layout, false)?;
+    let (top_relation, top_examined, top_accepted) =
+        build_relation(&mut store, n, &tensor, &layout, true)?;
+    let mut initial = Vec::with_capacity(3 * n);
+    for column in 0..n {
+        for family in 0..3 {
+            initial.push((layout.input[column][family], 0_u8));
+        }
+    }
     let mut boundary = store.cube(&initial, 1)?;
     let peak_relation_nodes = store
         .reachable_count(&[normal_relation])
@@ -502,9 +624,9 @@ pub fn contract_weighted_dd(n: usize) -> Result<WeightedDdResult, String> {
         } else {
             normal_relation
         };
-        let output = store.relprod(boundary, relation, 0, variables)?;
+        let output = store.relprod(boundary, relation, 0, variables, &layout.is_input)?;
         let mut rename_cache = HashMap::new();
-        boundary = store.rename_output_to_input(output, &mut rename_cache)?;
+        boundary = store.rename_output_to_input(output, &mut rename_cache, &layout)?;
         let boundary_nodes = store.reachable_count(&[boundary]);
         peak_boundary_nodes = peak_boundary_nodes.max(boundary_nodes);
         peak_live_nodes = peak_live_nodes.max(store.reachable_count(&[boundary, relation]));
@@ -517,12 +639,17 @@ pub fn contract_weighted_dd(n: usize) -> Result<WeightedDdResult, String> {
     let mut final_root = boundary;
     let mut restrict_cache = HashMap::new();
     for column in 0..n {
-        final_root = store.restrict(final_root, input_var(column, 0), true, &mut restrict_cache);
+        final_root = store.restrict(
+            final_root,
+            layout.input[column][0],
+            true,
+            &mut restrict_cache,
+        );
     }
     let mut sum_cache = HashMap::new();
     for column in 0..n {
-        final_root = store.sum_variable(final_root, input_var(column, 1), &mut sum_cache)?;
-        final_root = store.sum_variable(final_root, input_var(column, 2), &mut sum_cache)?;
+        final_root = store.sum_variable(final_root, layout.input[column][1], &mut sum_cache)?;
+        final_root = store.sum_variable(final_root, layout.input[column][2], &mut sum_cache)?;
     }
     let count = match store.nodes[final_root] {
         Node::Terminal(value) => value,
@@ -532,6 +659,7 @@ pub fn contract_weighted_dd(n: usize) -> Result<WeightedDdResult, String> {
     };
     Ok(WeightedDdResult {
         n,
+        order: order.label(),
         count,
         elapsed: start.elapsed(),
         peak_rss_bytes: peak_rss_bytes(),
@@ -550,6 +678,10 @@ pub fn contract_weighted_dd(n: usize) -> Result<WeightedDdResult, String> {
         relprod_hits: store.relprod_hits,
         layers,
     })
+}
+
+pub fn contract_weighted_dd(n: usize) -> Result<WeightedDdResult, String> {
+    contract_weighted_dd_with_order(n, DdOrderSpec::default())
 }
 
 #[cfg(test)]

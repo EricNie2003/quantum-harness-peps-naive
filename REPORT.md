@@ -983,3 +983,12 @@ nodes/support >0.8，故 **REJECT fixed order，KEEP 为 E22 canonical baseline*
 
 完整报告：`experiments/e21_weighted_dd/REPORT.md`；raw CSV：
 `benchmarks/e21_weighted_dd_release.csv`。
+
+## 23. E22：actual-node DD order search
+
+54 个 exact variable layouts 中，固定 `FamilyPaired-Reverse-201` 相对 E21 在 N=8/9 将
+peak boundary nodes 从 1,232/4,421 降到 969/3,441（21.3%/22.2%），通过两档 node
+gate；N=10 收益回落到 13.0%。所有候选保留相同 C、D4 与边界，只改变变量树。
+
+**KEEP order-search mechanism，REJECT 当前 DD production**：选中顺序仍比 direct D4 慢
+80–105x。完整报告：`experiments/e22_dd_order_search/REPORT.md`。

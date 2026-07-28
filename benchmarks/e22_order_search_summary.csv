@@ -1,0 +1,8 @@
+N,candidate,evaluated_candidates,elapsed_s,peak_live_nodes,peak_boundary_nodes,peak_relation_nodes,allocated_nodes,node_reduction_vs_e21
+8,E21-SiteBlocked-Forward-012,54,0.007248100,1757,1232,526,13657,0.000000
+8,search-best-FamilyPaired-Forward-102,54,0.009801400,1392,968,425,19575,0.214286
+8,selected-FamilyPaired-Reverse-201,54,0.014105200,1393,969,425,29657,0.213474
+9,E21-SiteBlocked-Forward-012,54,0.029325400,5029,4421,610,46089,0.000000
+9,search-best-and-selected-FamilyPaired-Reverse-201,54,0.044637400,3983,3441,544,73164,0.221443
+10,E21-SiteBlocked-Forward-012,1,0.095228700,12376,11683,694,124225,0.000000
+10,selected-FamilyPaired-Reverse-201,1,0.134405300,10844,10167,678,179404,0.129590
