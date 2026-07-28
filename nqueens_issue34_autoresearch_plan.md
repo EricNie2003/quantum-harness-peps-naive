@@ -256,6 +256,43 @@ E1 完成前不并行启动 E2；E2 完成后的 keep/reject 结果决定 E3 的
 - E6 sort-reduce、E7 CRT、E8 slicing 及后续方向均未启动；
 - 恢复研究时应从当前 main baseline 新建独立 worktree，不能从被拒分支继续。
 
+## I. 五方向强制复盘后的计划修订（2026-07-28）
+
+用户已要求继续优化。根据 `AGENTS.md` 的 five-direction review gate，在第六个方向前已经完成
+`docs/five_direction_review_01.md`。该复盘推翻了“继续优先做 hash/allocator 微调”的近期
+计划。
+
+关键新证据：
+
+- 当前 PEPS N=14：11.0897 s / 666.17 MiB；
+- 同硬件单线程 DFS N=14：0.0703587 s，PEPS 慢约 157.6x；
+- 同硬件 16-thread DFS N=14：0.0057339 s，PEPS 慢约 1933.9x；
+- E1/E3/E5a 都没有降低 5,479,934 的 peak support；
+- 最重层 merge ratio 只有约 1.08–1.21。
+
+因此接下来的执行队列改为：
+
+1. **E6：由显式 \(C\) 自动生成 exact row operator。**
+   - 作用：测出可移除的局域 contraction 开销上限；
+   - correctness：N≤8 全部可达 parent boundary 与逐格点后端逐项一致；
+   - keep：N=12、13 至少 2x，或 N=14 的局域工作量降低至少 10x；
+   - 限制：即使 KEEP，也不宣称它已解决 support explosion。
+2. **E7：exact ZDD/BDD boundary representation。**
+   - 目标：不改变 \(C\) 语义的未来行为等价类压缩；
+   - keep：连续两个 N 的节点数比 explicit support 低至少 30%；
+   - 固定原型时间盒，失败即停止。
+3. **E8：direct-TN oracle 与 ordering 小规模比较。**
+   - 只接受实际 sparse support 或增长率下降；
+   - dense treewidth proxy 单独下降不构成 KEEP。
+4. **E9：有条件的 sort-reduce。**
+   - 当前低 merge ratio 下优先级下降；
+   - 只有 candidate/unique 比或顺序内存模型显示收益才启动。
+5. **E10：并行与 slicing。**
+   - serial PEPS 尚慢单线程 DFS 两个数量级，暂不以并行掩盖算法 gap。
+
+flat hash、allocator、独立 hasher 降级为配套工程；CRT 保留为大 N exactness 必做项，但不再
+被当作速度/support 优化。
+
 ---
 
 # 0. 执行摘要

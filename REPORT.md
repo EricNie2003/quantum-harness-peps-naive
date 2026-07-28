@@ -380,3 +380,22 @@ cargo build --release --bin dfs_bitmask
 
 - `benchmarks/dfs_bitmask_single_release.csv`
 - `benchmarks/dfs_bitmask_16t_release.csv`
+
+## 12. E1–E5 强制研究复盘
+
+完成 E1、E2、E3、E4a、E5a 后，按照 `AGENTS.md` 的 five-direction review gate 暂停新
+实验并完成复盘。完整文档见 `docs/five_direction_review_01.md`。
+
+最重要的新结论是：当前 PEPS 在 N=14 相比单线程 DFS 慢约 157.6x，相比 16-thread DFS
+慢约 1933.9x。E1、E3、E5a 分别消除了局域扫描、降低 bytes/state、消除了 partial Vec
+分配，但 peak support 始终为 5,479,934。E2 和 E4a 失败说明 reserve 时机和 hasher 计算
+不是主要瓶颈。
+
+因此研究优先级已从 HashMap 微调改为：
+
+1. 从显式 \(C\) 自动生成 exact row operator，测量剩余局域开销；
+2. exact ZDD/BDD 或未来行为等价类，尝试结构性压缩 boundary support；
+3. 只有实际 sparse support 下降时才保留新 ordering；
+4. 在 serial gap 显著缩小前，不用并行度掩盖算法差距。
+
+第六方向开始前的所有 review 和修订要求均已记录。
