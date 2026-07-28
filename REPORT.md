@@ -905,3 +905,16 @@ CRT、消融和最终 DFS benchmark 改为所有 KEEP 候选的强制工程阶�
 E19 明确采用“D4 外层 sector + 内层非对称路径搜索”的组合，但不假设必然有收益。候选集
 必须包含当前 D4 row baseline，并按 aggregate actual nnz、RSS 和 wall time 选择；sector
 拆分导致的跨 sector merge 损失也计入总成本。
+
+## 21. E18：online exact future quotient
+
+E18 用递归 memoized complete signature 取代 E14 的 forward graph + backward second pass；
+每条 C-derived concrete transition 仅生成一次。N=10–13 class/support 比仍为
+16.30%、15.56%、14.73%、10.56%，且计数全部正确。
+
+但总时间相对同 revision D4 baseline 仍慢 2.93x、3.51x、3.67x、4.44x，没有达到 2x
+gate。**KEEP 作为更好的 exact quotient oracle，REJECT production replacement**。瓶颈是
+在 class merge 生效前仍要 memoize 全部 concrete reachable states。
+
+完整报告：`experiments/e18_online_future_quotient/REPORT.md`；raw CSV：
+`benchmarks/e18_online_future_quotient_release.csv`。

@@ -30,6 +30,19 @@ pub struct FutureQuotientResult {
     pub layers: Vec<QuotientLayerMetric>,
 }
 
+#[derive(Clone, Debug)]
+pub struct OnlineFutureQuotientResult {
+    pub n: usize,
+    pub count: u128,
+    pub peak_concrete_states: usize,
+    pub peak_future_classes: usize,
+    pub concrete_states: usize,
+    pub future_classes: usize,
+    pub transitions: u128,
+    pub elapsed: Duration,
+    pub peak_rss_bytes: u64,
+}
+
 fn successors(
     n: usize,
     row: usize,
@@ -46,6 +59,123 @@ fn successors(
         .into_iter()
         .map(|(successor, weight)| (PackedBoundary::pack(successor, n), weight))
         .collect())
+}
+
+struct OnlineContext<'a> {
+    n: usize,
+    operator: &'a CompiledRowOperator,
+    state_classes: Vec<HashMap<PackedBoundary, usize>>,
+    signature_classes: Vec<HashMap<Vec<(usize, u128)>, usize>>,
+    class_values: Vec<Vec<u128>>,
+    transitions: u128,
+}
+
+impl OnlineContext<'_> {
+    fn class_of(&mut self, row: usize, state: PackedBoundary) -> Result<usize, String> {
+        if let Some(&class) = self.state_classes[row].get(&state) {
+            return Ok(class);
+        }
+        if row == self.n {
+            let board_mask = (1_u64 << self.n) - 1;
+            let class = usize::from(state.columns(self.n) == board_mask);
+            self.state_classes[row].insert(state, class);
+            return Ok(class);
+        }
+
+        let terms = successors(self.n, row, self.operator, state, true)?;
+        self.transitions = self
+            .transitions
+            .checked_add(terms.len() as u128)
+            .ok_or_else(|| "online transition counter overflow".to_owned())?;
+        let mut targets = HashMap::<usize, u128>::new();
+        for (successor, weight) in terms {
+            let target_class = self.class_of(row + 1, successor)?;
+            let accumulated = targets.entry(target_class).or_default();
+            *accumulated = accumulated
+                .checked_add(weight)
+                .ok_or_else(|| "online signature multiplicity overflow".to_owned())?;
+        }
+        let mut signature = targets.into_iter().collect::<Vec<_>>();
+        signature.sort_unstable_by_key(|&(target, _)| target);
+        let class = if let Some(&class) = self.signature_classes[row].get(&signature) {
+            class
+        } else {
+            let value =
+                signature
+                    .iter()
+                    .try_fold(0_u128, |sum, &(target_class, multiplicity)| {
+                        let contribution = multiplicity
+                            .checked_mul(self.class_values[row + 1][target_class])
+                            .ok_or_else(|| "online class multiplication overflow".to_owned())?;
+                        sum.checked_add(contribution)
+                            .ok_or_else(|| "online class addition overflow".to_owned())
+                    })?;
+            let class = self.signature_classes[row].len();
+            self.signature_classes[row].insert(signature, class);
+            self.class_values[row].push(value);
+            class
+        };
+        self.state_classes[row].insert(state, class);
+        Ok(class)
+    }
+}
+
+pub fn analyze_online_future_equivalence(n: usize) -> Result<OnlineFutureQuotientResult, String> {
+    if n == 0 {
+        return Ok(OnlineFutureQuotientResult {
+            n,
+            count: 1,
+            peak_concrete_states: 1,
+            peak_future_classes: 1,
+            concrete_states: 1,
+            future_classes: 1,
+            transitions: 0,
+            elapsed: Duration::ZERO,
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+    if n > 42 {
+        return Err("online future quotient uses the packed u128 N<=42 frontier".to_owned());
+    }
+    let start = Instant::now();
+    let operator = CompiledRowOperator::compile(&SiteTensorC::sec_vi())?;
+    let initial = PackedBoundary::pack(
+        BoundaryState {
+            columns: 0,
+            diag_dr: 0,
+            diag_dl: 0,
+        },
+        n,
+    );
+    let mut context = OnlineContext {
+        n,
+        operator: &operator,
+        state_classes: (0..=n).map(|_| HashMap::new()).collect(),
+        signature_classes: (0..=n).map(|_| HashMap::new()).collect(),
+        class_values: (0..=n).map(|_| Vec::new()).collect(),
+        transitions: 0,
+    };
+    context.class_values[n] = vec![0, 1];
+    let initial_class = context.class_of(0, initial)?;
+    let count = context.class_values[0][initial_class];
+    let peak_concrete_states = context
+        .state_classes
+        .iter()
+        .map(HashMap::len)
+        .max()
+        .unwrap_or(1);
+    let peak_future_classes = context.class_values.iter().map(Vec::len).max().unwrap_or(1);
+    Ok(OnlineFutureQuotientResult {
+        n,
+        count,
+        peak_concrete_states,
+        peak_future_classes,
+        concrete_states: context.state_classes.iter().map(HashMap::len).sum(),
+        future_classes: context.class_values.iter().map(Vec::len).sum(),
+        transitions: context.transitions,
+        elapsed: start.elapsed(),
+        peak_rss_bytes: peak_rss_bytes(),
+    })
 }
 
 pub fn analyze_future_equivalence(n: usize) -> Result<FutureQuotientResult, String> {
@@ -224,7 +354,7 @@ pub fn analyze_future_equivalence(n: usize) -> Result<FutureQuotientResult, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::analyze_future_equivalence;
+    use super::{analyze_future_equivalence, analyze_online_future_equivalence};
     use crate::known_count;
 
     #[test]
@@ -233,6 +363,15 @@ mod tests {
             let result = analyze_future_equivalence(n).unwrap();
             assert_eq!(result.count, known_count(n).unwrap(), "N={n}");
             assert!(result.peak_future_classes <= result.peak_reachable_states);
+        }
+    }
+
+    #[test]
+    fn online_future_quotient_matches_known_counts_through_n9() {
+        for n in 0..=9 {
+            let result = analyze_online_future_equivalence(n).unwrap();
+            assert_eq!(result.count, known_count(n).unwrap(), "N={n}");
+            assert!(result.peak_future_classes <= result.peak_concrete_states.max(2));
         }
     }
 }
