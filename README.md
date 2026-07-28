@@ -32,3 +32,10 @@ cargo run --release --bin dfs_bitmask -- bench 17 --min 8 --threads 16 --repeats
 
 See [`REPORT.md`](REPORT.md) for the construction, boundary convention,
 correctness checks, and measured benchmarks.
+
+## Optional exact CUDA experiment
+
+The `codex/exp-gpu-sort-reduce` branch contains an optional CUDA/CUB backend
+with exact `compact64` and `wide128` arithmetic schemes. CPU builds remain the
+default and do not require CUDA. See [`GPU_SETUP_WSL.md`](GPU_SETUP_WSL.md) for
+the Ubuntu/WSL2 build, device self-test, solve, and benchmark commands.

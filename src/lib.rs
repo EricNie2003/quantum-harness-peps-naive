@@ -7,6 +7,9 @@
 
 pub mod dfs_bitmask;
 
+#[cfg(feature = "cuda")]
+pub mod gpu;
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -976,7 +979,22 @@ pub fn peak_rss_bytes() -> u64 {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub fn peak_rss_bytes() -> u64 {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return 0;
+    };
+    status
+        .lines()
+        .find_map(|line| {
+            let value = line.strip_prefix("VmHWM:")?;
+            let kibibytes = value.split_whitespace().next()?.parse::<u64>().ok()?;
+            kibibytes.checked_mul(1024)
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn peak_rss_bytes() -> u64 {
     0
 }

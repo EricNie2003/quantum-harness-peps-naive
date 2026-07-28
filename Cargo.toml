@@ -6,8 +6,17 @@ description = "Exact naive row-by-row sparse contraction of the N-Queens PEPS"
 license = "MIT"
 default-run = "nqueens-peps-naive"
 
+[features]
+default = []
+cuda = []
+
 [dependencies]
 rayon = "1.10"
+
+[[bin]]
+name = "gpu_sort_reduce"
+path = "src/bin/gpu_sort_reduce.rs"
+required-features = ["cuda"]
 
 [profile.release]
 codegen-units = 1

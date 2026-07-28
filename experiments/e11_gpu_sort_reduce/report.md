@@ -47,8 +47,9 @@ Peak device allocation must stay below the configured 85% limit.
 - CPU comparison: serial, detected physical-core, and logical-thread PEPS;
   select the fastest parallel median only after recording every raw result.
 - Required fields: count/verification, host wall and CUDA-event time, phase
-  times, peak device bytes, peak support, compiled tensor examinations,
-  row-operator candidates, and accepted candidates.
+  times, Linux `VmHWM` peak host RSS, tracked peak device bytes, peak support,
+  compiled tensor examinations, row-operator candidates, and accepted
+  candidates.
 - Raw result target: `benchmarks/e11_gpu_sort_reduce_rtx4060.csv`.
 
 This direction changes throughput and memory placement only. Even if kept, it
