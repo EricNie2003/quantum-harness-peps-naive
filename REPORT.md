@@ -970,3 +970,16 @@ E21 是区分新旧主假设的首个实验；E24 是不依赖新表示成功的
 - `experiments/e20_bidirectional_separator/REPORT.md`
 
 对应 raw CSV 已汇总为 `benchmarks/e16_*` 至 `benchmarks/e20_*`。
+
+## 22. E21：C-derived exact weighted DD
+
+E21 从 rank-1 v0 boundary 开始，以显式 17-entry C 构造 exact ADD row relation，并在
+relational product 递归中立即消去输入 virtual bits；production path 从未物化 sparse
+frontier。N=1–9 计数全部正确。
+
+固定 column-interleaved order 未通过性能 gate：N=8/9 peak boundary nodes 为
+1,232/4,421，而 D4 support 仅 272/1,210；时间慢 71.4x/58.9x。连续两档
+nodes/support >0.8，故 **REJECT fixed order，KEEP 为 E22 canonical baseline**。
+
+完整报告：`experiments/e21_weighted_dd/REPORT.md`；raw CSV：
+`benchmarks/e21_weighted_dd_release.csv`。
