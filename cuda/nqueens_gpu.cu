@@ -64,7 +64,7 @@ void copy_string(unsigned char* destination, size_t capacity, const std::string&
 }
 
 uint64_t checked_add_host(uint64_t left, uint64_t right, const char* label) {
-    if (right > std::numeric_limits<uint64_t>::max() - left) {
+    if (right > ~uint64_t{0} - left) {
         throw std::overflow_error(std::string(label) + " overflow");
     }
     return left + right;
@@ -210,7 +210,7 @@ template <typename Function> uint64_t time_cuda_phase(Function&& function) {
 }
 
 __host__ __device__ uint64_t mask_for_n(uint32_t n) {
-    return n == 64 ? std::numeric_limits<uint64_t>::max() : ((uint64_t{1} << n) - 1);
+    return n == 64 ? ~uint64_t{0} : ((uint64_t{1} << n) - 1);
 }
 
 __host__ __device__ uint32_t bit_at(uint64_t value, uint32_t index) {
@@ -293,7 +293,7 @@ template <typename Coefficient> struct CoefficientOperations;
 
 template <> struct CoefficientOperations<uint64_t> {
     __device__ static uint64_t add(uint64_t left, uint64_t right, int* overflow) {
-        if (right > std::numeric_limits<uint64_t>::max() - left) {
+        if (right > ~uint64_t{0} - left) {
             atomicExch(overflow, 1);
         }
         return left + right;
@@ -453,11 +453,11 @@ __global__ void arithmetic_self_test_kernel(int* flags, U128* carry_result) {
     flags[1] = 0;
     flags[2] = 0;
     (void)CoefficientOperations<uint64_t>::add(
-        std::numeric_limits<uint64_t>::max(), 1, &flags[0]);
+        ~uint64_t{0}, 1, &flags[0]);
     *carry_result = CoefficientOperations<U128>::add(
-        U128{std::numeric_limits<uint64_t>::max(), 0}, U128{1, 0}, &flags[1]);
+        U128{~uint64_t{0}, 0}, U128{1, 0}, &flags[1]);
     (void)CoefficientOperations<U128>::add(
-        U128{std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()},
+        U128{~uint64_t{0}, ~uint64_t{0}},
         U128{1, 0},
         &flags[2]);
 }
