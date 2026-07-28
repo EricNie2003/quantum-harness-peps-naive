@@ -5,7 +5,7 @@
 - Branch: `codex/exp-gpu-sort-reduce`
 - Worktree: `.worktrees/gpu-sort-reduce`
 - Baseline commit: `cccc5211ee15e8bcf20c283142e1597be9776db8`
-- Candidate implementation commit: `0bac7f55fcc9aef324591320568f11fafbbb909b`
+- Candidate implementation commit: `4a2165c28d1ae5881946ade6b5bac1bddcdb4d85`
 - User-directed priority change: evaluate GPU throughput immediately after the
   E1--E10 review, before the review's structural-support directions.
 
@@ -104,6 +104,13 @@ The release suite passed all 17 CPU/tensor tests. The N=8 smoke solve returned
 bytes. In addition, Clang 18 parsed the CUDA translation unit in both host-only
 mode and device-only `sm_89` mode using temporary API stubs; this catches CUDA
 C++ syntax problems but is explicitly not an `nvcc` build or device test.
+
+The RTX 4060 WSL host subsequently passed the same 17-test CPU suite with Rust
+1.97.1. Its first NVHPC `nvcc` build rejected device uses of the host standard
+library's `std::numeric_limits<uint64_t>::max()`. Candidate commit `4a2165c`
+replaced those constants with the exactly equivalent all-one `uint64_t`
+expression and passed the local host/device syntax and CPU gates. Native build
+and runtime validation remain pending after that compatibility fix.
 
 The device self-test, once run, checks stable two-word sort ordering, wide-key
 equality/run lengths, compact overflow detection, two-limb carry, and two-limb
