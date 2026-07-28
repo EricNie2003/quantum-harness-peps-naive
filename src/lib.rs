@@ -821,6 +821,20 @@ pub fn contract_rows_d4_batched_sparse_parallel_sort(
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedSparseParallelSort)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShardMode {
+    Prefix,
+    Mixed,
+}
+
+pub fn contract_rows_d4_sharded_sparse_sort_reduce(
+    n: usize,
+    shards: usize,
+    shard_mode: ShardMode,
+) -> Result<ContractionResult, String> {
+    contract_rows_d4_sharded_sparse_kernel(n, shards, shard_mode)
+}
+
 pub fn contract_rows_d4_batched_radix(n: usize) -> Result<ContractionResult, String> {
     contract_rows_d4_optimized_kernel(n, D4KernelVariant::ArenaBatchedRadix)
 }
@@ -930,6 +944,217 @@ fn append_compiled_sparse_d4(
         output.push((PackedBoundary::pack(successor, n), weight));
     }
     Ok(output.len() - start_len)
+}
+
+fn shard_index(key: u128, n: usize, shards: usize, mode: ShardMode) -> usize {
+    let mask = shards - 1;
+    match mode {
+        ShardMode::Prefix => {
+            let shard_bits = shards.trailing_zeros() as usize;
+            let used_bits = 3 * n;
+            let shift = used_bits.saturating_sub(shard_bits);
+            ((key >> shift) as usize) & mask
+        }
+        ShardMode::Mixed => {
+            let mut mixed = key as u64 ^ (key >> 64) as u64;
+            mixed ^= mixed >> 30;
+            mixed = mixed.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            mixed ^= mixed >> 27;
+            mixed = mixed.wrapping_mul(0x94d0_49bb_1331_11eb);
+            mixed ^= mixed >> 31;
+            mixed as usize & mask
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_compiled_sparse_sharded_d4(
+    n: usize,
+    operator: &CompiledRowOperator,
+    parent: BoundaryState,
+    parent_weight: u128,
+    top_row: bool,
+    shard_mode: ShardMode,
+    counters: &mut RowCounters,
+    output: &mut [Vec<(PackedBoundary, u128)>],
+) -> Result<usize, String> {
+    let occupied = operator.occupied;
+    let legs = occupied.legs;
+    if legs.row_in != 0 {
+        return Err(
+            "sharded sparse iterator requires occupied row_in to match the left v0 boundary"
+                .to_owned(),
+        );
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let matching_bits = |mask: u64, required: u8| -> Result<u64, String> {
+        match required {
+            0 => Ok((!mask) & board_mask),
+            1 => Ok(mask & board_mask),
+            _ => Err("compiled C entry contains a non-binary incoming signal".to_owned()),
+        }
+    };
+    let mut positions = matching_bits(parent.columns, legs.column_in)?
+        & matching_bits(parent.diag_dr, legs.diag_dr_in)?
+        & matching_bits(parent.diag_dl, legs.diag_dl_in)?;
+    let base_weight = parent_weight
+        .checked_mul(occupied.value)
+        .ok_or_else(|| "coefficient overflow in sharded sparse row operator".to_owned())?;
+    let mut appended = 0_usize;
+
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        let column = selected.trailing_zeros() as usize;
+        positions &= positions - 1;
+        counters.operator_candidates += 1;
+        counters.operator_matched += 1;
+        let successor = BoundaryState {
+            columns: replace_bit(parent.columns, column, legs.column_out),
+            diag_dr: (replace_bit(parent.diag_dr, column, legs.diag_dr_out) << 1) & board_mask,
+            diag_dl: replace_bit(parent.diag_dl, column, legs.diag_dl_out) >> 1,
+        };
+        let mut weight = base_weight;
+        if top_row {
+            let Some(multiplicity) = top_row_vertical_orbit_weight(n, successor) else {
+                continue;
+            };
+            weight = weight
+                .checked_mul(multiplicity)
+                .ok_or_else(|| "coefficient overflow in sharded D4 weighting".to_owned())?;
+        }
+        let packed = PackedBoundary::pack(successor, n);
+        let selected_shard = shard_index(packed.0, n, output.len(), shard_mode);
+        output[selected_shard].push((packed, weight));
+        appended += 1;
+    }
+    Ok(appended)
+}
+
+fn contract_rows_d4_sharded_sparse_kernel(
+    n: usize,
+    shards: usize,
+    shard_mode: ShardMode,
+) -> Result<ContractionResult, String> {
+    if n > 42 {
+        return Err("the packed u128 virtual-boundary backend supports N <= 42".to_owned());
+    }
+    if shards == 0 || !shards.is_power_of_two() || shards > 256 {
+        return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if n == 0 {
+        return Ok(ContractionResult {
+            n,
+            count: 1,
+            elapsed: Duration::ZERO,
+            peak_states: 1,
+            tensor_entries_examined: 0,
+            tensor_entries_matched: 0,
+            row_operator_candidates: 0,
+            row_operator_matched: 0,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        });
+    }
+
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let initial_packed = PackedBoundary::pack(initial, n);
+    let mut boundary = (0..shards)
+        .map(|_| Vec::<(PackedBoundary, u128)>::new())
+        .collect::<Vec<_>>();
+    boundary[shard_index(initial_packed.0, n, shards, shard_mode)].push((initial_packed, 1_u128));
+    let mut candidates = (0..shards)
+        .map(|_| Vec::<(PackedBoundary, u128)>::new())
+        .collect::<Vec<_>>();
+    let mut peak_states = 1;
+    let mut total_operator_candidates = 0_u128;
+    let mut total_operator_matched = 0_u128;
+    let mut layers = Vec::with_capacity(n);
+    let total_start = Instant::now();
+
+    for row in 0..n {
+        let layer_start = Instant::now();
+        let input_states = boundary.iter().map(Vec::len).sum();
+        let mut counters = RowCounters::default();
+        let mut completed_row_terms = 0_u128;
+        for shard in &mut candidates {
+            shard.clear();
+        }
+
+        for parent_shard in &boundary {
+            for &(packed_parent, parent_weight) in parent_shard {
+                completed_row_terms += append_compiled_sparse_sharded_d4(
+                    n,
+                    &operator,
+                    packed_parent.unpack(n),
+                    parent_weight,
+                    row == 0,
+                    shard_mode,
+                    &mut counters,
+                    &mut candidates,
+                )? as u128;
+            }
+        }
+
+        candidates
+            .par_iter_mut()
+            .try_for_each(|shard| -> Result<(), String> {
+                shard.sort_unstable_by_key(|(state, _)| state.0);
+                reduce_sorted_candidates(shard, row)
+            })?;
+        let output_states = candidates.iter().map(Vec::len).sum();
+        let output_weight = candidates
+            .iter()
+            .flatten()
+            .try_fold(0_u128, |sum, (_, value)| {
+                sum.checked_add(*value)
+                    .ok_or_else(|| format!("coefficient sum overflow after row {}", row + 1))
+            })?;
+        peak_states = peak_states.max(output_states);
+        total_operator_candidates += counters.operator_candidates;
+        total_operator_matched += counters.operator_matched;
+        std::mem::swap(&mut boundary, &mut candidates);
+        layers.push(LayerMetric {
+            row,
+            input_states,
+            tensor_entries_examined: counters.tensor_examined,
+            tensor_entries_matched: counters.tensor_matched,
+            row_operator_candidates: counters.operator_candidates,
+            row_operator_matched: counters.operator_matched,
+            completed_row_terms,
+            output_states,
+            output_weight,
+            elapsed: layer_start.elapsed(),
+            peak_rss_bytes: peak_rss_bytes(),
+        });
+    }
+
+    let board_mask = (1_u64 << n) - 1;
+    let count = boundary
+        .iter()
+        .flatten()
+        .filter(|(state, _)| state.columns(n) == board_mask)
+        .try_fold(0_u128, |sum, (_, value)| {
+            sum.checked_add(*value)
+                .ok_or_else(|| "final coefficient sum overflow".to_owned())
+        })?;
+    Ok(ContractionResult {
+        n,
+        count,
+        elapsed: total_start.elapsed(),
+        peak_states,
+        tensor_entries_examined: 17,
+        tensor_entries_matched: 17,
+        row_operator_candidates: total_operator_candidates,
+        row_operator_matched: total_operator_matched,
+        peak_rss_bytes: peak_rss_bytes(),
+        layers,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -1898,10 +2123,12 @@ pub fn peak_rss_bytes() -> u64 {
 #[cfg(test)]
 mod e24_kernel_tests {
     use super::{
-        PackedBoundary, contract_rows_d4_arena_sort_reduce, contract_rows_d4_batched_radix,
-        contract_rows_d4_batched_sort_reduce, contract_rows_d4_batched_sparse_parallel_sort,
-        contract_rows_d4_batched_sparse_sort_reduce, contract_rows_d4_deferred_sparse_sort_reduce,
-        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sparse_sort_reduce, sort_packed_radix,
+        PackedBoundary, ShardMode, contract_rows_d4_arena_sort_reduce,
+        contract_rows_d4_batched_radix, contract_rows_d4_batched_sort_reduce,
+        contract_rows_d4_batched_sparse_parallel_sort, contract_rows_d4_batched_sparse_sort_reduce,
+        contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_orbit_sort_reduce,
+        contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
+        sort_packed_radix,
     };
 
     #[test]
@@ -2000,6 +2227,29 @@ mod e24_kernel_tests {
                 candidate.row_operator_matched, baseline.row_operator_matched,
                 "N={n}"
             );
+        }
+    }
+
+    #[test]
+    fn sharded_variants_match_serial_sparse_contraction() {
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_sparse_sort_reduce(n).unwrap();
+            for mode in [ShardMode::Prefix, ShardMode::Mixed] {
+                for shards in [1, 8] {
+                    let candidate =
+                        contract_rows_d4_sharded_sparse_sort_reduce(n, shards, mode).unwrap();
+                    assert_eq!(candidate.count, baseline.count, "N={n}");
+                    assert_eq!(candidate.peak_states, baseline.peak_states, "N={n}");
+                    assert_eq!(
+                        candidate.row_operator_candidates, baseline.row_operator_candidates,
+                        "N={n}"
+                    );
+                    assert_eq!(
+                        candidate.row_operator_matched, baseline.row_operator_matched,
+                        "N={n}"
+                    );
+                }
+            }
         }
     }
 }
