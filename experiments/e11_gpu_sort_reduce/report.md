@@ -5,7 +5,7 @@
 - Branch: `codex/exp-gpu-sort-reduce`
 - Worktree: `.worktrees/gpu-sort-reduce`
 - Baseline commit: `cccc5211ee15e8bcf20c283142e1597be9776db8`
-- Candidate commit: pending implementation and RTX 4060 validation
+- Candidate implementation commit: `0bac7f55fcc9aef324591320568f11fafbbb909b`
 - User-directed priority change: evaluate GPU throughput immediately after the
   E1--E10 review, before the review's structural-support directions.
 
@@ -55,3 +55,72 @@ Peak device allocation must stay below the configured 85% limit.
 This direction changes throughput and memory placement only. Even if kept, it
 does not reduce the measured 5--6x-per-step support growth and does not by
 itself establish a route to `Q(28)`.
+
+## Implemented contraction
+
+The optional Cargo feature `cuda` compiles one CUDA C++ translation unit with
+CUDA Runtime and CUB. Rust first constructs the explicit `B` and `C`, invokes
+the existing fail-closed `CompiledRowOperator::compile(&C)`, and passes the
+resulting occupied transition plus the 17/17 construction counters across a
+size-checked C ABI. CUDA independently rejects any descriptor other than the
+unit Sec. VI `0 -> 1` transition on all four channels.
+
+For each row, the device counts accepted tensor-derived transitions, performs
+an exclusive scan, expands candidates, radix-sorts packed open-virtual-boundary
+keys, run-length encodes equal keys, and reduces each run with checked integer
+addition. `compact64` uses one 64-bit key and coefficient. `wide128` stores
+both as two explicit 64-bit limbs and obtains lexicographic 128-bit ordering
+with stable low-word then high-word radix passes. Neither backend uses floating
+point arithmetic for keys or coefficients. CUDA events use floating point only
+inside the runtime's elapsed-time reporting API and never affect the count.
+
+The initial all-zero boundary applies `v0`. Each row accepts exactly the unique
+occupied branch emitted by the compiled row MPO, which applies the row `v1`.
+The diagonal shifts discard signals leaving either edge, contracting those
+endpoints with `v2=(1,1)`. The final device sum filters for an all-one column
+boundary, applying the column `v1`; remaining diagonal bits are unrestricted.
+
+## Local implementation validation
+
+Validation host: Intel i5-2450M, 2 physical cores / 4 logical threads,
+x86_64 Linux; `rustc 1.97.1 (8bab26f4f 2026-07-14)`, Cargo 1.97.1. This host
+has no `nvcc` and no CUDA device, so it cannot establish native CUDA linking,
+runtime correctness, RTX performance, or the keep gate.
+
+Commands completed successfully at the candidate commit:
+
+```text
+cargo fmt --all -- --check
+NQUEENS_CUDA_SKIP_NATIVE=1 cargo check --features cuda --all-targets
+cargo test --release
+cargo clippy --all-targets --release -- -D warnings
+git diff --check
+bash -n scripts/benchmark_gpu_wsl.sh
+cargo run --release -- solve 8 --layers
+```
+
+The release suite passed all 17 CPU/tensor tests. The N=8 smoke solve returned
+`Q(8)=92`, `verified=true`, peak support 538, and Linux `VmHWM` 2,224,128
+bytes. In addition, Clang 18 parsed the CUDA translation unit in both host-only
+mode and device-only `sm_89` mode using temporary API stubs; this catches CUDA
+C++ syntax problems but is explicitly not an `nvcc` build or device test.
+
+The device self-test, once run, checks stable two-word sort ordering, wide-key
+equality/run lengths, compact overflow detection, two-limb carry, and two-limb
+overflow detection. The feature-gated integration test then compares both GPU
+schemes against every CPU layer and known counts through N=10.
+
+## Benchmark and decision status
+
+**PENDING GPU VALIDATION — no KEEP/REJECT decision.** The experiment is not
+complete until the RTX 4060 runs the native build, device self-test, integration
+tests, and preregistered benchmark. The collector is
+`scripts/benchmark_gpu_wsl.sh`; it records environment/build details and writes
+raw files under `benchmarks/e11_gpu_sort_reduce_rtx4060_raw/` plus the combined
+GPU CSV at `benchmarks/e11_gpu_sort_reduce_rtx4060.csv`. No benchmark values
+from another algorithm or machine have been copied into this report.
+
+Host RSS is Linux process-lifetime `VmHWM`; repeated samples therefore share a
+cumulative high-water mark. Device memory is the peak of allocations owned and
+tracked by this backend. It excludes CUDA driver/context allocations and other
+processes, so the two measurements must remain separate in the final decision.
