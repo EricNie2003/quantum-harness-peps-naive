@@ -11,6 +11,8 @@ use crate::{SiteTensorC, VirtualLegs, peak_rss_bytes};
 
 type NodeId = usize;
 
+pub const EDGE_QUOTIENT_PRIMES: [u64; 2] = [1_000_000_007, 1_000_000_009];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DdColumnOrder {
     Forward,
@@ -428,6 +430,139 @@ impl AddStore {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct WeightedEdge {
+    weight: u64,
+    node: usize,
+}
+
+#[derive(Default)]
+struct WeightedQuotientStore {
+    unique: HashMap<(u16, WeightedEdge, WeightedEdge), usize>,
+    nonzero_edges: usize,
+    field_multiplications: u128,
+    inversions: u128,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EdgeQuotientMetric {
+    pub nodes: usize,
+    pub nonzero_edges: usize,
+    pub field_multiplications: u128,
+    pub inversions: u128,
+}
+
+fn field_mul(left: u64, right: u64, prime: u64, operations: &mut u128) -> u64 {
+    *operations += 1;
+    ((u128::from(left) * u128::from(right)) % u128::from(prime)) as u64
+}
+
+fn field_pow(mut base: u64, mut exponent: u64, prime: u64, operations: &mut u128) -> u64 {
+    let mut result = 1_u64;
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            result = field_mul(result, base, prime, operations);
+        }
+        base = field_mul(base, base, prime, operations);
+        exponent >>= 1;
+    }
+    result
+}
+
+impl WeightedQuotientStore {
+    fn branch(
+        &mut self,
+        var: u16,
+        low: WeightedEdge,
+        high: WeightedEdge,
+        prime: u64,
+    ) -> WeightedEdge {
+        if low == high {
+            return low;
+        }
+        if low.weight == 0 && high.weight == 0 {
+            return WeightedEdge { weight: 0, node: 0 };
+        }
+        let pivot = if low.weight != 0 {
+            low.weight
+        } else {
+            high.weight
+        };
+        self.inversions += 1;
+        let inverse = field_pow(pivot, prime - 2, prime, &mut self.field_multiplications);
+        let normalized_low = WeightedEdge {
+            weight: field_mul(low.weight, inverse, prime, &mut self.field_multiplications),
+            node: low.node,
+        };
+        let normalized_high = WeightedEdge {
+            weight: field_mul(high.weight, inverse, prime, &mut self.field_multiplications),
+            node: high.node,
+        };
+        if normalized_low == normalized_high {
+            return WeightedEdge {
+                weight: field_mul(
+                    pivot,
+                    normalized_low.weight,
+                    prime,
+                    &mut self.field_multiplications,
+                ),
+                node: normalized_low.node,
+            };
+        }
+        let key = (var, normalized_low, normalized_high);
+        let node = if let Some(&node) = self.unique.get(&key) {
+            node
+        } else {
+            let node = self.unique.len() + 1;
+            self.unique.insert(key, node);
+            self.nonzero_edges += usize::from(normalized_low.weight != 0);
+            self.nonzero_edges += usize::from(normalized_high.weight != 0);
+            node
+        };
+        WeightedEdge {
+            weight: pivot,
+            node,
+        }
+    }
+}
+
+fn edge_quotient_metric(store: &AddStore, root: NodeId, prime: u64) -> EdgeQuotientMetric {
+    fn transform(
+        add: &AddStore,
+        node: NodeId,
+        prime: u64,
+        weighted: &mut WeightedQuotientStore,
+        cache: &mut HashMap<NodeId, WeightedEdge>,
+    ) -> WeightedEdge {
+        if let Some(&edge) = cache.get(&node) {
+            return edge;
+        }
+        let edge = match add.nodes[node] {
+            Node::Terminal(value) => WeightedEdge {
+                weight: (value % u128::from(prime)) as u64,
+                node: 0,
+            },
+            Node::Branch { var, low, high } => {
+                let low = transform(add, low, prime, weighted, cache);
+                let high = transform(add, high, prime, weighted, cache);
+                weighted.branch(var, low, high, prime)
+            }
+        };
+        cache.insert(node, edge);
+        edge
+    }
+
+    let mut weighted = WeightedQuotientStore::default();
+    let mut cache = HashMap::new();
+    let _root = transform(store, root, prime, &mut weighted, &mut cache);
+    EdgeQuotientMetric {
+        nodes: weighted.unique.len() + 1,
+        nonzero_edges: weighted.nonzero_edges,
+        field_multiplications: weighted.field_multiplications,
+        inversions: weighted.inversions,
+    }
+}
+
 fn occupied(legs: VirtualLegs) -> bool {
     legs.column_in == 0
         && legs.column_out == 1
@@ -540,6 +675,7 @@ fn build_relation(
 pub struct DdLayerMetric {
     pub row: usize,
     pub boundary_nodes: usize,
+    pub edge_quotients: [EdgeQuotientMetric; 2],
 }
 
 #[derive(Clone, Debug)]
@@ -551,6 +687,9 @@ pub struct WeightedDdResult {
     pub peak_rss_bytes: u64,
     pub peak_live_nodes: usize,
     pub peak_boundary_nodes: usize,
+    pub peak_edge_quotient_nodes: [usize; 2],
+    pub edge_quotient_field_multiplications: [u128; 2],
+    pub edge_quotient_inversions: [u128; 2],
     pub peak_relation_nodes: usize,
     pub allocated_nodes: usize,
     pub terminal_count: usize,
@@ -578,6 +717,9 @@ pub fn contract_weighted_dd_with_order(
             peak_rss_bytes: peak_rss_bytes(),
             peak_live_nodes: 1,
             peak_boundary_nodes: 1,
+            peak_edge_quotient_nodes: [1, 1],
+            edge_quotient_field_multiplications: [0, 0],
+            edge_quotient_inversions: [0, 0],
             peak_relation_nodes: 1,
             allocated_nodes: 1,
             terminal_count: 1,
@@ -616,6 +758,9 @@ pub fn contract_weighted_dd_with_order(
     let variables = (6 * n) as u16;
     let mut peak_live_nodes = store.reachable_count(&[boundary, normal_relation, top_relation]);
     let mut peak_boundary_nodes = store.reachable_count(&[boundary]);
+    let mut peak_edge_quotient_nodes = [1_usize; 2];
+    let mut edge_quotient_field_multiplications = [0_u128; 2];
+    let mut edge_quotient_inversions = [0_u128; 2];
     let mut layers = Vec::with_capacity(n);
 
     for row in 0..n {
@@ -628,11 +773,21 @@ pub fn contract_weighted_dd_with_order(
         let mut rename_cache = HashMap::new();
         boundary = store.rename_output_to_input(output, &mut rename_cache, &layout)?;
         let boundary_nodes = store.reachable_count(&[boundary]);
+        let edge_quotients =
+            EDGE_QUOTIENT_PRIMES.map(|prime| edge_quotient_metric(&store, boundary, prime));
+        for index in 0..2 {
+            peak_edge_quotient_nodes[index] =
+                peak_edge_quotient_nodes[index].max(edge_quotients[index].nodes);
+            edge_quotient_field_multiplications[index] +=
+                edge_quotients[index].field_multiplications;
+            edge_quotient_inversions[index] += edge_quotients[index].inversions;
+        }
         peak_boundary_nodes = peak_boundary_nodes.max(boundary_nodes);
         peak_live_nodes = peak_live_nodes.max(store.reachable_count(&[boundary, relation]));
         layers.push(DdLayerMetric {
             row,
             boundary_nodes,
+            edge_quotients,
         });
     }
 
@@ -665,6 +820,9 @@ pub fn contract_weighted_dd_with_order(
         peak_rss_bytes: peak_rss_bytes(),
         peak_live_nodes,
         peak_boundary_nodes,
+        peak_edge_quotient_nodes,
+        edge_quotient_field_multiplications,
+        edge_quotient_inversions,
         peak_relation_nodes,
         allocated_nodes: store.nodes.len(),
         terminal_count: store.terminals.len(),
@@ -692,11 +850,13 @@ mod tests {
     #[test]
     fn weighted_dd_matches_known_counts_through_n6() {
         for n in 0..=6 {
+            let result = contract_weighted_dd(n).unwrap();
+            assert_eq!(result.count, known_count(n).unwrap(), "N={n}");
             assert_eq!(
-                contract_weighted_dd(n).unwrap().count,
-                known_count(n).unwrap(),
+                result.peak_edge_quotient_nodes[0], result.peak_edge_quotient_nodes[1],
                 "N={n}"
             );
+            assert!(result.peak_edge_quotient_nodes[0] <= result.peak_boundary_nodes);
         }
     }
 }
