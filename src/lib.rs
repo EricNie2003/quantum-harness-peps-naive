@@ -5,6 +5,8 @@
 //! `C`. The solver applies sparse entries of `C` site by site and contracts a
 //! complete row before moving the boundary down by one lattice spacing.
 
+pub mod dfs_bitmask;
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -440,9 +442,35 @@ pub fn contract_rows(n: usize) -> Result<ContractionResult, String> {
 }
 
 pub fn known_count(n: usize) -> Option<u128> {
-    const COUNTS: [u128; 17] = [
-        1, 1, 0, 0, 2, 10, 4, 40, 92, 352, 724, 2_680, 14_200, 73_712, 365_596, 2_279_184,
+    const COUNTS: [u128; 28] = [
+        1,
+        1,
+        0,
+        0,
+        2,
+        10,
+        4,
+        40,
+        92,
+        352,
+        724,
+        2_680,
+        14_200,
+        73_712,
+        365_596,
+        2_279_184,
         14_772_512,
+        95_815_104,
+        666_090_624,
+        4_968_057_848,
+        39_029_188_884,
+        314_666_222_712,
+        2_691_008_701_644,
+        24_233_937_684_440,
+        227_514_171_973_736,
+        2_207_893_435_808_352,
+        22_317_699_616_364_044,
+        234_907_967_154_122_528,
     ];
     COUNTS.get(n).copied()
 }
