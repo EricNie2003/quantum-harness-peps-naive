@@ -905,3 +905,16 @@ CRT、消融和最终 DFS benchmark 改为所有 KEEP 候选的强制工程阶�
 E19 明确采用“D4 外层 sector + 内层非对称路径搜索”的组合，但不假设必然有收益。候选集
 必须包含当前 D4 row baseline，并按 aggregate actual nnz、RSS 和 wall time 选择；sector
 拆分导致的跨 sector merge 损失也计入总成本。
+
+## 21. E17：two-block sparse PLUQ feasibility
+
+E17 对 E15 的空间左右展平构造 exact normalized pivot rows 与左系数因子。秩继续在两个
+素域中一致，但 factor fill-in 否决了 plain PLUQ production update：N=12 support 仅
+98,939，rank 8,334，而 `sum_k nnz(U[:,k]) nnz(V[k,:])` 达 25,875,207（261.5x
+support）。在应用非可分的 C-derived row transfer 前，仅枚举 factor products 就已远比
+direct sparse contraction 昂贵。
+
+因此 **REJECT 当前 E17 sparse-PLUQ representation**。低 rank 证据仍成立，但未来必须使用
+保持 column/diagonal tensor-product structure 的层次基，而不是只优化 pivot kernel。
+完整报告：`experiments/e17_exact_pluq/REPORT.md`；raw CSV：
+`benchmarks/e17_pluq_probe_release.csv`。

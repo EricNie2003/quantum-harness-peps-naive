@@ -19,10 +19,22 @@ pub struct RankDiagnosticResult {
     pub right_patterns: usize,
     pub ranks: [usize; 2],
     pub peak_elimination_row_nnz: [usize; 2],
+    pub left_factor_nnz: [usize; 2],
+    pub right_factor_nnz: [usize; 2],
+    pub reconstruction_products: [u128; 2],
     pub row_operator_candidates: u128,
     pub row_operator_matched: u128,
     pub elapsed: Duration,
     pub peak_rss_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SparseFactorMetrics {
+    rank: usize,
+    peak_row_nnz: usize,
+    left_factor_nnz: usize,
+    right_factor_nnz: usize,
+    reconstruction_products: u128,
 }
 
 fn mod_pow(mut base: u64, mut exponent: u64, prime: u64) -> u64 {
@@ -37,7 +49,10 @@ fn mod_pow(mut base: u64, mut exponent: u64, prime: u64) -> u64 {
     result
 }
 
-fn sparse_rank(entries: &[(u64, u64, u128)], prime: u64) -> Result<(usize, usize), String> {
+fn sparse_factor_metrics(
+    entries: &[(u64, u64, u128)],
+    prime: u64,
+) -> Result<SparseFactorMetrics, String> {
     let mut rows = HashMap::<u64, HashMap<u64, u64>>::new();
     for &(row_key, column_key, coefficient) in entries {
         let value = (coefficient % u128::from(prime)) as u64;
@@ -59,12 +74,17 @@ fn sparse_rank(entries: &[(u64, u64, u128)], prime: u64) -> Result<(usize, usize
     let mut rows = rows.into_values().collect::<Vec<_>>();
     rows.sort_unstable_by_key(HashMap::len);
     let mut pivots = HashMap::<u64, HashMap<u64, u64>>::new();
+    let mut pivot_left_counts = HashMap::<u64, usize>::new();
+    let mut left_factor_nnz = 0_usize;
     let mut peak_row_nnz = rows.iter().map(HashMap::len).max().unwrap_or(0);
 
     for mut row in rows {
+        let mut row_factor_nnz = 0_usize;
         while let Some(pivot_column) = row.keys().copied().min() {
             if let Some(pivot_row) = pivots.get(&pivot_column) {
                 let factor = row[&pivot_column];
+                row_factor_nnz += 1;
+                *pivot_left_counts.entry(pivot_column).or_default() += 1;
                 for (&column, &pivot_value) in pivot_row {
                     let subtraction =
                         ((u128::from(factor) * u128::from(pivot_value)) % u128::from(prime)) as u64;
@@ -78,18 +98,41 @@ fn sparse_rank(entries: &[(u64, u64, u128)], prime: u64) -> Result<(usize, usize
                 }
                 peak_row_nnz = peak_row_nnz.max(row.len());
             } else {
+                let scale = row[&pivot_column];
                 let inverse = mod_pow(row[&pivot_column], prime - 2, prime);
                 for value in row.values_mut() {
                     *value =
                         ((u128::from(*value) * u128::from(inverse)) % u128::from(prime)) as u64;
                 }
                 peak_row_nnz = peak_row_nnz.max(row.len());
+                row_factor_nnz += usize::from(scale != 0);
+                *pivot_left_counts.entry(pivot_column).or_default() += usize::from(scale != 0);
                 pivots.insert(pivot_column, row);
                 break;
             }
         }
+        left_factor_nnz += row_factor_nnz;
     }
-    Ok((pivots.len(), peak_row_nnz))
+    let right_factor_nnz = pivots.values().map(HashMap::len).sum();
+    let reconstruction_products = pivots
+        .iter()
+        .map(|(pivot, row)| {
+            (*pivot_left_counts.get(pivot).unwrap_or(&0) as u128) * row.len() as u128
+        })
+        .sum();
+    Ok(SparseFactorMetrics {
+        rank: pivots.len(),
+        peak_row_nnz,
+        left_factor_nnz,
+        right_factor_nnz,
+        reconstruction_products,
+    })
+}
+
+#[cfg(test)]
+fn sparse_rank(entries: &[(u64, u64, u128)], prime: u64) -> Result<(usize, usize), String> {
+    let metrics = sparse_factor_metrics(entries, prime)?;
+    Ok((metrics.rank, metrics.peak_row_nnz))
 }
 
 fn spatial_flatten_key(state: BoundaryState, n: usize) -> (u64, u64) {
@@ -194,8 +237,16 @@ pub fn diagnose_peak_layer_rank(n: usize) -> Result<RankDiagnosticResult, String
         .len();
     let mut ranks = [0_usize; 2];
     let mut peak_elimination_row_nnz = [0_usize; 2];
+    let mut left_factor_nnz = [0_usize; 2];
+    let mut right_factor_nnz = [0_usize; 2];
+    let mut reconstruction_products = [0_u128; 2];
     for (index, prime) in RANK_PRIMES.into_iter().enumerate() {
-        (ranks[index], peak_elimination_row_nnz[index]) = sparse_rank(&entries, prime)?;
+        let metrics = sparse_factor_metrics(&entries, prime)?;
+        ranks[index] = metrics.rank;
+        peak_elimination_row_nnz[index] = metrics.peak_row_nnz;
+        left_factor_nnz[index] = metrics.left_factor_nnz;
+        right_factor_nnz[index] = metrics.right_factor_nnz;
+        reconstruction_products[index] = metrics.reconstruction_products;
     }
 
     Ok(RankDiagnosticResult {
@@ -206,6 +257,9 @@ pub fn diagnose_peak_layer_rank(n: usize) -> Result<RankDiagnosticResult, String
         right_patterns,
         ranks,
         peak_elimination_row_nnz,
+        left_factor_nnz,
+        right_factor_nnz,
+        reconstruction_products,
         row_operator_candidates: total_candidates,
         row_operator_matched: total_matched,
         elapsed: start.elapsed(),
