@@ -1839,3 +1839,86 @@ E52 的内存下降不能改变这个结论：N=28 prefix 本来就很小，限�
 expansion time，不是 task-tape RSS。要让 Q(28) 现实可算，最终必须获得
 数量级的 exact node reduction 或大规模并行吞吐；cache layout 的几个百分
 点常数不足以做到。
+
+## 39. E56–E60 强制五方向复盘：99.98% 热核还能否显著提速
+
+### 39.1 结论
+
+**当前证据不再支持继续用同类 CPU-local 热核微优化追求显著收益。**
+E56--E60 没有一项达到 N=16/17 两档至少 5% 的 keep gate；production
+仍为 E46 direct scalar-u64 + E47 certified last-6。
+
+这不是证明该函数永远不能再快，而是一个有五类独立消融支持的工程结论：
+现有 last-6 已删除最宽 terminal 层的大部分通用控制；剩余局部机会在
+N=17 单点最多约 4%，在 N=16 接近噪声。要获得两位数或改变 scaling 的
+收益，必须减少 exact C transitions/node 数，或使用能吞下大量独立
+transitions 的不同执行平台，而不是继续改同一 scalar recursion 的
+layout/branch/call。
+
+### 39.2 五项结果与机制
+
+| 方向 | 最佳/核心实测 | 机制结论 | 决策 |
+|:---|:---|:---|:---:|
+| E56 last-7/8 | last-7 N=16/17 快 1.9%/3.8%；last-8 回退 | last-6 后再删除一层递归的 work 已较窄；不是 code explosion | REJECT |
+| E57 deferred overflow | N=16 慢 0.3%，N=17 快 1.3% | predicted-cold checked branch 很便宜；sticky overflow bit制造等价 dependency | REJECT |
+| E58 generated depths | fully-inline N=16/17 快 0.9%/4.0%，`.text` +11.5% | upper-depth dynamic checks确有小成本，但绝大多数 work 已在 terminal loops | REJECT |
+| E59 scalar ILP 2/4 | batch2 慢 17.9%/15.9%；batch4 慢 19.6%/24.5% | recursive lane utilization仅 47%--70%；divergence/array state超过 ILP | REJECT |
+| E60 vertical canonical suffix | even N extra duplicates 0.02%--0.04%；odd N 5.2%--5.8% | first-row orbit已消掉偶数 N 的 vertical symmetry；奇数中心 orbit复用不足两档 10% gate | online REJECT，diagnostic KEEP |
+
+E56 与 E58 的收益都随 remaining depth 增长，在 N=17 比 N=16 大；即使
+把二者的 measured improvements乐观相加，N=16 仍不到 3%，无法满足跨
+N keep gate。E57 表明 exactness branch不是主要成本。E59 则排除了“不用
+SIMD、只做 scalar lockstep就能隐藏 dependency”的假设。E60 首次把
+symmetry cache 的预期复用在分配 table 前定量化，避免重演 E54 的全量
+lookup 开销。
+
+### 39.3 对 99.979% profile 的最终解释
+
+Samply 的 99.979262% leaf share 仍然正确。它说明：
+
+1. prefix、allocator、task scheduler 和 reduction 已不是优化重点；
+2. 几乎全部 wall 都随 exact tail transition 数线性增长；
+3. 但函数内部并没有对应 99% 的同质冗余。函数符号同时覆盖 upper
+   recursion、fully-inlined last-6 和 exact accumulation。
+
+E56--E58 直接删除了 depth/call/failure control，稳定收益仍小于 5%；
+E59 试图用 independent states填充流水线反而显著变慢；E60 证明现有 row
+cut 没有足够未利用 symmetry。因此热点的主成本是必须执行的 billions of
+low-reuse C transitions，而不是某一条可删的 helper、cache miss 或
+branch。
+
+本轮仍没有 PMU cache/branch/IPC counters；WPR/xperf限制见 §38。这里的
+判断来自 same-revision wall、exact work counters、active-lane histogram、
+code size和 canonical duplicate rate，不把推断伪装成硬件 counter实测。
+
+### 39.4 当前性能边界与后续选择
+
+E56--E60 全部没有改变 recursive nodes/accepted C entries，所以 §37 的
+production/DFS checkpoint 与 Q(28) 约 800--1,000 年投影不变。局部
+hot-kernel微调可能继续产生 1%--4%，但已不值得连续占用五方向周期。
+
+若目标仍是显著提升，下一研究阶段应从以下机制中选择，而不是自动启动：
+
+1. actual-sparse separator/contraction-path search，包括此前暂缓的
+   greedy/treeSA；目标必须是减少 materialized support 或 tail nodes；
+2. 保持 explicit-C fidelity 的 meet-in-the-middle/双向 separator join，
+   检验能否改变单向 row recursion 的 exponent；
+3. 只针对 odd N center orbit 的 vertical merge，作为小于约 5%的
+   parity-specific补丁，而不是主路线；
+4. exact finite-field GPU/many-core traversal，以吞吐而非 scalar ILP
+   隐藏独立 transition latency；
+5. 新的 symmetry-canonical representation，启动前必须像 E60 一样先证明
+   至少两档 >10% actual duplicate/node reduction。
+
+本检查点停在 E60，未启动 E61。实验报告/raw data：
+
+- `experiments/e56_last78/REPORT.md`
+- `benchmarks/e56_last78_ablation.csv`
+- `experiments/e57_detected_tail/REPORT.md`
+- `benchmarks/e57_detected_tail_formal.csv`
+- `experiments/e58_generated_tail/REPORT.md`
+- `benchmarks/e58_generated_tail_formal.csv`
+- `experiments/e59_scalar_ilp/REPORT.md`
+- `benchmarks/e59_scalar_ilp_formal.csv`
+- `experiments/e60_symmetry_suffix/REPORT.md`
+- `benchmarks/e60_vertical_suffix_audit.csv`

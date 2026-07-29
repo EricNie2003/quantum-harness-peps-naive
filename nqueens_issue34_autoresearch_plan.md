@@ -3132,3 +3132,46 @@ E51--E55 共同否定“剩余时间主要受普通 CPU cache locality 限制”
    常数路线全部触发 kill 后，才依据 §T 的 actual-sparse protocol重排优先级。
 9. 完成 E60 后再次执行 five-direction review；当前检查点严格停在 E55，
    E56 尚未开始。
+
+## W. E56–E60 hotspot 复盘后的暂停与转向（2026-07-29）
+
+完整复盘见 `REPORT.md` §39。E56--E59 全部 REJECT；E60 online
+canonical optimization REJECT、exact diagnostic KEEP。production仍是
+E46 direct scalar-u64 + E47 certified last-6。
+
+### W.1 热点优化判定
+
+1. last-7、deferred overflow、generated fixed depths 的最佳两档收益分别
+   只有约 1.9%/3.8%、-0.3%/1.3%、0.9%/4.0%；
+2. scalar ILP 因 47%--70% lane utilization 退化 16%--25%；
+3. vertical canonical extra duplicates 在 even N 几乎为零，odd N 约5%，
+   没有两档达到 10%；
+4. 99.979% symbol hotspot 的主体是必须执行的 low-reuse explicit-C
+   transitions。现有 scalar last-6 附近仍可能有几个百分点常数，但没有
+   稳定两位数收益证据；
+5. 不再自动注册 E61--E65 同类 CPU 微优化。下一阶段必须选择能减少
+   nodes/support 的 contraction representation，或使用显著不同的
+   exact parallel throughput平台。
+
+### W.2 可选转向及启动条件
+
+| 候选 | 可行性 / 难度 | 启动前证据 | 主要 gate |
+|:---|:---:|:---|:---|
+| actual-sparse greedy/treeSA separator path | 中低 / 5 | 用户重新启用 treeSA；macro edge有 actual support/node cost而非 dense FLOP proxy | frozen winning execution 两档快 15% 或 support降 25% |
+| explicit-C meet-in-the-middle separator join | 低 / 5 | 完整列出 cut bonds、v0/v1/v2 endpoints和exact join key | N=12--16 两档 nodes/time降 20%，RSS有可扩展上界 |
+| odd-N center-orbit vertical merge | 高 / 2 | 仅以 E60 measured 5%复用为上界，不外推 even N | odd N wall快 3%，even N不退化 >1% |
+| finite-field GPU/many-core tail | 中低 / 5 | certified per-prime kernel、设备整数吞吐和transfer budget | N=17/18 execution快 3x，所有 residues/CRT replay exact |
+| new symmetry-canonical representation | 低 / 5 | 在线实现前先证明两档 actual duplicates/node reduction >10% | wall/nodes两档降 8%，canonical cost/RSS受限 |
+
+### W.3 停止规则
+
+1. 当前严格停在 E60 checkpoint；没有用户方向选择前不启动 E61。
+2. 若恢复 treeSA，沿用 §T actual-sparse protocol，搜索时间可排除但
+   winning contraction execution 的全部 setup/materialization必须计入。
+3. meet-in-the-middle 或新 symmetry 路线必须先完成 explicit B/C、
+   boundary与separator fidelity proof；不能把 conventional DFS split
+   改名为 PEPS。
+4. odd-N merge只能作为 parity-specific小优化，不能引用 odd N 5%复用
+   宣称全 N scaling 改善。
+5. 任何 GPU/many-core结果必须用 certified finite-field/CRT，不得使用
+   float、rounding、SVD 或概率性 hash count。
