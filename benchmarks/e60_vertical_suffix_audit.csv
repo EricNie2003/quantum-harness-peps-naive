@@ -1,0 +1,5 @@
+base_revision,code_patch_sha256,N,split_depth,remaining_rows,tasks,exact_unique,canonical_unique,exact_duplicates,additional_symmetry_duplicates,self_symmetric_states,exact_duplicate_rate,additional_symmetry_duplicate_rate,total_canonical_duplicate_rate,elapsed_s,peak_rss_bytes,threads,algorithm_class
+641d906,e86967b516fa2edb8481ed239fdffbfaca353b7abfce931dc287674a90f19013,14,5,9,27034,26928,26917,106,11,0,0.003920988,0.000408497,0.004327883,0.002934800,7766016,8,explicit_C_vertical_canonical_suffix_audit
+641d906,e86967b516fa2edb8481ed239fdffbfaca353b7abfce931dc287674a90f19013,15,5,10,47460,47318,44570,142,2748,1,0.002991993,0.058075151,0.060893384,0.005217800,9715712,8,explicit_C_vertical_canonical_suffix_audit
+641d906,e86967b516fa2edb8481ed239fdffbfaca353b7abfce931dc287674a90f19013,16,5,11,70906,70745,70731,161,14,0,0.002270612,0.000197894,0.002468056,0.010189900,12750848,8,explicit_C_vertical_canonical_suffix_audit
+641d906,e86967b516fa2edb8481ed239fdffbfaca353b7abfce931dc287674a90f19013,17,5,12,114434,114228,108258,206,5970,1,0.001800164,0.052263893,0.053969974,0.011550300,14307328,8,explicit_C_vertical_canonical_suffix_audit
