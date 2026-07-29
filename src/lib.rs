@@ -3955,6 +3955,96 @@ fn build_wide_crt_tasks(
     ))
 }
 
+fn build_wide_crt_tasks_cache_budget(
+    n: usize,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+    minimum_tail_tasks: usize,
+    total_task_bytes_budget: usize,
+) -> Result<(Vec<WideCrtTask>, usize, u128, u128, u128), String> {
+    let mut tasks = vec![WideCrtTask {
+        state: BoundaryState {
+            columns: 0,
+            diag_dr: 0,
+            diag_dl: 0,
+        },
+        orbit_weight: 1,
+    }];
+    let mut split_depth = 0_usize;
+    let mut prefix_nodes = 0_u128;
+    let mut prefix_accepted_entries = 0_u128;
+    let mut prefix_kept_entries = 0_u128;
+    while split_depth < n {
+        let top_row = split_depth == 0;
+        let mut next = Vec::with_capacity(tasks.len().saturating_mul(n - split_depth));
+        let mut row_nodes = 0_u128;
+        let mut row_accepted_entries = 0_u128;
+        let mut row_kept_entries = 0_u128;
+        for task in &tasks {
+            row_nodes = row_nodes
+                .checked_add(1)
+                .ok_or_else(|| "cache-cut prefix node counter overflow".to_owned())?;
+            let mut positions = recursive_tail_positions(task.state, relation, board_mask);
+            while positions != 0 {
+                let selected = positions & positions.wrapping_neg();
+                positions &= positions - 1;
+                row_accepted_entries = row_accepted_entries
+                    .checked_add(1)
+                    .ok_or_else(|| "cache-cut prefix accepted counter overflow".to_owned())?;
+                let successor =
+                    recursive_tail_successor(task.state, selected, relation, board_mask);
+                let orbit_weight = if top_row {
+                    let Some(weight) = top_row_vertical_orbit_weight(n, successor) else {
+                        continue;
+                    };
+                    u64::try_from(weight)
+                        .map_err(|_| "cache-cut orbit weight does not fit u64".to_owned())?
+                } else {
+                    1
+                };
+                let local_value = u64::try_from(relation.value)
+                    .map_err(|_| "cache-cut local C value does not fit u64".to_owned())?;
+                next.push(WideCrtTask {
+                    state: successor,
+                    orbit_weight: task
+                        .orbit_weight
+                        .checked_mul(orbit_weight)
+                        .and_then(|value| value.checked_mul(local_value))
+                        .ok_or_else(|| "cache-cut prefix weight overflow".to_owned())?,
+                });
+                row_kept_entries = row_kept_entries
+                    .checked_add(1)
+                    .ok_or_else(|| "cache-cut prefix kept counter overflow".to_owned())?;
+            }
+        }
+        let next_bytes = next
+            .len()
+            .checked_mul(std::mem::size_of::<WideCrtTask>())
+            .ok_or_else(|| "cache-cut task byte count overflow".to_owned())?;
+        if tasks.len() >= minimum_tail_tasks && next_bytes > total_task_bytes_budget {
+            break;
+        }
+        tasks = next;
+        split_depth += 1;
+        prefix_nodes = prefix_nodes
+            .checked_add(row_nodes)
+            .ok_or_else(|| "cache-cut prefix node reduction overflow".to_owned())?;
+        prefix_accepted_entries = prefix_accepted_entries
+            .checked_add(row_accepted_entries)
+            .ok_or_else(|| "cache-cut accepted-entry reduction overflow".to_owned())?;
+        prefix_kept_entries = prefix_kept_entries
+            .checked_add(row_kept_entries)
+            .ok_or_else(|| "cache-cut kept-entry reduction overflow".to_owned())?;
+    }
+    Ok((
+        tasks,
+        split_depth,
+        prefix_nodes,
+        prefix_accepted_entries,
+        prefix_kept_entries,
+    ))
+}
+
 #[inline]
 fn add_residue(left: u64, right: u64, prime: u64) -> u64 {
     let sum = left + right;
@@ -4255,6 +4345,82 @@ fn prepare_wide_crt_prefix(
     Ok((plan, relation, tasks, prefix))
 }
 
+fn prepare_wide_crt_prefix_cache_budget(
+    n: usize,
+    cache_kib_per_worker: usize,
+) -> Result<
+    (
+        WideCrtPlan,
+        RecursiveTailRelation,
+        Vec<WideCrtTask>,
+        WideCrtPrefixPlan,
+    ),
+    String,
+> {
+    if !matches!(cache_kib_per_worker, 32 | 64 | 128 | 256) {
+        return Err("cache budget must be one of 32/64/128/256 KiB per worker".to_owned());
+    }
+    let plan = wide_crt_plan(n)?;
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let relation = RecursiveTailRelation::compile(&operator)?;
+    let _certified = CertifiedSecViTailPlan::compile(relation)?;
+    let worker_count = rayon::current_num_threads().max(1);
+    if n == 0 {
+        let prefix = WideCrtPrefixPlan {
+            plan: plan.clone(),
+            split_depth: 0,
+            target_tail_tasks: 1,
+            tail_tasks: 1,
+            prefix_nodes: 0,
+            prefix_accepted_entries: 0,
+            prefix_kept_entries: 0,
+            seed_elapsed: Duration::ZERO,
+            peak_rss_bytes: peak_rss_bytes(),
+        };
+        return Ok((
+            plan,
+            relation,
+            vec![WideCrtTask {
+                state: BoundaryState {
+                    columns: 0,
+                    diag_dr: 0,
+                    diag_dl: 0,
+                },
+                orbit_weight: 1,
+            }],
+            prefix,
+        ));
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let minimum_tail_tasks = worker_count.saturating_mul(64);
+    let total_task_bytes_budget = worker_count
+        .checked_mul(cache_kib_per_worker)
+        .and_then(|value| value.checked_mul(1024))
+        .ok_or_else(|| "cache-cut total byte budget overflow".to_owned())?;
+    let seed_start = Instant::now();
+    let (tasks, split_depth, prefix_nodes, prefix_accepted_entries, prefix_kept_entries) =
+        build_wide_crt_tasks_cache_budget(
+            n,
+            relation,
+            board_mask,
+            minimum_tail_tasks,
+            total_task_bytes_budget,
+        )?;
+    let prefix = WideCrtPrefixPlan {
+        plan: plan.clone(),
+        split_depth,
+        target_tail_tasks: minimum_tail_tasks,
+        tail_tasks: tasks.len(),
+        prefix_nodes,
+        prefix_accepted_entries,
+        prefix_kept_entries,
+        seed_elapsed: seed_start.elapsed(),
+        peak_rss_bytes: peak_rss_bytes(),
+    };
+    Ok((plan, relation, tasks, prefix))
+}
+
 pub fn probe_wide_crt_prefix(n: usize) -> Result<WideCrtPrefixPlan, String> {
     let (_, _, _, prefix) = prepare_wide_crt_prefix(n, 512)?;
     Ok(prefix)
@@ -4408,6 +4574,16 @@ pub fn contract_rows_wide_scalar_last_k_with_target(
     )
 }
 
+pub fn contract_rows_wide_scalar_cache_budget_last_six(
+    n: usize,
+    profile_replay: bool,
+    cache_kib_per_worker: usize,
+) -> Result<WideScalarResult, String> {
+    let total_start = Instant::now();
+    let prepared = prepare_wide_crt_prefix_cache_budget(n, cache_kib_per_worker)?;
+    contract_rows_wide_scalar_last_k_prepared(n, profile_replay, u64::MAX, 6, total_start, prepared)
+}
+
 fn contract_rows_wide_scalar_last_k_impl(
     n: usize,
     profile_replay: bool,
@@ -4416,7 +4592,31 @@ fn contract_rows_wide_scalar_last_k_impl(
     microkernel_rows: usize,
 ) -> Result<WideScalarResult, String> {
     let total_start = Instant::now();
-    let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    let prepared = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    contract_rows_wide_scalar_last_k_prepared(
+        n,
+        profile_replay,
+        coefficient_limit,
+        microkernel_rows,
+        total_start,
+        prepared,
+    )
+}
+
+fn contract_rows_wide_scalar_last_k_prepared(
+    n: usize,
+    profile_replay: bool,
+    coefficient_limit: u64,
+    microkernel_rows: usize,
+    total_start: Instant,
+    prepared: (
+        WideCrtPlan,
+        RecursiveTailRelation,
+        Vec<WideCrtTask>,
+        WideCrtPrefixPlan,
+    ),
+) -> Result<WideScalarResult, String> {
+    let (plan, relation, tasks, prefix) = prepared;
     let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
     let scalar_bound_certified = plan.factorial_bound <= u128::from(u64::MAX);
     let tail_start = Instant::now();
@@ -6151,6 +6351,7 @@ mod tests {
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
         contract_rows_wide_crt, contract_rows_wide_scalar,
+        contract_rows_wide_scalar_cache_budget_last_six,
         contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
@@ -6590,6 +6791,23 @@ mod tests {
             }
         }
         assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
+    }
+
+    #[test]
+    fn cache_budget_cuts_preserve_complete_explicit_c_contraction() {
+        for cache_kib_per_worker in [32, 64, 128, 256] {
+            for n in 0..=10 {
+                let result =
+                    contract_rows_wide_scalar_cache_budget_last_six(n, true, cache_kib_per_worker)
+                        .unwrap();
+                assert_eq!(
+                    Some(result.contraction.count),
+                    known_count(n),
+                    "N={n}, cache={cache_kib_per_worker} KiB"
+                );
+            }
+        }
+        assert!(contract_rows_wide_scalar_cache_budget_last_six(8, false, 48).is_err());
     }
 
     #[test]
