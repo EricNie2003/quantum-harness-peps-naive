@@ -3025,3 +3025,52 @@ AVX2 REJECT。当前 production PEPS 在 N=14--18 比仓库 DFS comparator
    8 threads；raw CSV 存 `benchmarks/`；
 6. 完成 E55 后执行下一次 five-direction review；复盘前不得启动 E56。
    当前检查点停在 E50，E51 尚未开始。
+
+## U. 暂缓 treeSA 后的 E51–E55 cache 路线（2026-07-29）
+
+用户在 E51 启动前要求暂缓 treeSA，优先寻找当前 production 的 CPU
+cache-friendly 优化。故本节在不删除历史计划 §T 的前提下，**取代**
+§T.2--T.4 作为 E51--E55 的执行计划；treeSA、跨 N motif 和 treeSA-cut
+D4 均不在本轮启动。
+
+### U.1 hot-path 判断与五个方向
+
+当前 last-6 recursive tail 的子树状态只含三个 `u64` mask，绝大多数
+节点没有 heap 访问；所以不能把任意 arithmetic 微调冒充 cache 优化。
+本轮只接受能明确改变 task working set、cache-line ownership、局部结果
+working set 或 hot code footprint 的方向：
+
+| ID | cache 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E51 | **packed direct-sector task tape** | 将 `BoundaryState + orbit_weight` 从 32-byte AoS 编码为 N<=20 可逆的单个 `u64`；三个 N-bit virtual boundaries 和 vertical-orbit weight 逐 task round-trip；执行仍调用 certified last-6 | 高 / 2 | task bytes 至少降 2x，且 N=16--18 两档 wall 降 5% 或 RSS 降 15% 且 wall 不退化 >2% | 任一 task/count/work replay mismatch，或 wall 两档退化 >3% |
+| E52 | **cache-capacity-aware prefix cut** | 只改变 C-derived prefix 停止位置；所有 sectors 不重不漏；以 E51 实际 task bytes 和预注册 cache budget 选 cut，不读取 known Q(N) 或 benchmark winner | 高 / 2 | N=16--18 两档 wall 降 5%，或 RSS 降 20% 且 wall 不退化 >2%；规则跨 N 固定 | 与手调 target 相比无稳定收益、并行不足，或只对一个 N 特判 |
+| E53 | **cache-line tiled task ownership** | packed task tape 每个 task 只被一个 worker消费；比较 aligned dynamic tiles 与无 atomic 的 contiguous/block-cyclic ownership；exact partial reduction不变 | 高 / 2 | N=16--18 两档 wall 降 5% 或 p90 降 10%；task visits 精确等于 task count | load imbalance 抵消 locality、两档收益 <2%，或重复/遗漏 task |
+| E54 | **per-worker bounded tagged suffix cache** | 仅缓存相同 explicit-C virtual boundary、remaining rows 和 board size 的 exact u64 completion；tag 完整比较，collision 只 miss；固定容量、无跨线程共享；cache-off replay | 中 / 4 | N=16--18 两档 wall 降 8% 或 recursive node work 降 15%，每 worker cache 不超过 512 KiB | hit rate <3%、wall 退化 >3%、容量超限，或任一 tagged hit/replay mismatch |
+| E55 | **last-6 hot-code / I-cache shaping** | 只改变 certified last-4/5/6 的 inline boundary与代码布局；same-revision 保留现有 fully-inline control；逐 N 与 generic C replay | 中高 / 3 | N=16--18 两档 wall 降 5%，且 executable/hot text 不增；或 executable 降 10% 且 wall 不退化 >2% | call overhead 大于 I-cache 收益、两档收益 <2%，或 code layout 影响 exact replay |
+
+### U.2 预注册 benchmark 与消融
+
+1. 严格按 E51 → E52 → E53 → E54 → E55；每项独立
+   worktree/`codex/exp-*` branch。每个 KEEP 才进入后续 production；
+   REJECT 只合入报告和 raw CSV。
+2. 每项至少跑 N=16/17 的同 revision control/candidate；通过早期 gate
+   才跑 N=18。正式 policy：N=16/17 为 1 warmup + 5 repeats，
+   N=18 为 1 warmup + 3 repeats；系统双峰时增加样本而不挑最快值。
+3. 固定 Ryzen 9 7945HX、rustc 1.94、release/thin-LTO、
+   `codegen-units=1`、8 threads。wall 报 median/min/p10/p90，RSS 继续用
+   Windows `PeakWorkingSet64`，并记录 task count/bytes、split depth、
+   accepted C entries 和 exact count。
+4. E51 必须静态断言 packed task size，并对 N=1--20 生成的每个 prefix
+   task做 pack/unpack；weight 位不得覆盖任何 virtual bond。
+5. E52 预注册 cache budget grid 为每 worker 32/64/128/256 KiB；选择器
+   只看下一完整 C row 的 task bytes 和 `threads*64` 的并行下限。
+6. E53 tile grid 为 1/2/4/8/16 个 64-byte cache lines；static contiguous
+   与 block-cyclic 都必须报告 worker task/node imbalance。
+7. E54 只试 4/16/64/256 KiB per-worker direct-mapped 或 2-way tagged
+   tables；key 必须无损包含三个 masks、N 与 remaining rows；禁止概率性
+   结果、无 tag cache 或已知 suffix 表。
+8. E55 比较 fully-inline、regular-inline 与 noinline boundary；记录
+   release executable bytes、clean build time 和 runtime，禁止用
+   `target-cpu=native` 等额外 compiler flag混淆结果。
+9. 五项都完成后执行强制复盘并 push；本轮按用户要求连续执行，但在
+   E55 复盘完成前不得启动 E56。当前仍停在 E50，尚未启动 E51。
