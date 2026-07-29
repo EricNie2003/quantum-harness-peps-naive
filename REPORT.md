@@ -1339,3 +1339,134 @@ apply 的下界。因此不能据此证明“PEPS 永远不可能快过 DFS”�
 E38 C-derived recursive tail、E39 full-D4 canonical augmentation
 on recursive sectors、E40 actual-cost adaptive merge/tail path。完整
 gates 写入研究计划 §Q。在 E40 完成前不得开始 E41。
+
+## 35. E36–E40 强制五方向复盘
+
+### 35.1 结果、机制与决策
+
+| 方向 | 核心实测 | 机制判断 | 决策 |
+|:---|:---|:---|:---:|
+| E36 joint key/coefficient u64 | entry 16→8 bytes；N=15 0.767→0.513 s，RSS 642→328 MB | key 高位、coefficient 低位联合排序；checked 两级 promotion | KEEP |
+| E37 cross-row arenas | N=14/15 0.0809/0.5325→0.0693/0.4656 s；最终配对 RSS 不增 | 两组 row buckets 交替复用，减少 growth/reallocation | KEEP |
+| E38 C-derived recursive tail | 最佳 cut N=14/15 为 0.02224/0.1408 s，RSS 10.7/30.9 MB | 晚层不再 materialize+sort records；successor 逐项 replay compiled C | KEEP |
+| E39 full D4 | full 相对 vertical 只再降 1.3--1.8% nodes；N=15 0.1505→0.1553 s | 除 vertical 外的 action 通常到很晚才可比较，canonical checks 抵消剪枝 | REJECT production；KEEP diagnostic |
+| E40 adaptive certified fast tail | 含选择 N=14/15 0.01197/0.07122 s；DFS 0.01007/0.06600 s | C-certified bit plan、checked u64/u128 replay、last-row v1/v2、chunked tasks | KEEP |
+
+E36 的 N=15 最大 prefix coefficient 仅 797，可放进 19 bits；但实现
+仍检查每次 add/mul，并以人工 1-bit limit 覆盖 joint→E32→E31 两级
+promotion，不能把实测小 coefficient 当成无溢出证明。
+
+E37 最终 7-repeat 反向顺序配对中，N=15 累计提供约 1.008 GB
+跨层 reusable capacity，median 降 12.6%；该累计量不是同时 live
+bytes。首轮 RSS 曾有 0.3--6.3% 波动，复测后未重现，报告没有删除
+这项不确定性。
+
+E38 是本轮的结构转折点。N=15 cut=6 只 materialize 243,380 个 prefix
+sectors，再递归收缩剩余 C tensors；total accepted entries
+91,610,302，已接近 DFS placements 91,883,698。E40 进一步把最佳 cut
+移到 4，support 仅 7,426，total accepted 91,865,192。
+
+### 35.2 Incremental chain 与最终公平对照
+
+同机 Ryzen 9 7945HX、rustc 1.94、release/thin-LTO、8 threads：
+
+| variant | N=14 median | N=15 median | N=14 RSS | N=15 RSS |
+|:---|---:|---:|---:|---:|
+| E32 16-byte merged | 0.12070 s | 0.76741 s | 117.5 MB | 641.8 MB |
+| E36 8-byte merged | 0.08335 s | 0.51327 s | 69.0 MB | 328.2 MB |
+| E37 arena merged | 0.06933 s | 0.46563 s | 69.4 MB | 333.5 MB |
+| E38 generic-u128 hybrid | 0.02224 s | 0.14079 s | 10.7 MB | 30.9 MB |
+| E40 adaptive certified-u64 | 0.01197 s | 0.07122 s | 8.9 MB | 10.7 MB |
+| DFS comparator | 0.01007 s | 0.06600 s | 4.9 MB | 5.1 MB |
+
+E32→E40 累计 wall improvement 为 N=14 10.1x、N=15 10.8x；
+RSS 分别降约 92%/98%。E40 相对 DFS 为 1.19x/1.08x，已经稳定进入
+预注册的 1.2x gate，但尚未在 median 上超过 DFS。Fixed cut=4 的
+N=15 为 0.06859 s（DFS 的 1.04x），说明剩余差距已是几个百分点，
+不是先前的数量级差距。
+
+E40 的 uninstrumented timing 和 u128 metrics replay 分开，口径与 DFS
+一致；selector probe 的时间包含在 E40 wall 中，选择后的 prefix 被直接
+复用。最终 target=`threads*512`：N=14 先测 cut3 support=682，再选择
+cut4 support=4,811；N=15 直接选择 cut4 support=7,426。较早的 64-task
+threshold 连续选得过深，已由 fixed-cut 消融推翻。
+
+Raw data：
+
+- `benchmarks/e36_joint_u64_release.csv`
+- `benchmarks/e37_arena_reuse_release.csv`
+- `benchmarks/e38_recursive_tail_release.csv`
+- `benchmarks/e38_recursive_tail_cut_grid.csv`
+- `benchmarks/e39_recursive_d4_release.csv`
+- `benchmarks/e40_certified_fast_tail_cut_grid.csv`
+- `benchmarks/e40_adaptive_release.csv`
+
+### 35.3 稀疏性、对称性和路径搜索的结论
+
+用户关于“必须引入稀疏性和对称性才可能跑赢 DFS”的判断有一半得到
+强支持：
+
+- **稀疏性是必要的。** 17-entry C 的 occupied-position iterator、
+  sparse prefix sectors 和避免 late-layer record materialization 是
+  10x 改善的基础；dense/generic frontier 没有竞争力。
+- **vertical symmetry 有稳定约 2x work 收益。** 它在第一行就可比较，
+  成本近乎为零。
+- **full D4 不是当前额外加速来源。** E39 已安全实现八个 actions、
+  partial canonical pruning 和 stabilizer orbit 1/2/4/8；相对 vertical
+  只再省约 1.3% nodes，N=15 反而慢 3.2%。
+- **路径搜索只有在候选机制真实不同才有用。** E30 在等价 macro edges
+  上失败；E38/E40 的 merge→tail edges 有实际 materialization 差异，
+  简单 actual-support selector 才成功。当前没有理由加入高成本 treeSA。
+
+因此修订判断为：**稀疏性必需；便宜的 subgroup symmetry 必需；full D4
+是否有用取决于 cut 上的可比较性，不能假定 D4+greedy/treeSA 总有正收益。**
+
+### 35.4 Fidelity 与“这是否只是 DFS”
+
+E38/E40 仍是显式 Sec. VI 网络的 proved-equivalent optimized contraction：
+
+1. rank-9 B 和 rank-8 C 均显式构造并验证 17 entries；
+2. `CompiledRowOperator` 只有在 C 完整包含 16 个 pass-through 和唯一
+   occupied entry 时才成功；
+3. recursive successor 对 N<=8 每个 reachable parent 与 compiled-C
+   row multiset 比较，compiled C 又与 sitewise explicit C 比较；
+4. E40 bit plan 再次验证 occupied legs 必须四通道 0→1、value=1，否则
+   fail closed；
+5. terminal 明确施加 column v1、diagonal v2；
+6. 所有 integer add/mul checked；u64 overflow 触发 u128 replay；
+7. `dfs_bitmask` 保持独立模块，只作 oracle/comparator。
+
+热循环最终与 Richards bitboard 的机器操作很相似，是因为 Sec. VI 的
+17-entry local tensor在 row-v1 边界下机械编译成同一个稀疏 automaton，
+而不是因为用 handwritten DFS 替换了 tensor contraction。报告继续把
+两种算法类别分开。
+
+### 35.5 N=16、最大 N 与 Q(28)
+
+E40 验证 Q(16)=14,772,512。N=16 benchmark 出现明显系统双峰：
+PEPS 多轮约 0.404--0.564 s，DFS 多轮约 0.399--0.520 s；执行顺序改变
+median 归属，故没有足够证据宣布 crossover。最终同批表为
+0.564 vs 0.520 s。
+
+当前最大验证 N 仍为 16，未尝试宣称 Q(28)。精确限制为：
+
+- joint record 把 3N key 与 coefficient 放入 u64，仅支持 N<=21；
+- N=16 recursive accepted work 已约 5.7e8，N=15→16 约 6.2x；
+- Q(28) 需要宽 key 与 certified coefficient/CRT backend，以及多个数量级
+  的 work reduction；当前直接外推不可行。
+
+这不是 PEPS 不可能超过 DFS 或不可能得到 Q(28) 的数学证明，只是当前
+revision 的可复现实测边界。
+
+### 35.6 修订主假设与下一检查点
+
+本轮推翻“full D4 是超过 DFS 的必要下一步”。新主假设是：
+
+> 既然 C-derived recursive contraction 与 DFS 已处理几乎相同的 nodes，
+> 下一收益应来自消除 sparse merged prefix、编译 terminal microkernels
+> 和更低开销的任务调度；full D4 仅在新的 cut 让更多 action 提前可比较
+> 时才复活。与此同时，Q(28) 需要独立解决 N>21 的 exact key/arithmetic
+> 扩展，不能由小 N 常数优化自动推出。
+
+下一轮 E41--E45 的 gates 见研究计划 §R。在下一次五方向 review 前，
+不得跳过实验隔离、explicit-C replay 或 raw benchmark 义务。

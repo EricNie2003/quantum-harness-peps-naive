@@ -2847,3 +2847,47 @@ class peak从 735 增到 313,373，区间 fit base 4.444；但 class 只能在
 7. checkpoint benchmark 固定 Ryzen 9 7945HX、release/thin-LTO、
    8 threads；DFS comparator warmup/repeat policy与 §34 一致；
 8. 完成 E40 后强制复盘，允许完全推翻 Q.1；复盘前不得启动 E41。
+
+## R. E36–E40 强制复盘后的修订（2026-07-29）
+
+完整复盘见 `REPORT.md` §35。E36/E37/E38/E40 KEEP；E39 full-D4
+production REJECT、diagnostic KEEP。E40 含 selector overhead 的 N=14/15
+为 0.01197/0.07122 s，DFS 为 0.01007/0.06600 s，差距已降到
+1.19x/1.08x。N=16 因系统双峰不能认证 crossover。
+
+### R.1 新判断
+
+1. sparse explicit-C transition 是必要基础；
+2. vertical reflection 因第一行即可决定，收益稳定；full D4 相对它
+   只有约 1.3% node 增益，当前不值得进入 hot loop；
+3. merged prefix 已缩到 4,811/7,426 sectors，晚层 sort 不再是主瓶颈；
+4. 当前 PEPS 与 DFS 的 accepted work 几乎相同，剩余差距是 task seed、
+   terminal recursion、checked accumulation 和 scheduling 常数；
+5. Q(28) 与小 N crossover 是两条不同目标：前者还要求 N>21 exact
+   key/coefficient backend 和大幅 work reduction。
+
+### R.2 E41–E45
+
+| ID | 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E41 | **prefix-free C-derived sector seeding** | 从 explicit-C compiled relation 直接生成 vertical-orbit task sectors；每个 task 覆盖不重叠 contraction branches；与 E40 merged-prefix sectors 的 weighted union/count replay | 高 / 3 | N=14/15 median 比 E40 降 8%，或至少一档稳定超过 DFS；RSS 不增 | task duplication 改变 accepted work/count，或收益 <3% |
+| E42 | **certified last-k tensor microkernel** | 只对剩余 2--4 行枚举并编译完整 C contraction；terminal table 必须逐 boundary 与 generic recursive C replay；checked exact coefficient | 高 / 3 | N=14--16 两档 wall 降 8%；code-size/compile-time 可控 | table/branch overhead 使两档收益 <3%，或只复制 DFS terminal trick而无 C certificate |
+| E43 | **actual-cost task ordering/chunk search** | 只重排 E41/E42 exact sectors；所有 tasks 完整消费一次；搜索/采样成本计入 | 中高 / 3 | 降低 N=16 p90 15% 且 N=14/15 median 降 5%；跨顺序复测稳定 | 只改善有利执行顺序，median/p10 无收益，或 atomics/deques 增加 RSS >25% |
+| E44 | **bounded exact recursive transposition table** | key 含完整 remaining-depth virtual boundary；cache value checked exact；hit/miss 逐项与无 memo C recursion replay | 中 / 4 | N=16--18 nodes 或 wall 降 20%，cache RSS 受预算约束 | hit rate <10%、hash overhead >收益，或 memory scaling 重现 full frontier |
+| E45 | **N>21 wide-key + finite-field/CRT promotion** | u128 virtual key 或分离 key；素数模运算逐 prime exact，CRT modulus product 超过可证明 count bound；小 N 与 integer backend 一致 | 中 / 5 | 完成 N=17--21 scaling，证明 N=22+ backend 可用；两素数/整数消融完整；更新 Q28 projection | CRT bound 不足、promotion 不可 replay、或 backend 在 N<=18 慢 >2x 且无扩展收益 |
+
+### R.3 顺序、消融与停止规则
+
+1. 严格按 E41 → E42 → E43 → E44 → E45；每项独立 worktree/branch；
+2. E41 必须把“无 prefix merge”写成 contraction association 变化，并逐
+   task replay compiled C；不得调用或复制 `dfs_bitmask`；
+3. E42 必须报告 k=1/2/3/4 消融、binary size 和 compile time；
+4. E43 至少比较 Rayon flat tasks、atomic 1/4/16/64 chunks 和一次
+   hardness ordering；报告 median/min/p10/p90，禁止挑单次 crossover；
+5. E44 的 cache budget、hits、lookups、peak entries/RSS 必须预注册；
+6. E45 在使用 CRT 前先给 Q(N) 上界与所需 modulus bits；浮点重构禁止；
+7. E39 full D4 只有在 E41/E44 产生新的早期-comparable sectors 时才可用
+   新 ID 复活，且必须证明相对 vertical 的增量收益，不得引用 vs none；
+8. E30 tree search 不得原样复活；只有 E41--E44 提供至少两个 actual-cost
+   不同的合法 contraction edges 时，才考虑简化 greedy/treeSA；
+9. 完成 E45 后强制复盘；在此之前不得启动 E46。
