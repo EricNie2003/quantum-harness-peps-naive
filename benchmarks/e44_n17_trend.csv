@@ -1,0 +1,3 @@
+N,method,count,verified,median_elapsed_s,min_elapsed_s,p90_elapsed_s,peak_rss_bytes,cache_lookups,cache_hits,cache_hit_rate,repeats,warmup
+17,e44_cached_16k_remaining5,95815104,true,5.295515600,5.294032200,5.295515600,73461760,738379535,3196314,0.004328823,3,1
+17,e42_last4_control,95815104,true,3.421481300,3.398069300,3.421481300,74903552,NA,NA,NA,3,1
