@@ -1,0 +1,4 @@
+revision,variant,text_bytes,data_bytes,bss_bytes,total_section_bytes,text_change_vs_production
+25a85d9,production_e47_last6,269551,92966,0,362517,0.000000
+57e05d1a052b1db0e45854eef5ce2058d09ceddb,generated_noinline,275983,94094,0,370077,0.023863
+57e05d1a052b1db0e45854eef5ce2058d09ceddb,generated_fully_inline,300655,94026,0,394681,0.115391
