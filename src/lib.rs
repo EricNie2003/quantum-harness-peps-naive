@@ -3829,6 +3829,10 @@ pub struct WideScalarResult {
     pub used_scalar_u64: bool,
     pub promotion_reason: Option<String>,
     pub residues: Vec<u64>,
+    pub vector_full_batches: usize,
+    pub vector_partial_batches: usize,
+    pub vector_root_rounds: u128,
+    pub vector_root_active_lanes: u128,
 }
 
 fn is_prime_u32_range(value: u64) -> bool {
@@ -4119,6 +4123,225 @@ fn contract_wide_scalar_tasks(
     })
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct WideBatchMetrics {
+    full_batches: usize,
+    partial_batches: usize,
+    root_rounds: u128,
+    root_active_lanes: u128,
+}
+
+fn wide_batch_metrics(tasks: &[WideCrtTask], board_mask: u64) -> WideBatchMetrics {
+    let mut metrics = WideBatchMetrics::default();
+    for batch in tasks.chunks(4) {
+        if batch.len() == 4 {
+            metrics.full_batches += 1;
+        } else {
+            metrics.partial_batches += 1;
+        }
+        let mut maximum_positions = 0_u32;
+        for task in batch {
+            let positions =
+                !(task.state.columns | task.state.diag_dr | task.state.diag_dl) & board_mask;
+            let active = positions.count_ones();
+            maximum_positions = maximum_positions.max(active);
+            metrics.root_active_lanes += u128::from(active);
+        }
+        metrics.root_rounds += u128::from(maximum_positions);
+    }
+    metrics
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn contract_wide_scalar_batch4_avx2(
+    tasks: &[WideCrtTask],
+    remaining_rows: usize,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    use std::arch::x86_64::{
+        __m256i, _mm256_and_si256, _mm256_andnot_si256, _mm256_loadu_si256, _mm256_or_si256,
+        _mm256_set1_epi64x, _mm256_slli_epi64, _mm256_srli_epi64, _mm256_storeu_si256,
+    };
+
+    if remaining_rows <= 6 {
+        return tasks.iter().try_fold(0_u64, |total, task| {
+            let completions = contract_certified_tail_last_k_u64::<6>(
+                remaining_rows,
+                task.state.columns,
+                task.state.diag_dr,
+                task.state.diag_dl,
+                board_mask,
+                coefficient_limit,
+            )?;
+            let weighted = completions
+                .checked_mul(task.orbit_weight)
+                .filter(|&value| value <= coefficient_limit)?;
+            total
+                .checked_add(weighted)
+                .filter(|&value| value <= coefficient_limit)
+        });
+    }
+
+    let mut columns = [0_u64; 4];
+    let mut diag_dr = [0_u64; 4];
+    let mut diag_dl = [0_u64; 4];
+    let mut weights = [0_u64; 4];
+    for (lane, task) in tasks.iter().enumerate() {
+        columns[lane] = task.state.columns;
+        diag_dr[lane] = task.state.diag_dr;
+        diag_dl[lane] = task.state.diag_dl;
+        weights[lane] = task.orbit_weight;
+    }
+    let load = |values: &[u64; 4]| {
+        // SAFETY: `loadu` accepts the alignment of a regular u64 array and
+        // reads exactly four initialized lanes.
+        unsafe { _mm256_loadu_si256(values.as_ptr().cast::<__m256i>()) }
+    };
+    let columns_vector = load(&columns);
+    let diag_dr_vector = load(&diag_dr);
+    let diag_dl_vector = load(&diag_dl);
+    let mask_vector = _mm256_set1_epi64x(board_mask as i64);
+    let occupied = _mm256_or_si256(
+        columns_vector,
+        _mm256_or_si256(diag_dr_vector, diag_dl_vector),
+    );
+    let mut positions = [0_u64; 4];
+    // SAFETY: `positions` has space for all four output lanes.
+    unsafe {
+        _mm256_storeu_si256(
+            positions.as_mut_ptr().cast::<__m256i>(),
+            _mm256_andnot_si256(occupied, mask_vector),
+        );
+    }
+
+    let mut total = 0_u64;
+    while positions.iter().any(|&value| value != 0) {
+        let mut selected = [0_u64; 4];
+        for lane in 0..4 {
+            let available = positions[lane];
+            if available != 0 {
+                selected[lane] = available & available.wrapping_neg();
+                positions[lane] = available & (available - 1);
+            }
+        }
+        let selected_vector = load(&selected);
+        let next_columns_vector = _mm256_or_si256(columns_vector, selected_vector);
+        let next_diag_dr_vector = _mm256_and_si256(
+            _mm256_slli_epi64::<1>(_mm256_or_si256(diag_dr_vector, selected_vector)),
+            mask_vector,
+        );
+        let next_diag_dl_vector =
+            _mm256_srli_epi64::<1>(_mm256_or_si256(diag_dl_vector, selected_vector));
+        let mut next_columns = [0_u64; 4];
+        let mut next_diag_dr = [0_u64; 4];
+        let mut next_diag_dl = [0_u64; 4];
+        // SAFETY: each destination has four initialized u64 slots.
+        unsafe {
+            _mm256_storeu_si256(
+                next_columns.as_mut_ptr().cast::<__m256i>(),
+                next_columns_vector,
+            );
+            _mm256_storeu_si256(
+                next_diag_dr.as_mut_ptr().cast::<__m256i>(),
+                next_diag_dr_vector,
+            );
+            _mm256_storeu_si256(
+                next_diag_dl.as_mut_ptr().cast::<__m256i>(),
+                next_diag_dl_vector,
+            );
+        }
+        for lane in 0..tasks.len() {
+            if selected[lane] == 0 {
+                continue;
+            }
+            let child = contract_certified_tail_last_k_u64::<6>(
+                remaining_rows - 1,
+                next_columns[lane],
+                next_diag_dr[lane],
+                next_diag_dl[lane],
+                board_mask,
+                coefficient_limit,
+            )?;
+            let weighted = child
+                .checked_mul(weights[lane])
+                .filter(|&value| value <= coefficient_limit)?;
+            total = total
+                .checked_add(weighted)
+                .filter(|&value| value <= coefficient_limit)?;
+        }
+    }
+    Some(total)
+}
+
+fn contract_wide_scalar_batched_tasks(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    #[cfg(target_arch = "x86_64")]
+    let avx2_available = std::arch::is_x86_feature_detected!("avx2");
+    #[cfg(not(target_arch = "x86_64"))]
+    let avx2_available = false;
+    if !avx2_available {
+        return contract_wide_scalar_tasks(tasks, n, split_depth, board_mask, coefficient_limit, 6);
+    }
+
+    let batch_count = tasks.len().div_ceil(4);
+    let worker_count = rayon::current_num_threads().max(1).min(batch_count.max(1));
+    let next_batch = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = 0_u64;
+                const BATCH_CHUNK: usize = 4;
+                loop {
+                    let start_batch = next_batch.fetch_add(BATCH_CHUNK, Ordering::Relaxed);
+                    if start_batch >= batch_count {
+                        break;
+                    }
+                    let end_batch = (start_batch + BATCH_CHUNK).min(batch_count);
+                    for batch_index in start_batch..end_batch {
+                        let start = batch_index * 4;
+                        let end = (start + 4).min(tasks.len());
+                        #[cfg(target_arch = "x86_64")]
+                        let count = {
+                            // SAFETY: runtime feature detection above guarantees AVX2.
+                            unsafe {
+                                contract_wide_scalar_batch4_avx2(
+                                    &tasks[start..end],
+                                    n - split_depth,
+                                    board_mask,
+                                    coefficient_limit,
+                                )
+                            }
+                        }?;
+                        #[cfg(not(target_arch = "x86_64"))]
+                        let count = 0_u64;
+                        subtotal = subtotal
+                            .checked_add(count)
+                            .filter(|&value| value <= coefficient_limit)?;
+                    }
+                }
+                Some(subtotal)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("wide batched worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    partials.into_iter().try_fold(0_u64, |total, partial| {
+        total
+            .checked_add(partial?)
+            .filter(|&value| value <= coefficient_limit)
+    })
+}
+
 fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -4387,6 +4610,7 @@ pub fn contract_rows_wide_scalar_with_target_and_limit(
         target_tasks_per_thread,
         coefficient_limit,
         4,
+        false,
     )
 }
 
@@ -4405,6 +4629,22 @@ pub fn contract_rows_wide_scalar_last_k_with_target(
         target_tasks_per_thread,
         u64::MAX,
         microkernel_rows,
+        false,
+    )
+}
+
+pub fn contract_rows_wide_scalar_batched_avx2_with_target(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+) -> Result<WideScalarResult, String> {
+    contract_rows_wide_scalar_last_k_impl(
+        n,
+        profile_replay,
+        target_tasks_per_thread,
+        u64::MAX,
+        6,
+        true,
     )
 }
 
@@ -4414,21 +4654,37 @@ fn contract_rows_wide_scalar_last_k_impl(
     target_tasks_per_thread: usize,
     coefficient_limit: u64,
     microkernel_rows: usize,
+    batched_avx2: bool,
 ) -> Result<WideScalarResult, String> {
     let total_start = Instant::now();
     let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
     let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
     let scalar_bound_certified = plan.factorial_bound <= u128::from(u64::MAX);
+    let vector_metrics = if batched_avx2 {
+        wide_batch_metrics(&tasks, board_mask)
+    } else {
+        WideBatchMetrics::default()
+    };
     let tail_start = Instant::now();
     let scalar_count = scalar_bound_certified.then(|| {
-        contract_wide_scalar_tasks(
-            &tasks,
-            n,
-            prefix.split_depth,
-            board_mask,
-            coefficient_limit,
-            microkernel_rows,
-        )
+        if batched_avx2 {
+            contract_wide_scalar_batched_tasks(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                coefficient_limit,
+            )
+        } else {
+            contract_wide_scalar_tasks(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                coefficient_limit,
+                microkernel_rows,
+            )
+        }
     });
     let (count, used_scalar_u64, promotion_reason, residues) = match scalar_count {
         Some(Some(count)) => {
@@ -4553,6 +4809,10 @@ fn contract_rows_wide_scalar_last_k_impl(
         used_scalar_u64,
         promotion_reason,
         residues,
+        vector_full_batches: vector_metrics.full_batches,
+        vector_partial_batches: vector_metrics.partial_batches,
+        vector_root_rounds: vector_metrics.root_rounds,
+        vector_root_active_lanes: vector_metrics.root_active_lanes,
     })
 }
 
@@ -6151,6 +6411,7 @@ mod tests {
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
         contract_rows_wide_crt, contract_rows_wide_scalar,
+        contract_rows_wide_scalar_batched_avx2_with_target,
         contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
@@ -6590,6 +6851,27 @@ mod tests {
             }
         }
         assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
+    }
+
+    #[test]
+    fn batched_avx2_root_matches_scalar_last_six_and_generic_c() {
+        for n in 0..=12 {
+            let batched = contract_rows_wide_scalar_batched_avx2_with_target(n, true, 512).unwrap();
+            let scalar = contract_rows_wide_scalar_last_k_with_target(n, true, 512, 6).unwrap();
+            assert_eq!(batched.contraction.count, scalar.contraction.count, "N={n}");
+            assert_eq!(Some(batched.contraction.count), known_count(n), "N={n}");
+            assert_eq!(batched.tail_tasks, scalar.tail_tasks, "N={n}");
+            assert_eq!(
+                batched.recursive_accepted_entries, scalar.recursive_accepted_entries,
+                "N={n}"
+            );
+            assert_eq!(
+                batched.vector_full_batches + batched.vector_partial_batches,
+                batched.tail_tasks.div_ceil(4),
+                "N={n}"
+            );
+            assert!(batched.vector_partial_batches <= 1, "N={n}");
+        }
     }
 
     #[test]
