@@ -3688,6 +3688,517 @@ pub fn contract_rows_adaptive_last_k_tail_with_rows(
     contract_rows_adaptive_fast_tail_impl(n, shards, profile_replay, microkernel_rows, u64::MAX)
 }
 
+const CRT_PRIME_CANDIDATES: [u64; 4] = [4_294_967_291, 4_294_967_279, 4_294_967_231, 4_294_967_197];
+
+#[derive(Clone, Debug)]
+pub struct WideCrtPlan {
+    pub n: usize,
+    pub factorial_bound: u128,
+    pub primes: Vec<u64>,
+    pub modulus_product: u128,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WideCrtTask {
+    state: BoundaryState,
+    orbit_weight: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct WideCrtPrefixPlan {
+    pub plan: WideCrtPlan,
+    pub split_depth: usize,
+    pub target_tail_tasks: usize,
+    pub tail_tasks: usize,
+    pub prefix_nodes: u128,
+    pub prefix_accepted_entries: u128,
+    pub prefix_kept_entries: u128,
+    pub seed_elapsed: Duration,
+    pub peak_rss_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct WideCrtResult {
+    pub contraction: ContractionResult,
+    pub plan: WideCrtPlan,
+    pub split_depth: usize,
+    pub target_tail_tasks: usize,
+    pub tail_tasks: usize,
+    pub prefix_nodes: u128,
+    pub prefix_accepted_entries: u128,
+    pub prefix_kept_entries: u128,
+    pub recursive_nodes: u128,
+    pub recursive_accepted_entries: u128,
+    pub seed_elapsed: Duration,
+    pub tail_elapsed: Duration,
+    pub profile_replay_elapsed: Duration,
+    pub residues: Vec<u64>,
+}
+
+fn is_prime_u32_range(value: u64) -> bool {
+    if value < 2 {
+        return false;
+    }
+    if value.is_multiple_of(2) {
+        return value == 2;
+    }
+    let mut divisor = 3_u64;
+    while divisor * divisor <= value {
+        if value.is_multiple_of(divisor) {
+            return false;
+        }
+        divisor += 2;
+    }
+    true
+}
+
+fn factorial_u128(n: usize) -> Result<u128, String> {
+    (2..=n).try_fold(1_u128, |product, factor| {
+        product
+            .checked_mul(factor as u128)
+            .ok_or_else(|| "N! exactness bound does not fit u128".to_owned())
+    })
+}
+
+pub fn wide_crt_plan(n: usize) -> Result<WideCrtPlan, String> {
+    if n > 34 {
+        return Err("wide CRT backend supports N <= 34 because 35! exceeds u128".to_owned());
+    }
+    let factorial_bound = factorial_u128(n)?;
+    let mut primes = Vec::new();
+    let mut modulus_product = 1_u128;
+    for prime in CRT_PRIME_CANDIDATES {
+        if !is_prime_u32_range(prime) {
+            return Err(format!(
+                "CRT modulus {prime} failed deterministic primality check"
+            ));
+        }
+        primes.push(prime);
+        modulus_product = modulus_product
+            .checked_mul(u128::from(prime))
+            .ok_or_else(|| "CRT modulus product overflow".to_owned())?;
+        if modulus_product > factorial_bound {
+            return Ok(WideCrtPlan {
+                n,
+                factorial_bound,
+                primes,
+                modulus_product,
+            });
+        }
+    }
+    Err("available certified CRT product does not exceed N! bound".to_owned())
+}
+
+fn build_wide_crt_tasks(
+    n: usize,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+    target_tail_tasks: usize,
+) -> Result<(Vec<WideCrtTask>, usize, u128, u128, u128), String> {
+    let mut tasks = vec![WideCrtTask {
+        state: BoundaryState {
+            columns: 0,
+            diag_dr: 0,
+            diag_dl: 0,
+        },
+        orbit_weight: 1,
+    }];
+    let mut split_depth = 0_usize;
+    let mut prefix_nodes = 0_u128;
+    let mut prefix_accepted_entries = 0_u128;
+    let mut prefix_kept_entries = 0_u128;
+    while split_depth < n && tasks.len() < target_tail_tasks {
+        let top_row = split_depth == 0;
+        let mut next = Vec::with_capacity(tasks.len().saturating_mul(n - split_depth));
+        for task in tasks {
+            prefix_nodes = prefix_nodes
+                .checked_add(1)
+                .ok_or_else(|| "wide CRT prefix node counter overflow".to_owned())?;
+            let mut positions = recursive_tail_positions(task.state, relation, board_mask);
+            while positions != 0 {
+                let selected = positions & positions.wrapping_neg();
+                positions &= positions - 1;
+                prefix_accepted_entries = prefix_accepted_entries
+                    .checked_add(1)
+                    .ok_or_else(|| "wide CRT prefix accepted counter overflow".to_owned())?;
+                let successor =
+                    recursive_tail_successor(task.state, selected, relation, board_mask);
+                let orbit_weight = if top_row {
+                    let Some(weight) = top_row_vertical_orbit_weight(n, successor) else {
+                        continue;
+                    };
+                    u64::try_from(weight)
+                        .map_err(|_| "wide CRT orbit weight does not fit u64".to_owned())?
+                } else {
+                    1
+                };
+                let local_value = u64::try_from(relation.value)
+                    .map_err(|_| "wide CRT local C value does not fit u64".to_owned())?;
+                next.push(WideCrtTask {
+                    state: successor,
+                    orbit_weight: task
+                        .orbit_weight
+                        .checked_mul(orbit_weight)
+                        .and_then(|value| value.checked_mul(local_value))
+                        .ok_or_else(|| "wide CRT prefix weight overflow".to_owned())?,
+                });
+                prefix_kept_entries = prefix_kept_entries
+                    .checked_add(1)
+                    .ok_or_else(|| "wide CRT prefix kept counter overflow".to_owned())?;
+            }
+        }
+        tasks = next;
+        split_depth += 1;
+    }
+    Ok((
+        tasks,
+        split_depth,
+        prefix_nodes,
+        prefix_accepted_entries,
+        prefix_kept_entries,
+    ))
+}
+
+#[inline]
+fn add_residue(left: u64, right: u64, prime: u64) -> u64 {
+    let sum = left + right;
+    if sum >= prime { sum - prime } else { sum }
+}
+
+fn contract_wide_crt_tail<const LANES: usize>(
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    primes: &[u64; LANES],
+) -> [u64; LANES] {
+    if remaining_rows <= 4 {
+        let exact = contract_certified_tail_last_k_u64::<4>(
+            remaining_rows,
+            columns,
+            diag_dr,
+            diag_dl,
+            board_mask,
+            u64::MAX,
+        )
+        .expect("four-row exact microkernel cannot overflow u64");
+        return std::array::from_fn(|lane| exact % primes[lane]);
+    }
+    let mut total = [0_u64; LANES];
+    let mut positions = !(columns | diag_dr | diag_dl) & board_mask;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        let child = contract_wide_crt_tail(
+            remaining_rows - 1,
+            next_columns,
+            next_diag_dr,
+            next_diag_dl,
+            board_mask,
+            primes,
+        );
+        for lane in 0..LANES {
+            total[lane] = add_residue(total[lane], child[lane], primes[lane]);
+        }
+    }
+    total
+}
+
+fn contract_wide_crt_tasks<const LANES: usize>(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    primes: &[u64; LANES],
+) -> [u64; LANES] {
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = [0_u64; LANES];
+                const TASK_CHUNK: usize = 16;
+                loop {
+                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    for task in &tasks[start..end] {
+                        let residues = contract_wide_crt_tail(
+                            n - split_depth,
+                            task.state.columns,
+                            task.state.diag_dr,
+                            task.state.diag_dl,
+                            board_mask,
+                            primes,
+                        );
+                        for lane in 0..LANES {
+                            let weighted = ((u128::from(residues[lane])
+                                * u128::from(task.orbit_weight))
+                                % u128::from(primes[lane]))
+                                as u64;
+                            subtotal[lane] = add_residue(subtotal[lane], weighted, primes[lane]);
+                        }
+                    }
+                }
+                subtotal
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("wide CRT worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = [0_u64; LANES];
+    for partial in partials {
+        for lane in 0..LANES {
+            total[lane] = add_residue(total[lane], partial[lane], primes[lane]);
+        }
+    }
+    total
+}
+
+fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
+    let mut result = 1_u64;
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            result = ((u128::from(result) * u128::from(base)) % u128::from(modulus)) as u64;
+        }
+        base = ((u128::from(base) * u128::from(base)) % u128::from(modulus)) as u64;
+        exponent >>= 1;
+    }
+    result
+}
+
+fn reconstruct_crt(residues: &[u64], primes: &[u64]) -> Result<u128, String> {
+    if residues.len() != primes.len() || residues.is_empty() {
+        return Err("CRT residue/modulus length mismatch".to_owned());
+    }
+    let mut value = 0_u128;
+    let mut modulus_product = 1_u128;
+    for (&residue, &prime) in residues.iter().zip(primes) {
+        let prime_u128 = u128::from(prime);
+        let value_mod = (value % prime_u128) as u64;
+        let delta = if residue >= value_mod {
+            residue - value_mod
+        } else {
+            residue + prime - value_mod
+        };
+        let product_mod = (modulus_product % prime_u128) as u64;
+        let inverse = mod_pow(product_mod, prime - 2, prime);
+        let step = ((u128::from(delta) * u128::from(inverse)) % prime_u128) as u64;
+        value = value
+            .checked_add(
+                modulus_product
+                    .checked_mul(u128::from(step))
+                    .ok_or_else(|| "CRT reconstruction product overflow".to_owned())?,
+            )
+            .ok_or_else(|| "CRT reconstruction sum overflow".to_owned())?;
+        modulus_product = modulus_product
+            .checked_mul(prime_u128)
+            .ok_or_else(|| "CRT reconstruction modulus overflow".to_owned())?;
+    }
+    Ok(value)
+}
+
+fn contract_wide_crt_residues(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    primes: &[u64],
+) -> Result<Vec<u64>, String> {
+    let mut padded = [0_u64; 4];
+    padded[..primes.len()].copy_from_slice(primes);
+    Ok(match primes.len() {
+        1 => contract_wide_crt_tasks(tasks, n, split_depth, board_mask, &[padded[0]]).to_vec(),
+        2 => contract_wide_crt_tasks(tasks, n, split_depth, board_mask, &[padded[0], padded[1]])
+            .to_vec(),
+        3 => contract_wide_crt_tasks(
+            tasks,
+            n,
+            split_depth,
+            board_mask,
+            &[padded[0], padded[1], padded[2]],
+        )
+        .to_vec(),
+        4 => contract_wide_crt_tasks(tasks, n, split_depth, board_mask, &padded).to_vec(),
+        _ => return Err("wide CRT lane count must be in 1..=4".to_owned()),
+    })
+}
+
+fn prepare_wide_crt_prefix(
+    n: usize,
+    target_tasks_per_thread: usize,
+) -> Result<
+    (
+        WideCrtPlan,
+        RecursiveTailRelation,
+        Vec<WideCrtTask>,
+        WideCrtPrefixPlan,
+    ),
+    String,
+> {
+    if target_tasks_per_thread == 0 {
+        return Err("wide CRT target tasks per thread must be positive".to_owned());
+    }
+    let plan = wide_crt_plan(n)?;
+    if n == 0 {
+        let prefix = WideCrtPrefixPlan {
+            plan: plan.clone(),
+            split_depth: 0,
+            target_tail_tasks: 1,
+            tail_tasks: 1,
+            prefix_nodes: 0,
+            prefix_accepted_entries: 0,
+            prefix_kept_entries: 0,
+            seed_elapsed: Duration::ZERO,
+            peak_rss_bytes: peak_rss_bytes(),
+        };
+        return Ok((
+            plan,
+            RecursiveTailRelation::compile(&CompiledRowOperator::compile(&SiteTensorC::sec_vi())?)?,
+            vec![WideCrtTask {
+                state: BoundaryState {
+                    columns: 0,
+                    diag_dr: 0,
+                    diag_dl: 0,
+                },
+                orbit_weight: 1,
+            }],
+            prefix,
+        ));
+    }
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let relation = RecursiveTailRelation::compile(&operator)?;
+    let _certified = CertifiedSecViTailPlan::compile(relation)?;
+    let board_mask = (1_u64 << n) - 1;
+    let target_tail_tasks = rayon::current_num_threads()
+        .max(1)
+        .saturating_mul(target_tasks_per_thread);
+    let seed_start = Instant::now();
+    let (tasks, split_depth, prefix_nodes, prefix_accepted_entries, prefix_kept_entries) =
+        build_wide_crt_tasks(n, relation, board_mask, target_tail_tasks)?;
+    let prefix = WideCrtPrefixPlan {
+        plan: plan.clone(),
+        split_depth,
+        target_tail_tasks,
+        tail_tasks: tasks.len(),
+        prefix_nodes,
+        prefix_accepted_entries,
+        prefix_kept_entries,
+        seed_elapsed: seed_start.elapsed(),
+        peak_rss_bytes: peak_rss_bytes(),
+    };
+    Ok((plan, relation, tasks, prefix))
+}
+
+pub fn probe_wide_crt_prefix(n: usize) -> Result<WideCrtPrefixPlan, String> {
+    let (_, _, _, prefix) = prepare_wide_crt_prefix(n, 512)?;
+    Ok(prefix)
+}
+
+pub fn contract_rows_wide_crt(n: usize, profile_replay: bool) -> Result<WideCrtResult, String> {
+    contract_rows_wide_crt_with_target(n, profile_replay, 512)
+}
+
+pub fn contract_rows_wide_crt_with_target(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+) -> Result<WideCrtResult, String> {
+    let total_start = Instant::now();
+    let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
+    let tail_start = Instant::now();
+    let residues =
+        contract_wide_crt_residues(&tasks, n, prefix.split_depth, board_mask, &plan.primes)?;
+    let tail_elapsed = tail_start.elapsed();
+    let elapsed = total_start.elapsed();
+    let count = reconstruct_crt(&residues, &plan.primes)?;
+    if count > plan.factorial_bound {
+        return Err("CRT reconstruction exceeds certified N! count bound".to_owned());
+    }
+
+    let profile_start = Instant::now();
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    let mut replay_count = 0_u128;
+    if profile_replay {
+        let partials = tasks
+            .par_iter()
+            .map(|task| {
+                let mut metrics = RecursiveTailMetrics::default();
+                let completions = contract_recursive_tail(
+                    n,
+                    prefix.split_depth,
+                    task.state,
+                    relation,
+                    board_mask,
+                    &mut metrics,
+                )?;
+                let weighted = completions
+                    .checked_mul(u128::from(task.orbit_weight))
+                    .ok_or_else(|| "wide CRT profile task weight overflow".to_owned())?;
+                Ok::<_, String>((weighted, metrics))
+            })
+            .collect::<Vec<_>>();
+        for partial in partials {
+            let (weighted, metrics) = partial?;
+            replay_count = replay_count
+                .checked_add(weighted)
+                .ok_or_else(|| "wide CRT profile reduction overflow".to_owned())?;
+            recursive_nodes = recursive_nodes
+                .checked_add(metrics.nodes)
+                .ok_or_else(|| "wide CRT recursive node counter overflow".to_owned())?;
+            recursive_accepted_entries = recursive_accepted_entries
+                .checked_add(metrics.accepted_entries)
+                .ok_or_else(|| "wide CRT accepted-entry counter overflow".to_owned())?;
+        }
+        if replay_count != count {
+            return Err("wide CRT reconstruction disagrees with generic C replay".to_owned());
+        }
+    }
+    let profile_replay_elapsed = profile_start.elapsed();
+    let total_accepted = prefix
+        .prefix_accepted_entries
+        .checked_add(recursive_accepted_entries)
+        .ok_or_else(|| "wide CRT total accepted-entry counter overflow".to_owned())?;
+    Ok(WideCrtResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed,
+            peak_states: tasks.len().max(1),
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_accepted,
+            row_operator_matched: total_accepted,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        },
+        plan,
+        split_depth: prefix.split_depth,
+        target_tail_tasks: prefix.target_tail_tasks,
+        tail_tasks: tasks.len(),
+        prefix_nodes: prefix.prefix_nodes,
+        prefix_accepted_entries: prefix.prefix_accepted_entries,
+        prefix_kept_entries: prefix.prefix_kept_entries,
+        recursive_nodes,
+        recursive_accepted_entries,
+        seed_elapsed: prefix.seed_elapsed,
+        tail_elapsed,
+        profile_replay_elapsed,
+        residues,
+    })
+}
+
 fn contract_rows_adaptive_fast_tail_impl(
     n: usize,
     shards: usize,
@@ -5281,8 +5792,10 @@ mod tests {
         contract_rows_d4_sparse_parallel_sort_reduce, contract_rows_d4_sparse_sort_reduce,
         contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
         contract_rows_sitewise, contract_rows_sort_reduce,
-        contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce, known_count,
+        contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
+        contract_rows_wide_crt, known_count, probe_wide_crt_prefix, reconstruct_crt,
         recursive_tail_positions, recursive_tail_successor, top_row_vertical_orbit_weight,
+        wide_crt_plan,
     };
     use std::collections::{HashMap, HashSet};
 
@@ -5604,6 +6117,39 @@ mod tests {
         assert!(!promoted.fast.used_u64_fast_path);
         assert_eq!(promoted.fast.contraction.count, 92);
         assert!(promoted.fast.promotion_reason.is_some());
+    }
+
+    #[test]
+    fn wide_crt_bounds_primes_and_reconstruction_are_certified() {
+        let plan22 = wide_crt_plan(22).unwrap();
+        assert_eq!(plan22.primes.len(), 3);
+        assert!(plan22.modulus_product > plan22.factorial_bound);
+        let plan28 = wide_crt_plan(28).unwrap();
+        assert_eq!(plan28.primes.len(), 4);
+        assert!(plan28.modulus_product > plan28.factorial_bound);
+
+        let value = 234_907_967_154_122_528_u128;
+        let residues = plan28
+            .primes
+            .iter()
+            .map(|&prime| (value % u128::from(prime)) as u64)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_crt(&residues, &plan28.primes).unwrap(), value);
+    }
+
+    #[test]
+    fn wide_crt_contraction_and_n22_prefix_are_explicit_c_exact() {
+        for n in 0..=12 {
+            let result = contract_rows_wide_crt(n, true).unwrap();
+            assert_eq!(Some(result.contraction.count), known_count(n), "N={n}");
+            assert!(result.plan.modulus_product > result.plan.factorial_bound);
+        }
+        for n in [22, 28] {
+            let prefix = probe_wide_crt_prefix(n).unwrap();
+            assert!(prefix.tail_tasks >= prefix.target_tail_tasks);
+            assert!(prefix.split_depth <= n);
+            assert_eq!(prefix.plan.n, n);
+        }
     }
 
     #[test]
