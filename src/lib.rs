@@ -3348,6 +3348,386 @@ pub fn contract_rows_d4_recursive_tail(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecursiveD4Mode {
+    None,
+    Vertical,
+    Full,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecursiveD4Result {
+    pub contraction: ContractionResult,
+    pub mode: RecursiveD4Mode,
+    pub split_depth: usize,
+    pub tail_tasks: usize,
+    pub task_generation_elapsed: Duration,
+    pub tail_elapsed: Duration,
+    pub recursive_nodes: u128,
+    pub recursive_accepted_entries: u128,
+    pub canonical_checks: u128,
+    pub partial_prunes: u128,
+    pub complete_representatives: u128,
+    pub orbit_size_1: u128,
+    pub orbit_size_2: u128,
+    pub orbit_size_4: u128,
+    pub orbit_size_8: u128,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RecursiveD4Task {
+    row: usize,
+    state: BoundaryState,
+    placement: [u8; 21],
+    weight: u128,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RecursiveD4Metrics {
+    nodes: u128,
+    accepted_entries: u128,
+    canonical_checks: u128,
+    partial_prunes: u128,
+    complete_representatives: u128,
+    orbit_histogram: [u128; 4],
+}
+
+impl RecursiveD4Metrics {
+    fn merge(&mut self, other: Self) {
+        self.nodes += other.nodes;
+        self.accepted_entries += other.accepted_entries;
+        self.canonical_checks += other.canonical_checks;
+        self.partial_prunes += other.partial_prunes;
+        self.complete_representatives += other.complete_representatives;
+        for (total, value) in self.orbit_histogram.iter_mut().zip(other.orbit_histogram) {
+            *total += value;
+        }
+    }
+}
+
+fn transformed_prefix_is_less(
+    n: usize,
+    depth: usize,
+    placement: &[u8; 21],
+    symmetry: D4Symmetry,
+) -> bool {
+    let mut transformed = [u8::MAX; 21];
+    for (row, &column) in placement.iter().enumerate().take(depth) {
+        let (mapped_row, mapped_column) =
+            symmetry.transform_coordinate(n, row, usize::from(column));
+        debug_assert!(mapped_row < depth);
+        debug_assert_eq!(transformed[mapped_row], u8::MAX);
+        transformed[mapped_row] = mapped_column as u8;
+    }
+    transformed[..depth] < placement[..depth]
+}
+
+fn recursive_prefix_is_canonical(
+    n: usize,
+    depth: usize,
+    columns: u64,
+    placement: &[u8; 21],
+    mode: RecursiveD4Mode,
+    metrics: &mut RecursiveD4Metrics,
+) -> bool {
+    if mode == RecursiveD4Mode::None || depth == 0 {
+        return true;
+    }
+
+    let first_column = usize::from(placement[0]);
+    let mirrored_first = n - 1 - first_column;
+    if first_column > mirrored_first {
+        metrics.canonical_checks += 1;
+        return false;
+    }
+    if first_column == mirrored_first {
+        // Only the odd central sector fails to decide the vertical
+        // lexicographic comparison at depth one.
+        metrics.canonical_checks += 1;
+        if transformed_prefix_is_less(n, depth, placement, D4Symmetry::ReflectVertical) {
+            return false;
+        }
+    }
+    if mode == RecursiveD4Mode::Vertical {
+        return true;
+    }
+
+    let low_columns = (1_u64 << depth) - 1;
+    if columns == low_columns {
+        for symmetry in [D4Symmetry::Rotate90, D4Symmetry::ReflectMainDiagonal] {
+            metrics.canonical_checks += 1;
+            if transformed_prefix_is_less(n, depth, placement, symmetry) {
+                return false;
+            }
+        }
+    }
+    let board_mask = (1_u64 << n) - 1;
+    let high_columns = board_mask ^ ((1_u64 << (n - depth)) - 1);
+    if columns == high_columns {
+        for symmetry in [D4Symmetry::Rotate270, D4Symmetry::ReflectAntiDiagonal] {
+            metrics.canonical_checks += 1;
+            if transformed_prefix_is_less(n, depth, placement, symmetry) {
+                return false;
+            }
+        }
+    }
+    if depth == n {
+        for symmetry in [D4Symmetry::Rotate180, D4Symmetry::ReflectHorizontal] {
+            metrics.canonical_checks += 1;
+            if transformed_prefix_is_less(n, depth, placement, symmetry) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn complete_orbit_size(n: usize, placement: &[u8; 21], mode: RecursiveD4Mode) -> usize {
+    let stabilizes = |symmetry: D4Symmetry| {
+        placement.iter().enumerate().take(n).all(|(row, &column)| {
+            let (mapped_row, mapped_column) =
+                symmetry.transform_coordinate(n, row, usize::from(column));
+            usize::from(placement[mapped_row]) == mapped_column
+        })
+    };
+    match mode {
+        RecursiveD4Mode::None => 1,
+        RecursiveD4Mode::Vertical => {
+            2 / [D4Symmetry::Identity, D4Symmetry::ReflectVertical]
+                .into_iter()
+                .filter(|&symmetry| stabilizes(symmetry))
+                .count()
+        }
+        RecursiveD4Mode::Full => {
+            8 / D4Symmetry::ALL
+                .into_iter()
+                .filter(|&symmetry| stabilizes(symmetry))
+                .count()
+        }
+    }
+}
+
+fn orbit_histogram_index(orbit_size: usize) -> usize {
+    match orbit_size {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        _ => unreachable!("D4 orbit size must divide eight"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_recursive_d4_tasks(
+    n: usize,
+    split_depth: usize,
+    row: usize,
+    state: BoundaryState,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+    mode: RecursiveD4Mode,
+    placement: &mut [u8; 21],
+    weight: u128,
+    tasks: &mut Vec<RecursiveD4Task>,
+    metrics: &mut RecursiveD4Metrics,
+) -> Result<(), String> {
+    if row == split_depth {
+        tasks.push(RecursiveD4Task {
+            row,
+            state,
+            placement: *placement,
+            weight,
+        });
+        return Ok(());
+    }
+    metrics.nodes += 1;
+    let mut positions = recursive_tail_positions(state, relation, board_mask);
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        metrics.accepted_entries += 1;
+        let column = selected.trailing_zeros() as usize;
+        placement[row] = column as u8;
+        let successor = recursive_tail_successor(state, selected, relation, board_mask);
+        if recursive_prefix_is_canonical(n, row + 1, successor.columns, placement, mode, metrics) {
+            let next_weight = weight
+                .checked_mul(relation.value)
+                .ok_or_else(|| "coefficient overflow generating canonical D4 tasks".to_owned())?;
+            build_recursive_d4_tasks(
+                n,
+                split_depth,
+                row + 1,
+                successor,
+                relation,
+                board_mask,
+                mode,
+                placement,
+                next_weight,
+                tasks,
+                metrics,
+            )?;
+        } else {
+            metrics.partial_prunes += 1;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contract_recursive_d4(
+    n: usize,
+    row: usize,
+    state: BoundaryState,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+    mode: RecursiveD4Mode,
+    placement: &mut [u8; 21],
+    metrics: &mut RecursiveD4Metrics,
+) -> Result<u128, String> {
+    metrics.nodes += 1;
+    if row == n {
+        if state.columns != board_mask {
+            return Ok(0);
+        }
+        metrics.complete_representatives += 1;
+        let orbit_size = complete_orbit_size(n, placement, mode);
+        metrics.orbit_histogram[orbit_histogram_index(orbit_size)] += 1;
+        return Ok(orbit_size as u128);
+    }
+
+    let mut count = 0_u128;
+    let mut positions = recursive_tail_positions(state, relation, board_mask);
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        metrics.accepted_entries += 1;
+        let column = selected.trailing_zeros() as usize;
+        placement[row] = column as u8;
+        let successor = recursive_tail_successor(state, selected, relation, board_mask);
+        if recursive_prefix_is_canonical(n, row + 1, successor.columns, placement, mode, metrics) {
+            let child = contract_recursive_d4(
+                n,
+                row + 1,
+                successor,
+                relation,
+                board_mask,
+                mode,
+                placement,
+                metrics,
+            )?;
+            let weighted = child
+                .checked_mul(relation.value)
+                .ok_or_else(|| "coefficient overflow in canonical D4 C contraction".to_owned())?;
+            count = count
+                .checked_add(weighted)
+                .ok_or_else(|| "coefficient overflow reducing canonical D4 branches".to_owned())?;
+        } else {
+            metrics.partial_prunes += 1;
+        }
+    }
+    Ok(count)
+}
+
+pub fn contract_rows_recursive_d4(
+    n: usize,
+    split_depth: usize,
+    mode: RecursiveD4Mode,
+) -> Result<RecursiveD4Result, String> {
+    if n > 21 {
+        return Err("recursive D4 backend supports N <= 21".to_owned());
+    }
+    if split_depth > n {
+        return Err("recursive D4 split depth cannot exceed N".to_owned());
+    }
+    let total_start = Instant::now();
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let relation = RecursiveTailRelation::compile(&operator)?;
+    let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
+    let initial = BoundaryState {
+        columns: 0,
+        diag_dr: 0,
+        diag_dl: 0,
+    };
+    let mut tasks = Vec::new();
+    let mut generation_metrics = RecursiveD4Metrics::default();
+    let task_start = Instant::now();
+    build_recursive_d4_tasks(
+        n,
+        split_depth,
+        0,
+        initial,
+        relation,
+        board_mask,
+        mode,
+        &mut [0; 21],
+        1,
+        &mut tasks,
+        &mut generation_metrics,
+    )?;
+    let task_generation_elapsed = task_start.elapsed();
+    let tail_start = Instant::now();
+    let partials = tasks
+        .par_iter()
+        .map(|task| {
+            let mut placement = task.placement;
+            let mut metrics = RecursiveD4Metrics::default();
+            let count = contract_recursive_d4(
+                n,
+                task.row,
+                task.state,
+                relation,
+                board_mask,
+                mode,
+                &mut placement,
+                &mut metrics,
+            )?;
+            let weighted = count
+                .checked_mul(task.weight)
+                .ok_or_else(|| "coefficient overflow joining canonical D4 task".to_owned())?;
+            Ok::<_, String>((weighted, metrics))
+        })
+        .collect::<Vec<_>>();
+    let mut count = 0_u128;
+    let mut metrics = generation_metrics;
+    for partial in partials {
+        let (weighted, partial_metrics) = partial?;
+        count = count
+            .checked_add(weighted)
+            .ok_or_else(|| "coefficient overflow reducing canonical D4 tasks".to_owned())?;
+        metrics.merge(partial_metrics);
+    }
+    let tail_elapsed = tail_start.elapsed();
+    Ok(RecursiveD4Result {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed: total_start.elapsed(),
+            peak_states: tasks.len().max(1),
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: metrics.accepted_entries,
+            row_operator_matched: metrics.accepted_entries,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        },
+        mode,
+        split_depth,
+        tail_tasks: tasks.len(),
+        task_generation_elapsed,
+        tail_elapsed,
+        recursive_nodes: metrics.nodes,
+        recursive_accepted_entries: metrics.accepted_entries,
+        canonical_checks: metrics.canonical_checks,
+        partial_prunes: metrics.partial_prunes,
+        complete_representatives: metrics.complete_representatives,
+        orbit_size_1: metrics.orbit_histogram[0],
+        orbit_size_2: metrics.orbit_histogram[1],
+        orbit_size_4: metrics.orbit_histogram[2],
+        orbit_size_8: metrics.orbit_histogram[3],
+    })
+}
+
 #[derive(Clone, Copy)]
 struct DeferredCandidate {
     state: u64,
@@ -4602,14 +4982,15 @@ mod e24_kernel_tests {
 mod tests {
     use super::{
         BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
-        RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
+        RecursiveD4Mode, RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
         contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
         contract_rows_d4_orbit_parallel_sort_reduce, contract_rows_d4_orbit_sort_reduce,
         contract_rows_d4_recursive_tail, contract_rows_d4_sparse_parallel_sort_reduce,
         contract_rows_d4_sparse_sort_reduce, contract_rows_hash_materialization,
-        contract_rows_parallel_sort_reduce, contract_rows_sitewise, contract_rows_sort_reduce,
-        contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce, known_count,
-        recursive_tail_positions, recursive_tail_successor, top_row_vertical_orbit_weight,
+        contract_rows_parallel_sort_reduce, contract_rows_recursive_d4, contract_rows_sitewise,
+        contract_rows_sort_reduce, contract_rows_sparse_parallel_sort_reduce,
+        contract_rows_sparse_sort_reduce, known_count, recursive_tail_positions,
+        recursive_tail_successor, top_row_vertical_orbit_weight,
     };
     use std::collections::{HashMap, HashSet};
 
@@ -4865,6 +5246,41 @@ mod tests {
                     Some(result.contraction.count),
                     known_count(n),
                     "N={n}, cut={cut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn none_vertical_and_full_d4_recursive_contractions_are_exact() {
+        for n in 0..=10 {
+            let split_depth = n.min(3);
+            for mode in [
+                RecursiveD4Mode::None,
+                RecursiveD4Mode::Vertical,
+                RecursiveD4Mode::Full,
+            ] {
+                let result = contract_rows_recursive_d4(n, split_depth, mode).unwrap();
+                assert_eq!(
+                    Some(result.contraction.count),
+                    known_count(n),
+                    "N={n}, mode={mode:?}"
+                );
+                let reconstructed = result.orbit_size_1
+                    + 2 * result.orbit_size_2
+                    + 4 * result.orbit_size_4
+                    + 8 * result.orbit_size_8;
+                assert_eq!(
+                    reconstructed, result.contraction.count,
+                    "N={n}, mode={mode:?}"
+                );
+                assert_eq!(
+                    result.complete_representatives,
+                    result.orbit_size_1
+                        + result.orbit_size_2
+                        + result.orbit_size_4
+                        + result.orbit_size_8,
+                    "N={n}, mode={mode:?}"
                 );
             }
         }
