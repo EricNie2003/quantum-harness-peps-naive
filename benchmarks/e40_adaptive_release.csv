@@ -1,0 +1,7 @@
+variant,threads,shards,N,selected_cut,count,verified,median_elapsed_s,min_elapsed_s,peak_rss_bytes,peak_support,recursive_nodes,accepted_entries,search_included,repeats,algorithm_class
+e40_adaptive,8,256,14,4,365596,true,0.011966900,0.011389200,8900608,4811,13675048,13675827,true,21,certified_explicit_C_adaptive_PEPS
+dfs_comparator,8,,14,,365596,true,0.010071300,0.009768200,4931584,,13496479,13679276,true,21,conventional_DFS_comparator
+e40_adaptive,8,256,15,4,2279184,true,0.071217100,0.066508900,10723328,7426,91864135,91865192,true,21,certified_explicit_C_adaptive_PEPS
+dfs_comparator,8,,15,,2279184,true,0.066003500,0.064071100,5091328,,90634738,91883698,true,21,conventional_DFS_comparator
+e40_adaptive,8,256,16,5,14772512,true,0.563543800,0.403885200,20557824,70745,570130452,570141643,true,21,certified_explicit_C_adaptive_PEPS
+dfs_comparator,8,,16,,14772512,true,0.520468600,0.509706600,5140480,,563208896,570595151,true,21,conventional_DFS_comparator
