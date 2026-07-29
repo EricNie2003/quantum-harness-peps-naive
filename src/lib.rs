@@ -3885,6 +3885,38 @@ pub fn wide_crt_plan(n: usize) -> Result<WideCrtPlan, String> {
     Err("available certified CRT product does not exceed N! bound".to_owned())
 }
 
+fn wide_crt_plan_with_lanes(n: usize, lanes: usize) -> Result<WideCrtPlan, String> {
+    if n > 34 {
+        return Err("wide CRT backend supports N <= 34 because 35! exceeds u128".to_owned());
+    }
+    if !(1..=CRT_PRIME_CANDIDATES.len()).contains(&lanes) {
+        return Err("forced CRT lane count must be in 1..=4".to_owned());
+    }
+    let factorial_bound = factorial_u128(n)?;
+    let mut modulus_product = 1_u128;
+    let mut primes = Vec::with_capacity(lanes);
+    for &prime in &CRT_PRIME_CANDIDATES[..lanes] {
+        if !is_prime_u32_range(prime) {
+            return Err(format!(
+                "CRT modulus {prime} failed deterministic primality check"
+            ));
+        }
+        modulus_product = modulus_product
+            .checked_mul(u128::from(prime))
+            .ok_or_else(|| "CRT modulus product overflow".to_owned())?;
+        primes.push(prime);
+    }
+    if modulus_product <= factorial_bound {
+        return Err("forced CRT modulus product does not exceed N! bound".to_owned());
+    }
+    Ok(WideCrtPlan {
+        n,
+        factorial_bound,
+        primes,
+        modulus_product,
+    })
+}
+
 fn build_wide_crt_tasks(
     n: usize,
     relation: RecursiveTailRelation,
@@ -4059,6 +4091,298 @@ fn contract_wide_crt_tasks<const LANES: usize>(
     total
 }
 
+fn contract_wide_crt_tail_last_six<const LANES: usize>(
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    primes: &[u64; LANES],
+) -> [u64; LANES] {
+    if remaining_rows <= 6 {
+        let exact = contract_certified_tail_last_k_u64::<6>(
+            remaining_rows,
+            columns,
+            diag_dr,
+            diag_dl,
+            board_mask,
+            u64::MAX,
+        )
+        .expect("six-row exact microkernel cannot overflow u64");
+        return std::array::from_fn(|lane| exact % primes[lane]);
+    }
+    let mut total = [0_u64; LANES];
+    let mut positions = !(columns | diag_dr | diag_dl) & board_mask;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        let child = contract_wide_crt_tail_last_six(
+            remaining_rows - 1,
+            next_columns,
+            next_diag_dr,
+            next_diag_dl,
+            board_mask,
+            primes,
+        );
+        for lane in 0..LANES {
+            total[lane] = add_residue(total[lane], child[lane], primes[lane]);
+        }
+    }
+    total
+}
+
+fn contract_wide_crt_tasks_last_six<const LANES: usize>(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    primes: &[u64; LANES],
+) -> [u64; LANES] {
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = [0_u64; LANES];
+                const TASK_CHUNK: usize = 16;
+                loop {
+                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    for task in &tasks[start..end] {
+                        let residues = contract_wide_crt_tail_last_six(
+                            n - split_depth,
+                            task.state.columns,
+                            task.state.diag_dr,
+                            task.state.diag_dl,
+                            board_mask,
+                            primes,
+                        );
+                        for lane in 0..LANES {
+                            let weighted = ((u128::from(residues[lane])
+                                * u128::from(task.orbit_weight))
+                                % u128::from(primes[lane]))
+                                as u64;
+                            subtotal[lane] = add_residue(subtotal[lane], weighted, primes[lane]);
+                        }
+                    }
+                }
+                subtotal
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("wide scalar-CRT worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = [0_u64; LANES];
+    for partial in partials {
+        for lane in 0..LANES {
+            total[lane] = add_residue(total[lane], partial[lane], primes[lane]);
+        }
+    }
+    total
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+#[target_feature(enable = "avx2")]
+unsafe fn add_residue_vector(
+    left: std::arch::x86_64::__m256i,
+    right: std::arch::x86_64::__m256i,
+    prime: std::arch::x86_64::__m256i,
+    prime_minus_one: std::arch::x86_64::__m256i,
+) -> std::arch::x86_64::__m256i {
+    use std::arch::x86_64::{
+        _mm256_add_epi64, _mm256_and_si256, _mm256_cmpgt_epi64, _mm256_sub_epi64,
+    };
+    let sum = _mm256_add_epi64(left, right);
+    let reduce_mask = _mm256_cmpgt_epi64(sum, prime_minus_one);
+    _mm256_sub_epi64(sum, _mm256_and_si256(reduce_mask, prime))
+}
+
+#[cfg(target_arch = "x86_64")]
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "avx2")]
+unsafe fn contract_wide_crt_tail_avx2(
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    primes: &[u64; 4],
+    prime_vector: std::arch::x86_64::__m256i,
+    prime_minus_one_vector: std::arch::x86_64::__m256i,
+) -> std::arch::x86_64::__m256i {
+    use std::arch::x86_64::{_mm256_set_epi64x, _mm256_setzero_si256};
+    if remaining_rows <= 6 {
+        let exact = contract_certified_tail_last_k_u64::<6>(
+            remaining_rows,
+            columns,
+            diag_dr,
+            diag_dl,
+            board_mask,
+            u64::MAX,
+        )
+        .expect("six-row exact microkernel cannot overflow u64");
+        return _mm256_set_epi64x(
+            (exact % primes[3]) as i64,
+            (exact % primes[2]) as i64,
+            (exact % primes[1]) as i64,
+            (exact % primes[0]) as i64,
+        );
+    }
+    let mut total = _mm256_setzero_si256();
+    let mut positions = !(columns | diag_dr | diag_dl) & board_mask;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        // SAFETY: this function and its recursive call execute under the same
+        // AVX2 target feature.
+        let child = unsafe {
+            contract_wide_crt_tail_avx2(
+                remaining_rows - 1,
+                next_columns,
+                next_diag_dr,
+                next_diag_dl,
+                board_mask,
+                primes,
+                prime_vector,
+                prime_minus_one_vector,
+            )
+        };
+        // SAFETY: all vector lanes stay below 2*p < 2^33, so the signed
+        // comparison used by modular reduction is exact.
+        total = unsafe { add_residue_vector(total, child, prime_vector, prime_minus_one_vector) };
+    }
+    total
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn contract_wide_crt_tasks_avx2_inner(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    primes: &[u64; 4],
+) -> [u64; 4] {
+    use std::arch::x86_64::{
+        __m256i, _mm256_set_epi64x, _mm256_setzero_si256, _mm256_storeu_si256,
+    };
+    let prime_vector = _mm256_set_epi64x(
+        primes[3] as i64,
+        primes[2] as i64,
+        primes[1] as i64,
+        primes[0] as i64,
+    );
+    let prime_minus_one_vector = _mm256_set_epi64x(
+        (primes[3] - 1) as i64,
+        (primes[2] - 1) as i64,
+        (primes[1] - 1) as i64,
+        (primes[0] - 1) as i64,
+    );
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = _mm256_setzero_si256();
+                const TASK_CHUNK: usize = 16;
+                loop {
+                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    for task in &tasks[start..end] {
+                        // SAFETY: this worker inherits the AVX2 target feature
+                        // of the enclosing function.
+                        let mut residues = unsafe {
+                            contract_wide_crt_tail_avx2(
+                                n - split_depth,
+                                task.state.columns,
+                                task.state.diag_dr,
+                                task.state.diag_dl,
+                                board_mask,
+                                primes,
+                                prime_vector,
+                                prime_minus_one_vector,
+                            )
+                        };
+                        if task.orbit_weight == 2 {
+                            // SAFETY: doubling is modular addition of a vector
+                            // to itself and preserves all exact lanes.
+                            residues = unsafe {
+                                add_residue_vector(
+                                    residues,
+                                    residues,
+                                    prime_vector,
+                                    prime_minus_one_vector,
+                                )
+                            };
+                        } else {
+                            assert_eq!(task.orbit_weight, 1);
+                        }
+                        // SAFETY: every lane remains canonical modulo p.
+                        subtotal = unsafe {
+                            add_residue_vector(
+                                subtotal,
+                                residues,
+                                prime_vector,
+                                prime_minus_one_vector,
+                            )
+                        };
+                    }
+                }
+                subtotal
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("wide AVX2 CRT worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = _mm256_setzero_si256();
+    for partial in partials {
+        // SAFETY: every partial lane is canonical modulo p.
+        total = unsafe { add_residue_vector(total, partial, prime_vector, prime_minus_one_vector) };
+    }
+    let mut residues = [0_u64; 4];
+    // SAFETY: the output array has exactly four u64 lanes.
+    unsafe {
+        _mm256_storeu_si256(residues.as_mut_ptr().cast::<__m256i>(), total);
+    }
+    residues
+}
+
+fn contract_wide_crt_tasks_avx2(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    primes: &[u64; 4],
+) -> [u64; 4] {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: guarded by runtime AVX2 feature detection.
+            return unsafe {
+                contract_wide_crt_tasks_avx2_inner(tasks, n, split_depth, board_mask, primes)
+            };
+        }
+    }
+    contract_wide_crt_tasks_last_six(tasks, n, split_depth, board_mask, primes)
+}
+
 fn contract_wide_scalar_tasks(
     tasks: &[WideCrtTask],
     n: usize,
@@ -4185,6 +4509,40 @@ fn contract_wide_crt_residues(
         .to_vec(),
         4 => contract_wide_crt_tasks(tasks, n, split_depth, board_mask, &padded).to_vec(),
         _ => return Err("wide CRT lane count must be in 1..=4".to_owned()),
+    })
+}
+
+fn contract_wide_crt_residues_last_six(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    primes: &[u64],
+    avx2: bool,
+) -> Result<Vec<u64>, String> {
+    if !(3..=4).contains(&primes.len()) {
+        return Err("E50 forced CRT lane count must be 3 or 4".to_owned());
+    }
+    let mut padded = [primes[0]; 4];
+    padded[..primes.len()].copy_from_slice(primes);
+    if avx2 {
+        return Ok(
+            contract_wide_crt_tasks_avx2(tasks, n, split_depth, board_mask, &padded)
+                [..primes.len()]
+                .to_vec(),
+        );
+    }
+    Ok(match primes.len() {
+        3 => contract_wide_crt_tasks_last_six(
+            tasks,
+            n,
+            split_depth,
+            board_mask,
+            &[padded[0], padded[1], padded[2]],
+        )
+        .to_vec(),
+        4 => contract_wide_crt_tasks_last_six(tasks, n, split_depth, board_mask, &padded).to_vec(),
+        _ => unreachable!("validated E50 lane count"),
     })
 }
 
@@ -4326,6 +4684,106 @@ pub fn contract_rows_wide_crt_with_target(
         .prefix_accepted_entries
         .checked_add(recursive_accepted_entries)
         .ok_or_else(|| "wide CRT total accepted-entry counter overflow".to_owned())?;
+    Ok(WideCrtResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed,
+            peak_states: tasks.len().max(1),
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_accepted,
+            row_operator_matched: total_accepted,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        },
+        plan,
+        split_depth: prefix.split_depth,
+        target_tail_tasks: prefix.target_tail_tasks,
+        tail_tasks: tasks.len(),
+        prefix_nodes: prefix.prefix_nodes,
+        prefix_accepted_entries: prefix.prefix_accepted_entries,
+        prefix_kept_entries: prefix.prefix_kept_entries,
+        recursive_nodes,
+        recursive_accepted_entries,
+        seed_elapsed: prefix.seed_elapsed,
+        tail_elapsed,
+        profile_replay_elapsed,
+        residues,
+    })
+}
+
+pub fn contract_rows_wide_crt_last_six_forced_with_target(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+    lanes: usize,
+    avx2: bool,
+) -> Result<WideCrtResult, String> {
+    let total_start = Instant::now();
+    let plan = wide_crt_plan_with_lanes(n, lanes)?;
+    let (_, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
+    let tail_start = Instant::now();
+    let residues = contract_wide_crt_residues_last_six(
+        &tasks,
+        n,
+        prefix.split_depth,
+        board_mask,
+        &plan.primes,
+        avx2,
+    )?;
+    let tail_elapsed = tail_start.elapsed();
+    let elapsed = total_start.elapsed();
+    let count = reconstruct_crt(&residues, &plan.primes)?;
+    if count > plan.factorial_bound {
+        return Err("forced CRT reconstruction exceeds certified N! count bound".to_owned());
+    }
+
+    let profile_start = Instant::now();
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    let mut replay_count = 0_u128;
+    if profile_replay {
+        let partials = tasks
+            .par_iter()
+            .map(|task| {
+                let mut metrics = RecursiveTailMetrics::default();
+                let completions = contract_recursive_tail(
+                    n,
+                    prefix.split_depth,
+                    task.state,
+                    relation,
+                    board_mask,
+                    &mut metrics,
+                )?;
+                let weighted = completions
+                    .checked_mul(u128::from(task.orbit_weight))
+                    .ok_or_else(|| "forced CRT profile task weight overflow".to_owned())?;
+                Ok::<_, String>((weighted, metrics))
+            })
+            .collect::<Vec<_>>();
+        for partial in partials {
+            let (weighted, metrics) = partial?;
+            replay_count = replay_count
+                .checked_add(weighted)
+                .ok_or_else(|| "forced CRT profile reduction overflow".to_owned())?;
+            recursive_nodes = recursive_nodes
+                .checked_add(metrics.nodes)
+                .ok_or_else(|| "forced CRT recursive node counter overflow".to_owned())?;
+            recursive_accepted_entries = recursive_accepted_entries
+                .checked_add(metrics.accepted_entries)
+                .ok_or_else(|| "forced CRT accepted-entry counter overflow".to_owned())?;
+        }
+        if replay_count != count {
+            return Err("forced CRT result disagrees with generic C replay".to_owned());
+        }
+    }
+    let profile_replay_elapsed = profile_start.elapsed();
+    let total_accepted = prefix
+        .prefix_accepted_entries
+        .checked_add(recursive_accepted_entries)
+        .ok_or_else(|| "forced CRT total accepted-entry counter overflow".to_owned())?;
     Ok(WideCrtResult {
         contraction: ContractionResult {
             n,
@@ -6150,8 +6608,8 @@ mod tests {
         contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
-        contract_rows_wide_crt, contract_rows_wide_scalar,
-        contract_rows_wide_scalar_last_k_with_target,
+        contract_rows_wide_crt, contract_rows_wide_crt_last_six_forced_with_target,
+        contract_rows_wide_scalar, contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
         top_row_vertical_orbit_weight, wide_crt_plan,
@@ -6556,6 +7014,25 @@ mod tests {
             assert!(prefix.tail_tasks >= prefix.target_tail_tasks);
             assert!(prefix.split_depth <= n);
             assert_eq!(prefix.plan.n, n);
+        }
+    }
+
+    #[test]
+    fn forced_three_and_four_lane_avx2_crt_match_scalar_and_generic_c() {
+        for n in 0..=12 {
+            for lanes in 3..=4 {
+                let avx =
+                    contract_rows_wide_crt_last_six_forced_with_target(n, true, 512, lanes, true)
+                        .unwrap();
+                let scalar =
+                    contract_rows_wide_crt_last_six_forced_with_target(n, true, 512, lanes, false)
+                        .unwrap();
+                assert_eq!(avx.residues, scalar.residues, "N={n}, lanes={lanes}");
+                assert_eq!(avx.contraction.count, scalar.contraction.count);
+                assert_eq!(Some(avx.contraction.count), known_count(n));
+                assert_eq!(avx.plan.primes.len(), lanes);
+                assert!(avx.plan.modulus_product > avx.plan.factorial_bound);
+            }
         }
     }
 
