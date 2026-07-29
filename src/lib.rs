@@ -908,6 +908,34 @@ pub fn contract_rows_d4_joint_u64_promoting(
     contract_rows_d4_joint_u64_with_limits(n, shards, coefficient_bits, u64::MAX)
 }
 
+#[derive(Clone, Debug)]
+pub struct ArenaReuseResult {
+    pub joint: JointU64Result,
+    pub total_reused_capacity_bytes: usize,
+    pub total_destination_growth_bytes: usize,
+    pub peak_spare_capacity_bytes: usize,
+}
+
+pub fn contract_rows_d4_joint_u64_arena_reuse(
+    n: usize,
+    shards: usize,
+) -> Result<ArenaReuseResult, String> {
+    let coefficient_bits = 64_u32
+        .checked_sub(
+            u32::try_from(3_usize.saturating_mul(n))
+                .map_err(|_| "joint-u64 boundary width does not fit u32".to_owned())?,
+        )
+        .ok_or_else(|| "joint-u64 packing requires N <= 21".to_owned())?;
+    let (joint, reuse) =
+        contract_rows_d4_joint_u64_with_reuse(n, shards, coefficient_bits, u64::MAX, true)?;
+    Ok(ArenaReuseResult {
+        joint,
+        total_reused_capacity_bytes: reuse.total_reused_capacity_bytes,
+        total_destination_growth_bytes: reuse.total_destination_growth_bytes,
+        peak_spare_capacity_bytes: reuse.peak_spare_capacity_bytes,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExplicitFrontierOrder {
     RowMajor,
@@ -2667,12 +2695,21 @@ impl LocalJointGeneration {
 struct JointKernelResult {
     parallel: ParallelGenerationResult,
     max_coefficient_observed: u64,
+    reuse: ArenaReuseMetrics,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ArenaReuseMetrics {
+    total_reused_capacity_bytes: usize,
+    total_destination_growth_bytes: usize,
+    peak_spare_capacity_bytes: usize,
 }
 
 fn contract_rows_d4_joint_u64_kernel(
     n: usize,
     shards: usize,
     coefficient_bits: u32,
+    reuse_arenas: bool,
 ) -> Result<JointKernelResult, String> {
     if n > 21 {
         return Err("joint-u64 virtual-boundary backend supports N <= 21".to_owned());
@@ -2689,6 +2726,7 @@ fn contract_rows_d4_joint_u64_kernel(
         return Ok(JointKernelResult {
             parallel: contract_rows_d4_compact_parallel_generation_kernel(n, shards)?,
             max_coefficient_observed: 1,
+            reuse: ArenaReuseMetrics::default(),
         });
     }
 
@@ -2717,6 +2755,10 @@ fn contract_rows_d4_joint_u64_kernel(
     let mut peak_thread_local_bytes = 0_usize;
     let mut peak_worker_partials = 0_usize;
     let mut max_coefficient_observed = 1_u64;
+    let mut reuse = ArenaReuseMetrics::default();
+    let mut spare = (0..shards)
+        .map(|_| Vec::<JointEntry>::new())
+        .collect::<Vec<_>>();
     let total_start = Instant::now();
 
     for row in 0..n {
@@ -2747,9 +2789,24 @@ fn contract_rows_d4_joint_u64_kernel(
             }
         }
         source_ranges.push((range_start, shards));
-        let shared = (0..shards)
-            .map(|_| Mutex::new(Vec::<JointEntry>::new()))
-            .collect::<Vec<_>>();
+        let destination = if reuse_arenas {
+            std::mem::take(&mut spare)
+        } else {
+            (0..shards)
+                .map(|_| Vec::<JointEntry>::new())
+                .collect::<Vec<_>>()
+        };
+        let initial_destination_capacity_bytes = destination
+            .iter()
+            .map(|bucket| bucket.capacity() * std::mem::size_of::<JointEntry>())
+            .sum::<usize>();
+        reuse.total_reused_capacity_bytes = reuse
+            .total_reused_capacity_bytes
+            .saturating_add(initial_destination_capacity_bytes);
+        reuse.peak_spare_capacity_bytes = reuse
+            .peak_spare_capacity_bytes
+            .max(initial_destination_capacity_bytes);
+        let shared = destination.into_iter().map(Mutex::new).collect::<Vec<_>>();
         let partials = source_ranges
             .par_iter()
             .map(|&(start, end)| {
@@ -2813,7 +2870,7 @@ fn contract_rows_d4_joint_u64_kernel(
             completed_row_terms += partial.completed_row_terms;
             max_coefficient_observed = max_coefficient_observed.max(partial.max_coefficient);
         }
-        drop(boundary);
+        let mut previous_boundary = std::mem::take(&mut boundary);
         let mut candidates = shared
             .into_iter()
             .map(|bucket| {
@@ -2822,6 +2879,17 @@ fn contract_rows_d4_joint_u64_kernel(
                     .map_err(|_| "parallel joint-u64 bucket lock was poisoned".to_owned())
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let destination_capacity_bytes = candidates
+            .iter()
+            .map(|bucket| bucket.capacity() * std::mem::size_of::<JointEntry>())
+            .sum::<usize>();
+        reuse.total_destination_growth_bytes = reuse.total_destination_growth_bytes.saturating_add(
+            destination_capacity_bytes.saturating_sub(initial_destination_capacity_bytes),
+        );
+        if reuse_arenas {
+            previous_boundary.iter_mut().for_each(Vec::clear);
+            spare = previous_boundary;
+        }
         generation_elapsed += generation_start.elapsed();
 
         let sort_start = Instant::now();
@@ -2905,6 +2973,7 @@ fn contract_rows_d4_joint_u64_kernel(
             peak_worker_partials,
         },
         max_coefficient_observed,
+        reuse,
     })
 }
 
@@ -2914,22 +2983,39 @@ fn contract_rows_d4_joint_u64_with_limits(
     coefficient_bits: u32,
     compact64_limit: u64,
 ) -> Result<JointU64Result, String> {
+    contract_rows_d4_joint_u64_with_reuse(n, shards, coefficient_bits, compact64_limit, false)
+        .map(|(joint, _)| joint)
+}
+
+fn contract_rows_d4_joint_u64_with_reuse(
+    n: usize,
+    shards: usize,
+    coefficient_bits: u32,
+    compact64_limit: u64,
+    reuse_arenas: bool,
+) -> Result<(JointU64Result, ArenaReuseMetrics), String> {
     let total_start = Instant::now();
     let joint_start = Instant::now();
-    match contract_rows_d4_joint_u64_kernel(n, shards, coefficient_bits) {
-        Ok(result) => Ok(JointU64Result {
-            contraction: result.parallel.contraction,
-            used_joint_fast_path: true,
-            fallback_used_u64_fast_path: None,
-            promotion_reason: None,
-            coefficient_bits,
-            max_coefficient_observed: result.max_coefficient_observed,
-            attempted_joint_elapsed: joint_start.elapsed(),
-            generation_elapsed: result.parallel.generation_elapsed,
-            sort_elapsed: result.parallel.sort_elapsed,
-            reduce_elapsed: result.parallel.reduce_elapsed,
-            peak_thread_local_bytes: result.parallel.peak_thread_local_bytes,
-        }),
+    match contract_rows_d4_joint_u64_kernel(n, shards, coefficient_bits, reuse_arenas) {
+        Ok(result) => {
+            let reuse = result.reuse;
+            Ok((
+                JointU64Result {
+                    contraction: result.parallel.contraction,
+                    used_joint_fast_path: true,
+                    fallback_used_u64_fast_path: None,
+                    promotion_reason: None,
+                    coefficient_bits,
+                    max_coefficient_observed: result.max_coefficient_observed,
+                    attempted_joint_elapsed: joint_start.elapsed(),
+                    generation_elapsed: result.parallel.generation_elapsed,
+                    sort_elapsed: result.parallel.sort_elapsed,
+                    reduce_elapsed: result.parallel.reduce_elapsed,
+                    peak_thread_local_bytes: result.parallel.peak_thread_local_bytes,
+                },
+                reuse,
+            ))
+        }
         Err(error) if error.starts_with(JOINT_PROMOTION_PREFIX) => {
             let attempted_joint_elapsed = joint_start.elapsed();
             let fallback =
@@ -2939,22 +3025,25 @@ fn contract_rows_d4_joint_u64_with_limits(
             let mut contraction = fallback.contraction;
             contraction.elapsed = total_start.elapsed();
             contraction.peak_rss_bytes = contraction.peak_rss_bytes.max(peak_rss_bytes());
-            Ok(JointU64Result {
-                contraction,
-                used_joint_fast_path: false,
-                fallback_used_u64_fast_path: Some(fallback_used_u64_fast_path),
-                promotion_reason: Some(match fallback_reason {
-                    Some(reason) => format!("{error}; compact64 fallback: {reason}"),
-                    None => error,
-                }),
-                coefficient_bits,
-                max_coefficient_observed: 0,
-                attempted_joint_elapsed,
-                generation_elapsed: fallback.generation_elapsed,
-                sort_elapsed: fallback.sort_elapsed,
-                reduce_elapsed: fallback.reduce_elapsed,
-                peak_thread_local_bytes: fallback.peak_thread_local_bytes,
-            })
+            Ok((
+                JointU64Result {
+                    contraction,
+                    used_joint_fast_path: false,
+                    fallback_used_u64_fast_path: Some(fallback_used_u64_fast_path),
+                    promotion_reason: Some(match fallback_reason {
+                        Some(reason) => format!("{error}; compact64 fallback: {reason}"),
+                        None => error,
+                    }),
+                    coefficient_bits,
+                    max_coefficient_observed: 0,
+                    attempted_joint_elapsed,
+                    generation_elapsed: fallback.generation_elapsed,
+                    sort_elapsed: fallback.sort_elapsed,
+                    reduce_elapsed: fallback.reduce_elapsed,
+                    peak_thread_local_bytes: fallback.peak_thread_local_bytes,
+                },
+                ArenaReuseMetrics::default(),
+            ))
         }
         Err(error) => Err(error),
     }
@@ -3932,10 +4021,10 @@ mod e24_kernel_tests {
         contract_rows_d4_batched_sparse_sort_reduce, contract_rows_d4_compact_parallel_generation,
         contract_rows_d4_compact_sharded_sort_reduce, contract_rows_d4_compact_u64_promoting,
         contract_rows_d4_compact_u64_promoting_with_limit,
-        contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_joint_u64_promoting,
-        contract_rows_d4_joint_u64_with_limits, contract_rows_d4_orbit_sort_reduce,
-        contract_rows_d4_sharded_sparse_sort_reduce, contract_rows_d4_sparse_sort_reduce,
-        known_count, sort_packed_radix,
+        contract_rows_d4_deferred_sparse_sort_reduce, contract_rows_d4_joint_u64_arena_reuse,
+        contract_rows_d4_joint_u64_promoting, contract_rows_d4_joint_u64_with_limits,
+        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sharded_sparse_sort_reduce,
+        contract_rows_d4_sparse_sort_reduce, known_count, sort_packed_radix,
     };
 
     #[test]
@@ -4167,6 +4256,31 @@ mod e24_kernel_tests {
         assert!(!u128_fallback.used_joint_fast_path);
         assert_eq!(u128_fallback.fallback_used_u64_fast_path, Some(false));
         assert_eq!(u128_fallback.contraction.count, 92);
+    }
+
+    #[test]
+    fn reused_destination_arenas_preserve_joint_contraction() {
+        for n in 0..=10 {
+            let baseline = contract_rows_d4_joint_u64_promoting(n, 8).unwrap();
+            let candidate = contract_rows_d4_joint_u64_arena_reuse(n, 8).unwrap();
+            assert!(candidate.joint.used_joint_fast_path, "N={n}");
+            assert_eq!(
+                candidate.joint.contraction.count, baseline.contraction.count,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.joint.contraction.peak_states, baseline.contraction.peak_states,
+                "N={n}"
+            );
+            assert_eq!(
+                candidate.joint.contraction.row_operator_matched,
+                baseline.contraction.row_operator_matched,
+                "N={n}"
+            );
+        }
+        let candidate = contract_rows_d4_joint_u64_arena_reuse(10, 8).unwrap();
+        assert!(candidate.total_reused_capacity_bytes > 0);
+        assert!(candidate.peak_spare_capacity_bytes > 0);
     }
 
     #[test]
