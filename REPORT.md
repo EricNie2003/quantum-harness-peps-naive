@@ -1470,3 +1470,117 @@ revision 的可复现实测边界。
 
 下一轮 E41--E45 的 gates 见研究计划 §R。在下一次五方向 review 前，
 不得跳过实验隔离、explicit-C replay 或 raw benchmark 义务。
+
+## 36. E41–E45 强制五方向复盘与 PEPS 反作弊审计
+
+### 36.1 五个方向的结果、机制与决策
+
+| 方向 | 核心实测 | 机制判断 | 决策 |
+|:---|:---|:---|:---:|
+| E41 prefix-free sectors | N=14/15/16 为 0.01026/0.06725/0.51467 s；仅 N=14 相对 E40 达 8% | seed 只有 0.04--0.13 ms；删除 prefix merge 无法改变 13.7M--570.6M-entry tail | REJECT |
+| E42 certified last-4 | 相对 E40，N=14/15 降 8.6%/13.4%；N=15 首次稳定快于 DFS 6.9% | 展开最宽的最后四层，删除函数调用、重复 base-case 和 mask 重算；C work 不变 | KEEP，当前最快 production |
+| E43 ordering/chunks | 正式 N=14/15/16 相对 E42 为 -3.4%/-0.1%/+1.6%；N=16 p90 未改善 | cheap score 预测力不足；probe3 评分本身约等于一次 contraction；双峰不是 queue imbalance | REJECT |
+| E44 exact transposition table | 最佳 hit rate 仅 0.43--0.58%，N=14--17 慢 1.36--1.55x | row-ordered virtual boundary 几乎不重新汇合；hash/lookup/write 远大于复用 | REJECT |
+| E45 wide key + CRT | 验证到 Q(19)；N=18 31.30 s / 7.3 MB，E42 为 24.56 s / 600.7 MB | 分离 masks 消除 key-width/RSS 限制；多 residue lanes 增加约 26--27% 时间 | KEEP 为 optional exact/low-memory backend |
+
+E41 否定了“剩余差距主要来自 sparse prefix merge”；E42 说明最宽递归
+层的指令常数仍值得优化；E43 排除了当前 task ordering/chunk 作为系统双峰
+的主要原因；E44 以低于 1% 的 hit rate 否定了普通 suffix memoization；
+E45 则把 **算术/边界宽度可扩展** 与 **tail work 可扩展** 明确分开：前者
+已经解决到 N=34，后者仍是指数瓶颈。
+
+### 36.2 当前 PEPS、DFS 与 wide-CRT scaling
+
+同机 Ryzen 9 7945HX、rustc 1.94.0、release/thin-LTO、
+`codegen-units=1`、8 threads。N=14--16 的 E42/DFS 是 3 warmups +
+21 samples；N=17 是 1+5，N=18 是 1+3。E45 N=14--17 为 1+5
+（N=16/17 的选定 target 另做 1+3），N=18 为 1+3，N=19 为一个无
+warmup 的 exact sample。
+
+| N | E42 last-4 | DFS comparator | E42/DFS | E45 wide CRT | E45 peak RSS | E45 peak support | E45 accepted C entries |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 14 | 0.010774 s | 0.009980 s | 1.080x | 0.011204 s | 6.07 MB | 4,816 | 13,679,283 |
+| 15 | 0.061246 s | 0.065295 s | **0.938x** | 0.073023 s | 6.31 MB | 7,432 | 91,883,705 |
+| 16 | 0.460113 s | 0.481245 s | 0.956x | 0.439701 s | 12.91 MB | 70,906 | 570,595,159 |
+| 17 | 3.435200 s | 3.624470 s | **0.948x** | 4.336212 s | 17.61 MB | 114,434 | 4,276,033,044 |
+| 18 | 24.564536 s | 21.875688 s | 1.123x | 31.297124 s | 7.26 MB | 18,132 | 29,682,922,254 |
+| 19 | — | — | — | 243.230050 s | 6.33 MB | 25,080 | 未 profile |
+
+N=16 过去多批次出现 PEPS/DFS 同步移动的系统双峰，所以虽然本批 E42
+快 4.4%，仍不把它单独认证为稳定 crossover。N=15 和 N=17 分别快
+约 6.2% 和 5.2%，足以回答“PEPS 是否原则上不可能超过这个 DFS”：
+**不是；当前实现已经在有限 N、同硬件同线程的可复测点超过该 baseline。**
+但 N=18 又落后 12.3%，故还不能声称 scaling 已优于 DFS。
+
+只把 N=14 与 N=18 两端换算为观察窗口的几何倍率
+`(T18/T14)^(1/4)`，E42 约为 6.90、DFS 约为 6.81、E45 约为 7.27。
+这不是渐近复杂度证明；它只说明当前窗口里 PEPS 尚无更低指数的证据。
+最近一档 N=17→18 的 wall ratio 分别为 7.15、6.04、7.22，与
+N=18 crossover 消失一致。
+
+checkpoint commands 与 raw data：
+
+- `cargo run --release --bin e42_last_k -- 256 14 16 21 3 4`
+- `cargo run --release --bin dfs_bitmask -- bench 16 --min 14 --threads 8 --repeats 21 --warmup 3 --csv`
+- `cargo run --release --bin e45_wide_crt -- bench 14 17 5 1 512 1`
+- `cargo run --release --bin e45_wide_crt -- bench 18 18 3 1 2048 1`
+- `cargo run --release --bin e45_wide_crt -- bench 19 19 1 0 2048 0`
+- `benchmarks/e45_e42_dfs_controls.csv`
+- `benchmarks/e45_wide_crt_release.csv`
+
+RSS 是 Windows `PeakWorkingSet64` 进程高水位，包含 allocator、runtime、
+worker stacks 和启用时的独立 profile replay，不等于 live heap。
+N=19 为避免再运行数分钟的 generic replay，CSV 明确
+`metrics_collected=false`；其 accepted-entry 字段只有 prefix，所以上表
+不把它冒充完整 work。
+
+### 36.3 “PEPS 是否在 cheat”的逐项审计
+
+结论先写清楚：**当前 E42/E45 没有用 DFS 或已知 Q(N) 替换 PEPS；
+它们符合仓库所允许的“由显式 C 机械派生、经逐项证明等价的优化
+contraction”。** 但它们也不应再叫 naive sitewise scan；热循环是
+proved-equivalent compiled contraction。
+
+| 审计项 | 源码/测试证据 | 判定 |
+|:---|:---|:---:|
+| rank-9 `B` | `SiteTensorB::sec_vi()` 明确保存 `alpha` 和 8 个 virtual legs；生成 16 个 `alpha=0` 四通道独立 pass-through，加 1 个四通道 0→1 occupied entry | PASS |
+| rank-8 `C` | `SiteTensorC::from_b` 实际对 physical `alpha` 求和；`C` 不是另写的 queen rule；测试要求 B/C 都恰好 17 entries | PASS |
+| local truth table | 16 个 input signatures 的 indexed entries 与扫描完整 C 逐项相等；compiled operator 缺任一 pass-through、多一个 occupied、非 unit value 或出现额外 entry 都 fail closed | PASS |
+| v0/v1/v2 | sitewise reference 从 row/column/diagonal incoming v0 开始；row 末端只留 signal=1，底部 columns 只收 v1，diagonals 不过滤即 v2；新增测试从 B 投影单线 transfer，穷举 4-site occupations，验证 v0…v1 恰好一个、v0…v2 至多一个 | PASS |
+| optimized successor | 对 N<=8 每个 reachable parent，recursive successor multiset 与 compiled-C row 完全相同；compiled-C 又与逐 site 扫描 explicit C 相同 | PASS |
+| E42 microkernel | 只有 `CertifiedSecViTailPlan` 确认四通道 0→1、row v0→v1、value=1 后才展开 last-2/3/4；N=0..10 与 generic C replay 一致，limit=1 强制 u128 replay 得 Q(8)=92 | PASS |
+| E45 CRT | prefix 逐步应用同一 `RecursiveTailRelation`；tail 只是同时在 1--4 个素域收缩；prime 经确定性 trial division，checked-u128 CRT product 必须大于 N!，重构后再检查 count≤N! | PASS |
+| exact arithmetic | E42 每次加/乘 checked，u64 超限完整 replay u128；E45 只用整数模运算与 checked CRT，没有 float、SVD、threshold 或 rounding | PASS |
+| DFS/known-count 隔离 | 静态搜索显示 PEPS library 求解路径没有调用 `count_dfs_bitmask`/`profile_dfs_bitmask`；`known_count` 只在测试和 benchmark 完成后校验结果。DFS 位于独立 module/binary | PASS |
+
+需要坦白说明最容易误判的一点：E42/E45 的 hot loop 是
+`available = !(columns | diag_dr | diag_dl)` 加 OR/shift，机器指令确实与
+Richards bitmask DFS 极为相似。这里不是靠变量名判定 fidelity，而靠以下
+证据链：
+
+`explicit B → physical contraction C → fail-closed row compiler →
+reachable-parent exact replay → certified tail plan → optimized loop`。
+
+Sec. VI 的 17-entry tensor在 row-v1 边界下本来就编译成这个稀疏
+automaton。删除中间张量 record、改变 contraction association、展开最后
+四层，不会改变所收缩的 virtual bonds。若直接复制 DFS recurrence 而没有
+上述编译/逐 parent replay，就会违反约束；当前代码没有这样做。
+
+反作弊审计也确认没有夸大结果：E45 的 N=22--28 只完成 actual
+C-derived prefix，CSV 状态为 `prefix_only_not_QN`；最大完整 exact
+count 是 Q(19)=4,968,057,848。N=19 的两个 residues
+`673090557|673090569` 重构为该值，不是从 known-count 表返回。
+
+### 36.4 Q(28)、不可能性与新的优化重点
+
+E45 证明 wide key 和 certified CRT 本身不再阻止 N>21，但按
+N=18→19 的 7.77x wall ratio并计入 3/4 residue lanes，当前 kernel 的
+Q(28) 粗略投影约 1,600 年。N=28 prefix 只有 7,850 tasks、约
+0.057 ms；限制精确地位于指数 recursive tail。
+
+因此现有结果既不是“PEPS 不可能快过 DFS”的证明，也不是“只要加 CRT
+就能算 Q(28)”的证据。下一轮优先组合 E45 的低内存 direct sectors 与
+N<=20 可由 `N! < 2^64` 证明安全的单路 checked-u64，再扩大 C-certified
+terminal supernode并消除递归/调度常数。E46--E50 的 exact obligations、
+消融和 kill gates 写入研究计划 §S；本检查点严格停在 E45，尚未启动
+E46。

@@ -2891,3 +2891,75 @@ production REJECT、diagnostic KEEP。E40 含 selector overhead 的 N=14/15
 8. E30 tree search 不得原样复活；只有 E41--E44 提供至少两个 actual-cost
    不同的合法 contraction edges 时，才考虑简化 greedy/treeSA；
 9. 完成 E45 后强制复盘；在此之前不得启动 E46。
+
+## S. E41–E45 强制复盘后的修订（2026-07-29）
+
+完整复盘和反作弊审计见 `REPORT.md` §36。E41 prefix-free、E43
+scheduling、E44 transposition table REJECT；E42 certified last-4 KEEP
+为最快 production；E45 wide key/CRT KEEP 为 optional exact/low-memory
+backend。
+
+最新同批 control 中 E42 在 N=15/17 分别比 DFS 快约 6.2%/5.2%，但
+N=18 又慢 12.3%。这已经反证“任何合规 PEPS 都不可能超过当前 DFS
+baseline”，却没有给出更优 scaling。E45 把 N=18 RSS 从 E42 的
+600.7 MB 降到 7.3 MB，但双 residue traversal 慢约 27%；Q(28) 当前
+投影仍约 1,600 年。
+
+### S.1 复盘后主假设
+
+下一轮不复活 full D4、普通 memoization 或高成本 treeSA：
+
+1. E39 已证明 full D4 相对 vertical 只再减少约 1.3--1.8% nodes；
+2. E44 证明 row-recursive states 的可复用率低于 1%；
+3. E43 证明当前任务顺序不是主要长尾来源；
+4. E41 证明 prefix seed/merge 已不是时间主体；
+5. E42 唯一显著收益来自减少最宽 tail 层的指令、栈和分支常数。
+
+新的最强可检验假设是：
+
+> 对 N<=20，`N! < 2^64` 给出全局非负 contraction count 的确定性上界。
+> 因而可把 E45 的低内存 direct sectors 与单路 checked-u64 结合，避免
+> E45 的双 residue lanes；随后继续扩大由 C 认证的 terminal supernode，
+> 消除递归栈，并在独立 sectors/residue lanes 上做可回放的 SIMD。
+
+这条路线首先追求在 N=18 稳定超过 DFS，同时保留 E45 的低 RSS。它只做
+常数优化，不假装解决 Q(28) 的指数；若 E46--E50 全部完成后 observed
+base 仍不低于 DFS，下一次 review 必须重新寻找改变 contraction exponent
+的表示，而不是继续无限微调 hot loop。
+
+### S.2 E46–E50 五个方向
+
+| ID | 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E46 | **wide direct sectors 的 certified scalar-u64 backend** | tasks 仍逐步应用 explicit-C 编译的 `RecursiveTailRelation`；N<=20 启动前证明 `N!<=u64::MAX`，每次加/乘仍 checked；人工 coefficient limit 强制回退 E45 CRT/generic replay | 高 / 2 | N=16--18 至少两档比 E45 two-lane 快 25%；N=18 达 DFS 的 1.05x 内或更快；RSS <25 MB | 任一 overflow/promotion 无法从同一 C sectors replay，或两档收益 <12%，或 RSS >50 MB |
+| E47 | **C-generated last-5/last-6 terminal supernode** | 从 `CertifiedSecViTailPlan` 生成完整 5/6-row contraction tree；每个 leaf 明确施加 column v1、diagonal v2；逐 boundary 与 generic recursive C 对照，禁止复制 DFS 的特例表 | 中高 / 3 | k=4/5/6 消融中，N=16--18 两档相对 E46 再快 8%；binary size/compile time 增幅 <25% | 两档收益 <3%、代码尺寸失控，或任一 boundary replay mismatch |
+| E48 | **iterative fixed-stack C-tail machine** | 只把 E47 相同 C-derived DFS tree 的调用栈显式化；访问顺序、accepted entries、checked reduction 与 recursive reference 完全相同 | 高 / 3 | N=17/18 median 降 10% 或 p90 降 15%，RSS 不增 10%；node/entry counters identical | 两档收益 <5%、显式 stack 增加 branch/store，或 work counters 改变 |
+| E49 | **跨 direct sectors 的 exact SIMD/batched traversal** | 每个 lane 对应完整、不重叠的 C-derived boundary task；lane compaction 必须保留 orbit weight 和 exact sum；scalar lane-by-lane replay 为 oracle | 中 / 4 | AVX2/portable batch 相对 E48 在 N=16--18 两档快 15%，vector utilization 与 fallback 比例完整记录 | divergence/compaction 令两档收益 <8%、unsafe path 无法逐 lane 验证，或 RSS 增 >25% |
+| E50 | **3/4-prime residue-lane SIMD CRT** | prime、N! bound、CRT reconstruction 与 E45 不变；只向量化同一 C contraction 的 modular add/mul；forced 3/4-lane 与 scalar CRT逐 residue 相等 | 中 / 4 | N=17/18 forced 3/4-prime 至少快 25%，并更新 N=21--28 资源投影；所有 residues/reconstruction exact | 两档收益 <10%、mod reduction 吞掉 SIMD，或任何 residue mismatch |
+
+### S.3 执行、消融和停止规则
+
+1. 严格按 E46 → E47 → E48 → E49 → E50；每项独立
+   worktree/branch，main 只合入 KEEP 实现和所有实验报告；
+2. E46 同 revision 比较 E42 merged scalar、E45 direct two-lane、E46
+   direct scalar，固定相同 task target/threads；不得把旧 CSV 混作新实现；
+3. E46 必须记录 `N!` bound、selected arithmetic backend、promotion
+   reason、tasks、recursive nodes/accepted C entries、wall、RSS；
+4. E47 报告 k=4/5/6 的 binary size、clean release compile time和
+   N=14--18 runtime；微内核只能在 C certificate 成功后进入；
+5. E48 同时保留 recursive reference，逐 N 比较 task count、node count、
+   accepted entries 和 count；metrics replay 不进入 uninstrumented wall；
+6. E49 必须报告 active-lane histogram、lane compactions、scalar fallbacks
+   和有效 SIMD occupancy；不能只报告一个有利 N；
+7. E50 无需等待数小时完成 N=21；先用 N=17/18 强制 3/4 primes 做
+   exact throughput 消融，再据实更新 Q(28) 投影；
+8. full D4 只有出现比 E39 更早可比较的新 cut/lane grouping 时才能以
+   新 ID 复活；必须报告相对 vertical 的增量，不能引用 vs none；
+9. treeSA 只有出现至少两个 actual C-work、materialization 或 SIMD
+   utilization 真正不同的合法 contraction edges 时才进入候选；last-k
+   的 4/5/6 grid 不需要通用路径搜索；
+10. checkpoint 继续固定 Ryzen 9 7945HX、rustc 1.94、release/thin-LTO、
+    8 threads，并与同批 DFS 比较 median/p10/p90；所有 raw CSV 保存在
+    `benchmarks/`；
+11. 完成 E50 后必须执行下一次 five-direction review；复盘前不得启动
+    E51。当前检查点严格停在 E45，E46 尚未开始。

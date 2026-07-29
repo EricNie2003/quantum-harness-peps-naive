@@ -5873,6 +5873,54 @@ mod tests {
         );
     }
 
+    fn line_amplitude_from_b(occupations: &[u8], end_vector: [u128; 2]) -> u128 {
+        let tensor = SiteTensorB::sec_vi();
+        // v0=(1,0) fixes the incoming signal at the start of the line.
+        let mut boundary = [1_u128, 0_u128];
+        for &alpha in occupations {
+            let mut transfer = [[None; 2]; 2];
+            for entry in tensor.entries().iter().filter(|entry| entry.alpha == alpha) {
+                let incoming = usize::from(entry.legs.column_in);
+                let outgoing = usize::from(entry.legs.column_out);
+                if let Some(previous) = transfer[incoming][outgoing] {
+                    assert_eq!(previous, entry.value);
+                } else {
+                    transfer[incoming][outgoing] = Some(entry.value);
+                }
+            }
+            let mut next = [0_u128; 2];
+            for incoming in 0..2 {
+                for (outgoing, local_value) in transfer[incoming].iter().enumerate() {
+                    if let Some(local_value) = local_value {
+                        next[outgoing] += boundary[incoming] * local_value;
+                    }
+                }
+            }
+            boundary = next;
+        }
+        boundary[0] * end_vector[0] + boundary[1] * end_vector[1]
+    }
+
+    #[test]
+    fn v0_v1_v2_line_boundaries_enforce_exactly_and_at_most_one() {
+        let v1 = [0_u128, 1_u128];
+        let v2 = [1_u128, 1_u128];
+        for bits in 0_u8..16 {
+            let occupations = (0..4).map(|site| (bits >> site) & 1).collect::<Vec<_>>();
+            let queens = bits.count_ones();
+            assert_eq!(
+                line_amplitude_from_b(&occupations, v1),
+                u128::from(queens == 1),
+                "v0...v1 must accept exactly one occupied site: {occupations:?}"
+            );
+            assert_eq!(
+                line_amplitude_from_b(&occupations, v2),
+                u128::from(queens <= 1),
+                "v0...v2 must accept at most one occupied site: {occupations:?}"
+            );
+        }
+    }
+
     #[test]
     fn physical_contraction_produces_rank_eight_c_with_seventeen_entries() {
         let tensor = SiteTensorC::sec_vi();
