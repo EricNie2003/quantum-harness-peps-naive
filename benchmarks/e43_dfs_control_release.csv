@@ -1,0 +1,4 @@
+N,count,known_count,verified,median_elapsed_s,min_elapsed_s,p10_elapsed_s,p90_elapsed_s,peak_rss_bytes,threads,split_depth,tasks,recursive_nodes,candidate_placements,metrics_elapsed_s,repeats,warmup,algorithm_class,peak_sparse_support,local_tensor_entries_examined,local_tensor_entries_accepted
+14,365596,365596,true,0.010007000,0.009773900,0.009805500,0.010179100,5533696,8,3,682,13496479,13679276,0.012765800,21,3,conventional_dfs_comparator,NA,NA,NA
+15,2279184,2279184,true,0.064517700,0.063506300,0.063829900,0.066180700,5562368,8,3,939,90634738,91883698,0.076616500,21,3,conventional_dfs_comparator,NA,NA,NA
+16,14772512,14772512,true,0.482288100,0.471651700,0.476088000,0.488765400,5607424,8,3,1118,563208896,570595151,0.642581100,21,3,conventional_dfs_comparator,NA,NA,NA
