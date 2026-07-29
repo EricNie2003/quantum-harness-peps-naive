@@ -3612,6 +3612,331 @@ pub fn contract_rows_adaptive_fast_tail(
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PrefixFreeTask {
+    state: BoundaryState,
+    weight: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PrefixFreeFastTailResult {
+    pub contraction: ContractionResult,
+    pub split_depth: usize,
+    pub target_tail_tasks: usize,
+    pub tail_tasks: usize,
+    pub prefix_nodes: u128,
+    pub prefix_accepted_entries: u128,
+    pub prefix_kept_entries: u128,
+    pub recursive_nodes: u128,
+    pub recursive_accepted_entries: u128,
+    pub used_u64_fast_path: bool,
+    pub promotion_reason: Option<String>,
+    pub seed_elapsed: Duration,
+    pub tail_elapsed: Duration,
+    pub profile_replay_elapsed: Duration,
+}
+
+fn expand_prefix_free_tasks(
+    n: usize,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+    target_tail_tasks: usize,
+) -> Result<(Vec<PrefixFreeTask>, usize, u128, u128, u128), String> {
+    let mut tasks = vec![PrefixFreeTask {
+        state: BoundaryState {
+            columns: 0,
+            diag_dr: 0,
+            diag_dl: 0,
+        },
+        weight: 1,
+    }];
+    let mut split_depth = 0;
+    let mut prefix_nodes = 0_u128;
+    let mut prefix_accepted_entries = 0_u128;
+    let mut prefix_kept_entries = 0_u128;
+
+    while split_depth < n && tasks.len() < target_tail_tasks {
+        let top_row = split_depth == 0;
+        let mut next = Vec::with_capacity(tasks.len().saturating_mul(n - split_depth));
+        for task in tasks {
+            prefix_nodes = prefix_nodes
+                .checked_add(1)
+                .ok_or_else(|| "prefix-free node counter overflow".to_owned())?;
+            let mut positions = recursive_tail_positions(task.state, relation, board_mask);
+            while positions != 0 {
+                let selected = positions & positions.wrapping_neg();
+                positions &= positions - 1;
+                prefix_accepted_entries = prefix_accepted_entries
+                    .checked_add(1)
+                    .ok_or_else(|| "prefix-free accepted-entry counter overflow".to_owned())?;
+                let successor =
+                    recursive_tail_successor(task.state, selected, relation, board_mask);
+                let orbit_weight = if top_row {
+                    let Some(value) = top_row_vertical_orbit_weight(n, successor) else {
+                        continue;
+                    };
+                    u64::try_from(value)
+                        .map_err(|_| "prefix-free orbit weight does not fit u64".to_owned())?
+                } else {
+                    1
+                };
+                let local_value = u64::try_from(relation.value)
+                    .map_err(|_| "prefix-free local C value does not fit u64".to_owned())?;
+                let weight = task
+                    .weight
+                    .checked_mul(local_value)
+                    .and_then(|value| value.checked_mul(orbit_weight))
+                    .ok_or_else(|| "prefix-free task weight overflow".to_owned())?;
+                next.push(PrefixFreeTask {
+                    state: successor,
+                    weight,
+                });
+                prefix_kept_entries = prefix_kept_entries
+                    .checked_add(1)
+                    .ok_or_else(|| "prefix-free kept-entry counter overflow".to_owned())?;
+            }
+        }
+        tasks = next;
+        split_depth += 1;
+    }
+    Ok((
+        tasks,
+        split_depth,
+        prefix_nodes,
+        prefix_accepted_entries,
+        prefix_kept_entries,
+    ))
+}
+
+fn contract_prefix_free_tasks_u64(
+    tasks: &[PrefixFreeTask],
+    n: usize,
+    split_depth: usize,
+    coefficient_limit: u64,
+    board_mask: u64,
+) -> Option<u64> {
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    if worker_count == 1 {
+        let mut total = 0_u64;
+        for task in tasks {
+            let completions = contract_certified_tail_u64(
+                n - split_depth,
+                task.state.columns,
+                task.state.diag_dr,
+                task.state.diag_dl,
+                board_mask,
+                coefficient_limit,
+            )?;
+            let weighted = completions
+                .checked_mul(task.weight)
+                .filter(|&value| value <= coefficient_limit)?;
+            total = total
+                .checked_add(weighted)
+                .filter(|&value| value <= coefficient_limit)?;
+        }
+        return Some(total);
+    }
+
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = 0_u64;
+                const TASK_CHUNK: usize = 16;
+                loop {
+                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    for task in &tasks[start..end] {
+                        let completions = contract_certified_tail_u64(
+                            n - split_depth,
+                            task.state.columns,
+                            task.state.diag_dr,
+                            task.state.diag_dl,
+                            board_mask,
+                            coefficient_limit,
+                        )?;
+                        let weighted = completions
+                            .checked_mul(task.weight)
+                            .filter(|&value| value <= coefficient_limit)?;
+                        subtotal = subtotal
+                            .checked_add(weighted)
+                            .filter(|&value| value <= coefficient_limit)?;
+                    }
+                }
+                Some(subtotal)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("prefix-free tail worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = 0_u64;
+    for partial in partials {
+        total = total
+            .checked_add(partial?)
+            .filter(|&value| value <= coefficient_limit)?;
+    }
+    Some(total)
+}
+
+pub fn contract_rows_prefix_free_fast_tail(
+    n: usize,
+    profile_replay: bool,
+) -> Result<PrefixFreeFastTailResult, String> {
+    contract_rows_prefix_free_fast_tail_with_limit(n, profile_replay, u64::MAX)
+}
+
+fn contract_rows_prefix_free_fast_tail_with_limit(
+    n: usize,
+    profile_replay: bool,
+    coefficient_limit: u64,
+) -> Result<PrefixFreeFastTailResult, String> {
+    if n > 21 {
+        return Err("prefix-free certified backend supports N <= 21".to_owned());
+    }
+    if n == 0 {
+        return Ok(PrefixFreeFastTailResult {
+            contraction: ContractionResult {
+                n,
+                count: 1,
+                elapsed: Duration::ZERO,
+                peak_states: 1,
+                tensor_entries_examined: 17,
+                tensor_entries_matched: 17,
+                row_operator_candidates: 0,
+                row_operator_matched: 0,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            split_depth: 0,
+            target_tail_tasks: 1,
+            tail_tasks: 1,
+            prefix_nodes: 0,
+            prefix_accepted_entries: 0,
+            prefix_kept_entries: 0,
+            recursive_nodes: 1,
+            recursive_accepted_entries: 0,
+            used_u64_fast_path: true,
+            promotion_reason: None,
+            seed_elapsed: Duration::ZERO,
+            tail_elapsed: Duration::ZERO,
+            profile_replay_elapsed: Duration::ZERO,
+        });
+    }
+
+    let total_start = Instant::now();
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let relation = RecursiveTailRelation::compile(&operator)?;
+    let _plan = CertifiedSecViTailPlan::compile(relation)?;
+    let board_mask = (1_u64 << n) - 1;
+    let target_tail_tasks = rayon::current_num_threads().max(1).saturating_mul(512);
+    let seed_start = Instant::now();
+    let (tasks, split_depth, prefix_nodes, prefix_accepted_entries, prefix_kept_entries) =
+        expand_prefix_free_tasks(n, relation, board_mask, target_tail_tasks)?;
+    let seed_elapsed = seed_start.elapsed();
+
+    let tail_start = Instant::now();
+    let fast_count =
+        contract_prefix_free_tasks_u64(&tasks, n, split_depth, coefficient_limit, board_mask);
+    let tail_elapsed = tail_start.elapsed();
+    let fast_elapsed = total_start.elapsed();
+
+    let should_replay = profile_replay || fast_count.is_none();
+    let profile_start = Instant::now();
+    let mut replay_count = 0_u128;
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    if should_replay {
+        let partials = tasks
+            .par_iter()
+            .map(|task| {
+                let mut metrics = RecursiveTailMetrics::default();
+                let completions = contract_recursive_tail(
+                    n,
+                    split_depth,
+                    task.state,
+                    relation,
+                    board_mask,
+                    &mut metrics,
+                )?;
+                let weighted = completions
+                    .checked_mul(u128::from(task.weight))
+                    .ok_or_else(|| {
+                        "coefficient overflow joining prefix-free profiled tail".to_owned()
+                    })?;
+                Ok::<_, String>((weighted, metrics))
+            })
+            .collect::<Vec<_>>();
+        for partial in partials {
+            let (weighted, metrics) = partial?;
+            replay_count = replay_count.checked_add(weighted).ok_or_else(|| {
+                "coefficient overflow reducing prefix-free profiled tail".to_owned()
+            })?;
+            recursive_nodes = recursive_nodes
+                .checked_add(metrics.nodes)
+                .ok_or_else(|| "prefix-free recursive node counter overflow".to_owned())?;
+            recursive_accepted_entries = recursive_accepted_entries
+                .checked_add(metrics.accepted_entries)
+                .ok_or_else(|| {
+                    "prefix-free recursive accepted-entry counter overflow".to_owned()
+                })?;
+        }
+    }
+    let profile_replay_elapsed = profile_start.elapsed();
+    let count = match fast_count {
+        Some(count) => {
+            if profile_replay && replay_count != u128::from(count) {
+                return Err("prefix-free u64 tail disagrees with u128 replay".to_owned());
+            }
+            u128::from(count)
+        }
+        None => replay_count,
+    };
+    let used_u64_fast_path = fast_count.is_some();
+    let elapsed = if used_u64_fast_path {
+        fast_elapsed
+    } else {
+        total_start.elapsed()
+    };
+    let total_accepted_entries = prefix_accepted_entries
+        .checked_add(recursive_accepted_entries)
+        .ok_or_else(|| "prefix-free total accepted-entry counter overflow".to_owned())?;
+    Ok(PrefixFreeFastTailResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed,
+            peak_states: tasks.len().max(1),
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_accepted_entries,
+            row_operator_matched: total_accepted_entries,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        },
+        split_depth,
+        target_tail_tasks,
+        tail_tasks: tasks.len(),
+        prefix_nodes,
+        prefix_accepted_entries,
+        prefix_kept_entries,
+        recursive_nodes,
+        recursive_accepted_entries,
+        used_u64_fast_path,
+        promotion_reason: (!used_u64_fast_path)
+            .then(|| "checked u64 prefix-free tail overflow; exact u128 replay used".to_owned()),
+        seed_elapsed,
+        tail_elapsed,
+        profile_replay_elapsed,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_adaptive_selected_prefix(
     n: usize,
@@ -5120,6 +5445,7 @@ mod tests {
         contract_rows_d4_orbit_sort_reduce, contract_rows_d4_recursive_tail,
         contract_rows_d4_sparse_parallel_sort_reduce, contract_rows_d4_sparse_sort_reduce,
         contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
+        contract_rows_prefix_free_fast_tail, contract_rows_prefix_free_fast_tail_with_limit,
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce, known_count,
         recursive_tail_positions, recursive_tail_successor, top_row_vertical_orbit_weight,
@@ -5423,6 +5749,23 @@ mod tests {
                 assert_eq!(result.probes.last().unwrap().cut, result.selected_cut);
             }
         }
+    }
+
+    #[test]
+    fn prefix_free_c_sectors_and_forced_u128_replay_are_exact() {
+        for n in 0..=10 {
+            let result = contract_rows_prefix_free_fast_tail(n, true).unwrap();
+            assert_eq!(Some(result.contraction.count), known_count(n), "N={n}");
+            assert!(result.split_depth <= n);
+            assert!(result.used_u64_fast_path);
+            if n > 0 {
+                assert!(result.prefix_accepted_entries >= result.prefix_kept_entries);
+            }
+        }
+        let promoted = contract_rows_prefix_free_fast_tail_with_limit(8, false, 1).unwrap();
+        assert!(!promoted.used_u64_fast_path);
+        assert_eq!(promoted.contraction.count, 92);
+        assert!(promoted.promotion_reason.is_some());
     }
 
     #[test]
