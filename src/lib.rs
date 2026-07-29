@@ -3527,6 +3527,63 @@ fn contract_certified_tail_last_k_u64<const LAST_K: usize>(
     Some(count)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TailTaskOrdering {
+    Natural,
+    HardFirst,
+    Probe3HardFirst,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TailTaskBackend {
+    NativeAtomic,
+    Rayon,
+}
+
+#[derive(Clone, Copy)]
+struct TailScheduleConfig {
+    ordering: TailTaskOrdering,
+    backend: TailTaskBackend,
+    chunk: usize,
+}
+
+const DEFAULT_TAIL_SCHEDULE: TailScheduleConfig = TailScheduleConfig {
+    ordering: TailTaskOrdering::Natural,
+    backend: TailTaskBackend::NativeAtomic,
+    chunk: 16,
+};
+
+#[inline]
+fn certified_tail_probe_work(
+    remaining_rows: usize,
+    probe_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+) -> u32 {
+    let mut work = 1_u32;
+    if remaining_rows == 0 || probe_rows == 0 {
+        return work;
+    }
+    let mut positions = !(columns | diag_dr | diag_dl) & board_mask;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        work = work.saturating_add(certified_tail_probe_work(
+            remaining_rows - 1,
+            probe_rows - 1,
+            next_columns,
+            next_diag_dr,
+            next_diag_dl,
+            board_mask,
+        ));
+    }
+    work
+}
+
 #[allow(clippy::too_many_arguments)]
 fn contract_certified_tail_tasks_u64(
     tasks: &[JointEntry],
@@ -3537,6 +3594,7 @@ fn contract_certified_tail_tasks_u64(
     coefficient_limit: u64,
     board_mask: u64,
     microkernel_rows: usize,
+    schedule: TailScheduleConfig,
 ) -> Option<u64> {
     let contract_task: fn(usize, u64, u64, u64, u64, u64) -> Option<u64> = match microkernel_rows {
         0 | 1 => contract_certified_tail_u64,
@@ -3568,19 +3626,50 @@ fn contract_certified_tail_tasks_u64(
         return Some(total);
     }
 
+    if schedule.backend == TailTaskBackend::Rayon {
+        return tasks
+            .par_iter()
+            .try_fold(
+                || 0_u64,
+                |subtotal, &entry| {
+                    let state = PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
+                    let completions = contract_task(
+                        n - cut,
+                        state.columns,
+                        state.diag_dr,
+                        state.diag_dl,
+                        board_mask,
+                        coefficient_limit,
+                    )?;
+                    let weighted = completions
+                        .checked_mul(entry.weight(coefficient_mask))
+                        .filter(|&value| value <= coefficient_limit)?;
+                    subtotal
+                        .checked_add(weighted)
+                        .filter(|&value| value <= coefficient_limit)
+                },
+            )
+            .try_reduce(
+                || 0_u64,
+                |left, right| {
+                    left.checked_add(right)
+                        .filter(|&value| value <= coefficient_limit)
+                },
+            );
+    }
+
     let next_task = AtomicUsize::new(0);
     let partials = std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
             handles.push(scope.spawn(|| {
                 let mut subtotal = 0_u64;
-                const TASK_CHUNK: usize = 16;
                 loop {
-                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    let start = next_task.fetch_add(schedule.chunk, Ordering::Relaxed);
                     if start >= tasks.len() {
                         break;
                     }
-                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    let end = (start + schedule.chunk).min(tasks.len());
                     for &entry in &tasks[start..end] {
                         let state =
                             PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
@@ -3632,6 +3721,10 @@ pub struct CertifiedFastTailResult {
     pub recursive_accepted_entries: u128,
     pub coefficient_bits: u32,
     pub max_prefix_coefficient: u64,
+    pub task_ordering_elapsed: Duration,
+    pub task_ordering: TailTaskOrdering,
+    pub task_backend: TailTaskBackend,
+    pub task_chunk: usize,
 }
 
 pub fn contract_rows_certified_fast_tail(
@@ -3665,7 +3758,14 @@ pub fn contract_rows_adaptive_fast_tail(
     shards: usize,
     profile_replay: bool,
 ) -> Result<AdaptiveFastTailResult, String> {
-    contract_rows_adaptive_fast_tail_impl(n, shards, profile_replay, 0, u64::MAX)
+    contract_rows_adaptive_fast_tail_impl(
+        n,
+        shards,
+        profile_replay,
+        0,
+        u64::MAX,
+        DEFAULT_TAIL_SCHEDULE,
+    )
 }
 
 pub fn contract_rows_adaptive_last_k_tail(
@@ -3685,7 +3785,44 @@ pub fn contract_rows_adaptive_last_k_tail_with_rows(
     if !(2..=4).contains(&microkernel_rows) {
         return Err("last-k microkernel rows must be in 2..=4".to_owned());
     }
-    contract_rows_adaptive_fast_tail_impl(n, shards, profile_replay, microkernel_rows, u64::MAX)
+    contract_rows_adaptive_fast_tail_impl(
+        n,
+        shards,
+        profile_replay,
+        microkernel_rows,
+        u64::MAX,
+        DEFAULT_TAIL_SCHEDULE,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn contract_rows_adaptive_scheduled_tail(
+    n: usize,
+    shards: usize,
+    profile_replay: bool,
+    microkernel_rows: usize,
+    ordering: TailTaskOrdering,
+    backend: TailTaskBackend,
+    chunk: usize,
+) -> Result<AdaptiveFastTailResult, String> {
+    if !(2..=4).contains(&microkernel_rows) {
+        return Err("scheduled tail microkernel rows must be in 2..=4".to_owned());
+    }
+    if ![1, 4, 16, 64].contains(&chunk) {
+        return Err("scheduled tail chunk must be one of 1,4,16,64".to_owned());
+    }
+    contract_rows_adaptive_fast_tail_impl(
+        n,
+        shards,
+        profile_replay,
+        microkernel_rows,
+        u64::MAX,
+        TailScheduleConfig {
+            ordering,
+            backend,
+            chunk,
+        },
+    )
 }
 
 fn contract_rows_adaptive_fast_tail_impl(
@@ -3694,6 +3831,7 @@ fn contract_rows_adaptive_fast_tail_impl(
     profile_replay: bool,
     microkernel_rows: usize,
     coefficient_limit: u64,
+    schedule: TailScheduleConfig,
 ) -> Result<AdaptiveFastTailResult, String> {
     if n == 0 {
         return Ok(AdaptiveFastTailResult {
@@ -3757,6 +3895,7 @@ fn contract_rows_adaptive_fast_tail_impl(
         selected_prefix_elapsed,
         microkernel_rows,
         coefficient_limit,
+        schedule,
     )?;
     Ok(AdaptiveFastTailResult {
         fast,
@@ -3779,10 +3918,11 @@ fn finish_adaptive_selected_prefix(
     prefix_elapsed: Duration,
     microkernel_rows: usize,
     coefficient_limit: u64,
+    schedule: TailScheduleConfig,
 ) -> Result<CertifiedFastTailResult, String> {
     let coefficient_mask = coefficient_mask(coefficient_bits);
     let board_mask = (1_u64 << n) - 1;
-    let tail_tasks = prefix
+    let mut tail_tasks = prefix
         .boundary
         .iter()
         .flatten()
@@ -3790,6 +3930,32 @@ fn finish_adaptive_selected_prefix(
         .collect::<Vec<_>>();
     let prefix_support = tail_tasks.len();
     let tail_start = Instant::now();
+    let task_ordering_start = Instant::now();
+    match schedule.ordering {
+        TailTaskOrdering::Natural => {}
+        TailTaskOrdering::HardFirst => {
+            tail_tasks.sort_unstable_by_key(|entry| {
+                let state = PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
+                std::cmp::Reverse(
+                    (!(state.columns | state.diag_dr | state.diag_dl) & board_mask).count_ones(),
+                )
+            });
+        }
+        TailTaskOrdering::Probe3HardFirst => {
+            tail_tasks.sort_unstable_by_key(|entry| {
+                let state = PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
+                std::cmp::Reverse(certified_tail_probe_work(
+                    n - cut,
+                    3,
+                    state.columns,
+                    state.diag_dr,
+                    state.diag_dl,
+                    board_mask,
+                ))
+            });
+        }
+    }
+    let task_ordering_elapsed = task_ordering_start.elapsed();
     let fast_count = contract_certified_tail_tasks_u64(
         &tail_tasks,
         n,
@@ -3799,6 +3965,7 @@ fn finish_adaptive_selected_prefix(
         coefficient_limit,
         board_mask,
         microkernel_rows,
+        schedule,
     );
     let tail_elapsed = tail_start.elapsed();
     let fast_elapsed = total_start.elapsed();
@@ -3868,6 +4035,10 @@ fn finish_adaptive_selected_prefix(
         recursive_accepted_entries,
         coefficient_bits,
         max_prefix_coefficient: prefix.max_coefficient_observed,
+        task_ordering_elapsed,
+        task_ordering: schedule.ordering,
+        task_backend: schedule.backend,
+        task_chunk: schedule.chunk,
     })
 }
 
@@ -3904,6 +4075,10 @@ fn contract_rows_certified_fast_tail_with_limit(
             recursive_accepted_entries: 0,
             coefficient_bits: 64,
             max_prefix_coefficient: 1,
+            task_ordering_elapsed: Duration::ZERO,
+            task_ordering: TailTaskOrdering::Natural,
+            task_backend: TailTaskBackend::NativeAtomic,
+            task_chunk: 16,
         });
     }
     if n > 21 {
@@ -3944,6 +4119,7 @@ fn contract_rows_certified_fast_tail_with_limit(
         coefficient_limit,
         board_mask,
         0,
+        DEFAULT_TAIL_SCHEDULE,
     );
     let tail_elapsed = tail_start.elapsed();
     let fast_elapsed = total_start.elapsed();
@@ -4015,6 +4191,10 @@ fn contract_rows_certified_fast_tail_with_limit(
         recursive_accepted_entries,
         coefficient_bits,
         max_prefix_coefficient: prefix.max_coefficient_observed,
+        task_ordering_elapsed: Duration::ZERO,
+        task_ordering: TailTaskOrdering::Natural,
+        task_backend: TailTaskBackend::NativeAtomic,
+        task_chunk: 16,
     })
 }
 
@@ -5271,11 +5451,12 @@ mod e24_kernel_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
-        RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
-        contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_adaptive_fast_tail, contract_rows_adaptive_fast_tail_impl,
-        contract_rows_adaptive_last_k_tail_with_rows, contract_rows_certified_fast_tail,
+        BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, DEFAULT_TAIL_SCHEDULE,
+        PackedBoundary, RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC,
+        TailTaskBackend, TailTaskOrdering, VirtualLegs, contract_one_row_compiled,
+        contract_one_row_sitewise, contract_rows, contract_rows_adaptive_fast_tail,
+        contract_rows_adaptive_fast_tail_impl, contract_rows_adaptive_last_k_tail_with_rows,
+        contract_rows_adaptive_scheduled_tail, contract_rows_certified_fast_tail,
         contract_rows_certified_fast_tail_with_limit, contract_rows_d4_orbit_parallel_sort_reduce,
         contract_rows_d4_orbit_sort_reduce, contract_rows_d4_recursive_tail,
         contract_rows_d4_sparse_parallel_sort_reduce, contract_rows_d4_sparse_sort_reduce,
@@ -5600,10 +5781,32 @@ mod tests {
                 assert!(result.fast.used_u64_fast_path);
             }
         }
-        let promoted = contract_rows_adaptive_fast_tail_impl(8, 8, false, 4, 1).unwrap();
+        let promoted =
+            contract_rows_adaptive_fast_tail_impl(8, 8, false, 4, 1, DEFAULT_TAIL_SCHEDULE)
+                .unwrap();
         assert!(!promoted.fast.used_u64_fast_path);
         assert_eq!(promoted.fast.contraction.count, 92);
         assert!(promoted.fast.promotion_reason.is_some());
+    }
+
+    #[test]
+    fn scheduled_tail_modes_preserve_the_exact_c_contraction() {
+        for ordering in [
+            TailTaskOrdering::Natural,
+            TailTaskOrdering::HardFirst,
+            TailTaskOrdering::Probe3HardFirst,
+        ] {
+            for backend in [TailTaskBackend::NativeAtomic, TailTaskBackend::Rayon] {
+                for chunk in [1, 4, 16, 64] {
+                    let result = contract_rows_adaptive_scheduled_tail(
+                        9, 8, true, 4, ordering, backend, chunk,
+                    )
+                    .unwrap();
+                    assert_eq!(result.fast.contraction.count, 352);
+                    assert!(result.fast.used_u64_fast_path);
+                }
+            }
+        }
     }
 
     #[test]
