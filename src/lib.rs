@@ -3829,6 +3829,10 @@ pub struct WideScalarResult {
     pub used_scalar_u64: bool,
     pub promotion_reason: Option<String>,
     pub residues: Vec<u64>,
+    pub batch_lanes: usize,
+    pub batch_calls: u128,
+    pub batch_active_lane_sum: u128,
+    pub batch_active_histogram: [u128; 5],
 }
 
 fn is_prime_u32_range(value: u64) -> bool {
@@ -4119,6 +4123,216 @@ fn contract_wide_scalar_tasks(
     })
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ScalarBatchMetrics {
+    calls: u128,
+    active_lane_sum: u128,
+    active_histogram: [u128; 5],
+}
+
+impl ScalarBatchMetrics {
+    fn checked_merge(&mut self, other: Self) -> Option<()> {
+        self.calls = self.calls.checked_add(other.calls)?;
+        self.active_lane_sum = self.active_lane_sum.checked_add(other.active_lane_sum)?;
+        for active in 0..self.active_histogram.len() {
+            self.active_histogram[active] =
+                self.active_histogram[active].checked_add(other.active_histogram[active])?;
+        }
+        Some(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contract_certified_tail_batch_u64<const LANES: usize, const MEASURE: bool>(
+    remaining_rows: usize,
+    columns: [u64; LANES],
+    diag_dr: [u64; LANES],
+    diag_dl: [u64; LANES],
+    active: [bool; LANES],
+    board_mask: u64,
+    coefficient_limit: u64,
+    metrics: &mut ScalarBatchMetrics,
+) -> Option<[u64; LANES]> {
+    let active_count = active.iter().filter(|&&lane| lane).count();
+    if MEASURE {
+        metrics.calls = metrics.calls.checked_add(1)?;
+        metrics.active_lane_sum = metrics.active_lane_sum.checked_add(active_count as u128)?;
+        metrics.active_histogram[active_count] =
+            metrics.active_histogram[active_count].checked_add(1)?;
+    }
+    let mut counts = [0_u64; LANES];
+    if remaining_rows == 0 {
+        for lane in 0..LANES {
+            if active[lane] {
+                counts[lane] = u64::from(columns[lane] == board_mask);
+            }
+        }
+        return Some(counts);
+    }
+    if remaining_rows <= 6 {
+        for lane in 0..LANES {
+            if active[lane] {
+                counts[lane] = contract_certified_tail_last_k_u64::<6>(
+                    remaining_rows,
+                    columns[lane],
+                    diag_dr[lane],
+                    diag_dl[lane],
+                    board_mask,
+                    coefficient_limit,
+                )?;
+            }
+        }
+        return Some(counts);
+    }
+
+    let mut positions = [0_u64; LANES];
+    for lane in 0..LANES {
+        if active[lane] {
+            positions[lane] = !(columns[lane] | diag_dr[lane] | diag_dl[lane]) & board_mask;
+        }
+    }
+    loop {
+        let mut child_active = [false; LANES];
+        let mut child_columns = columns;
+        let mut child_diag_dr = diag_dr;
+        let mut child_diag_dl = diag_dl;
+        let mut any_child = false;
+        for lane in 0..LANES {
+            if positions[lane] != 0 {
+                let selected = positions[lane] & positions[lane].wrapping_neg();
+                positions[lane] &= positions[lane] - 1;
+                (
+                    child_columns[lane],
+                    child_diag_dr[lane],
+                    child_diag_dl[lane],
+                ) = certified_tail_successor(
+                    columns[lane],
+                    diag_dr[lane],
+                    diag_dl[lane],
+                    selected,
+                    board_mask,
+                );
+                child_active[lane] = true;
+                any_child = true;
+            }
+        }
+        if !any_child {
+            break;
+        }
+        let children = contract_certified_tail_batch_u64::<LANES, MEASURE>(
+            remaining_rows - 1,
+            child_columns,
+            child_diag_dr,
+            child_diag_dl,
+            child_active,
+            board_mask,
+            coefficient_limit,
+            metrics,
+        )?;
+        for lane in 0..LANES {
+            if child_active[lane] {
+                counts[lane] = counts[lane]
+                    .checked_add(children[lane])
+                    .filter(|&value| value <= coefficient_limit)?;
+            }
+        }
+    }
+    Some(counts)
+}
+
+fn contract_wide_scalar_tasks_batch<const LANES: usize, const MEASURE: bool>(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> (Option<u64>, ScalarBatchMetrics) {
+    assert!((LANES == 2 || LANES == 4) && LANES < 5);
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = 0_u64;
+                let mut metrics = ScalarBatchMetrics::default();
+                const GROUPS_PER_CHUNK: usize = 8;
+                let task_chunk = LANES * GROUPS_PER_CHUNK;
+                loop {
+                    let start = next_task.fetch_add(task_chunk, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + task_chunk).min(tasks.len());
+                    let mut group_start = start;
+                    while group_start < end {
+                        let mut columns = [0_u64; LANES];
+                        let mut diag_dr = [0_u64; LANES];
+                        let mut diag_dl = [0_u64; LANES];
+                        let mut active = [false; LANES];
+                        let mut weights = [0_u64; LANES];
+                        for lane in 0..LANES {
+                            let task_index = group_start + lane;
+                            if task_index < end {
+                                let task = tasks[task_index];
+                                columns[lane] = task.state.columns;
+                                diag_dr[lane] = task.state.diag_dr;
+                                diag_dl[lane] = task.state.diag_dl;
+                                weights[lane] = task.orbit_weight;
+                                active[lane] = true;
+                            }
+                        }
+                        let completions = contract_certified_tail_batch_u64::<LANES, MEASURE>(
+                            n - split_depth,
+                            columns,
+                            diag_dr,
+                            diag_dl,
+                            active,
+                            board_mask,
+                            coefficient_limit,
+                            &mut metrics,
+                        )?;
+                        for lane in 0..LANES {
+                            if active[lane] {
+                                let weighted = completions[lane]
+                                    .checked_mul(weights[lane])
+                                    .filter(|&value| value <= coefficient_limit)?;
+                                subtotal = subtotal
+                                    .checked_add(weighted)
+                                    .filter(|&value| value <= coefficient_limit)?;
+                            }
+                        }
+                        group_start += LANES;
+                    }
+                }
+                Some((subtotal, metrics))
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("wide scalar batch worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = 0_u64;
+    let mut metrics = ScalarBatchMetrics::default();
+    for partial in partials {
+        let Some((subtotal, partial_metrics)) = partial else {
+            return (None, metrics);
+        };
+        let Some(next_total) = total
+            .checked_add(subtotal)
+            .filter(|&value| value <= coefficient_limit)
+        else {
+            return (None, metrics);
+        };
+        total = next_total;
+        if metrics.checked_merge(partial_metrics).is_none() {
+            return (None, metrics);
+        }
+    }
+    (Some(total), metrics)
+}
+
 fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
     let mut result = 1_u64;
     while exponent != 0 {
@@ -4387,6 +4601,7 @@ pub fn contract_rows_wide_scalar_with_target_and_limit(
         target_tasks_per_thread,
         coefficient_limit,
         4,
+        1,
     )
 }
 
@@ -4405,6 +4620,29 @@ pub fn contract_rows_wide_scalar_last_k_with_target(
         target_tasks_per_thread,
         u64::MAX,
         microkernel_rows,
+        1,
+    )
+}
+
+pub fn contract_rows_wide_scalar_batch_with_target(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+    batch_lanes: usize,
+) -> Result<WideScalarResult, String> {
+    if n > 20 {
+        return Err("scalar batch experiment requires certified N! < 2^64 at N <= 20".to_owned());
+    }
+    if !matches!(batch_lanes, 2 | 4) {
+        return Err("scalar batch lanes must be 2 or 4".to_owned());
+    }
+    contract_rows_wide_scalar_last_k_impl(
+        n,
+        profile_replay,
+        target_tasks_per_thread,
+        u64::MAX,
+        6,
+        batch_lanes,
     )
 }
 
@@ -4414,21 +4652,43 @@ fn contract_rows_wide_scalar_last_k_impl(
     target_tasks_per_thread: usize,
     coefficient_limit: u64,
     microkernel_rows: usize,
+    batch_lanes: usize,
 ) -> Result<WideScalarResult, String> {
     let total_start = Instant::now();
     let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
     let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
     let scalar_bound_certified = plan.factorial_bound <= u128::from(u64::MAX);
     let tail_start = Instant::now();
-    let scalar_count = scalar_bound_certified.then(|| {
-        contract_wide_scalar_tasks(
+    let scalar_count = scalar_bound_certified.then(|| match batch_lanes {
+        1 => contract_wide_scalar_tasks(
             &tasks,
             n,
             prefix.split_depth,
             board_mask,
             coefficient_limit,
             microkernel_rows,
-        )
+        ),
+        2 => {
+            contract_wide_scalar_tasks_batch::<2, false>(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                coefficient_limit,
+            )
+            .0
+        }
+        4 => {
+            contract_wide_scalar_tasks_batch::<4, false>(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                coefficient_limit,
+            )
+            .0
+        }
+        _ => None,
     });
     let (count, used_scalar_u64, promotion_reason, residues) = match scalar_count {
         Some(Some(count)) => {
@@ -4485,6 +4745,7 @@ fn contract_rows_wide_scalar_last_k_impl(
     let mut recursive_nodes = 0_u128;
     let mut recursive_accepted_entries = 0_u128;
     let mut replay_count = 0_u128;
+    let mut batch_metrics = ScalarBatchMetrics::default();
     if profile_replay {
         let partials = tasks
             .par_iter()
@@ -4519,6 +4780,30 @@ fn contract_rows_wide_scalar_last_k_impl(
         if replay_count != count {
             return Err("wide scalar/CRT result disagrees with generic C replay".to_owned());
         }
+        let (batch_count, measured) = match batch_lanes {
+            2 => contract_wide_scalar_tasks_batch::<2, true>(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                coefficient_limit,
+            ),
+            4 => contract_wide_scalar_tasks_batch::<4, true>(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                coefficient_limit,
+            ),
+            _ => (
+                Some(u64::try_from(count).unwrap_or(u64::MAX)),
+                batch_metrics,
+            ),
+        };
+        if batch_lanes > 1 && batch_count.map(u128::from) != Some(count) {
+            return Err("measured scalar batch disagrees with exact contraction".to_owned());
+        }
+        batch_metrics = measured;
     }
     let profile_replay_elapsed = profile_start.elapsed();
     let total_accepted = prefix
@@ -4553,6 +4838,10 @@ fn contract_rows_wide_scalar_last_k_impl(
         used_scalar_u64,
         promotion_reason,
         residues,
+        batch_lanes,
+        batch_calls: batch_metrics.calls,
+        batch_active_lane_sum: batch_metrics.active_lane_sum,
+        batch_active_histogram: batch_metrics.active_histogram,
     })
 }
 
@@ -6151,7 +6440,7 @@ mod tests {
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
         contract_rows_wide_crt, contract_rows_wide_scalar,
-        contract_rows_wide_scalar_last_k_with_target,
+        contract_rows_wide_scalar_batch_with_target, contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
         top_row_vertical_orbit_weight, wide_crt_plan,
@@ -6590,6 +6879,33 @@ mod tests {
             }
         }
         assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
+    }
+
+    #[test]
+    fn scalar_ilp_batches_match_serial_and_generic_c_replay() {
+        for n in 0..=10 {
+            let serial = contract_rows_wide_scalar_last_k_with_target(n, true, 512, 6).unwrap();
+            for lanes in [2, 4] {
+                let batched =
+                    contract_rows_wide_scalar_batch_with_target(n, true, 512, lanes).unwrap();
+                assert_eq!(
+                    batched.contraction.count, serial.contraction.count,
+                    "N={n}, lanes={lanes}"
+                );
+                assert_eq!(Some(batched.contraction.count), known_count(n), "N={n}");
+                assert_eq!(batched.batch_lanes, lanes);
+                if batched.tail_tasks > 0 {
+                    assert!(batched.batch_calls > 0, "N={n}, lanes={lanes}");
+                }
+                assert_eq!(
+                    batched.batch_active_histogram.iter().sum::<u128>(),
+                    batched.batch_calls
+                );
+                assert!(batched.batch_active_lane_sum <= batched.batch_calls * lanes as u128);
+            }
+        }
+        assert!(contract_rows_wide_scalar_batch_with_target(8, false, 512, 3).is_err());
+        assert!(contract_rows_wide_scalar_batch_with_target(21, false, 512, 2).is_err());
     }
 
     #[test]
