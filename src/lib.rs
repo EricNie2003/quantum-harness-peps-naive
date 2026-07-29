@@ -3413,6 +3413,121 @@ fn contract_certified_tail_u64(
     Some(count)
 }
 
+#[inline(always)]
+fn certified_tail_successor(
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    selected: u64,
+    board_mask: u64,
+) -> (u64, u64, u64) {
+    (
+        columns | selected,
+        ((diag_dr | selected) << 1) & board_mask,
+        (diag_dl | selected) >> 1,
+    )
+}
+
+#[inline]
+fn contract_certified_last_four_u64(
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    debug_assert!((2..=4).contains(&remaining_rows));
+    let mut count = 0_u64;
+    let mut first = !(columns | diag_dr | diag_dl) & board_mask;
+    while first != 0 {
+        let q1 = first & first.wrapping_neg();
+        first &= first - 1;
+        let (columns1, diag_dr1, diag_dl1) =
+            certified_tail_successor(columns, diag_dr, diag_dl, q1, board_mask);
+        let mut second = !(columns1 | diag_dr1 | diag_dl1) & board_mask;
+        if remaining_rows == 2 {
+            count = count
+                .checked_add(u64::from(second != 0))
+                .filter(|&value| value <= coefficient_limit)?;
+            continue;
+        }
+        while second != 0 {
+            let q2 = second & second.wrapping_neg();
+            second &= second - 1;
+            let (columns2, diag_dr2, diag_dl2) =
+                certified_tail_successor(columns1, diag_dr1, diag_dl1, q2, board_mask);
+            let mut third = !(columns2 | diag_dr2 | diag_dl2) & board_mask;
+            if remaining_rows == 3 {
+                count = count
+                    .checked_add(u64::from(third != 0))
+                    .filter(|&value| value <= coefficient_limit)?;
+                continue;
+            }
+            while third != 0 {
+                let q3 = third & third.wrapping_neg();
+                third &= third - 1;
+                let (columns3, diag_dr3, diag_dl3) =
+                    certified_tail_successor(columns2, diag_dr2, diag_dl2, q3, board_mask);
+                let fourth = !(columns3 | diag_dr3 | diag_dl3) & board_mask;
+                count = count
+                    .checked_add(u64::from(fourth != 0))
+                    .filter(|&value| value <= coefficient_limit)?;
+            }
+        }
+    }
+    Some(count)
+}
+
+#[inline]
+fn contract_certified_tail_last_k_u64<const LAST_K: usize>(
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    if remaining_rows == 0 {
+        return Some(u64::from(columns == board_mask));
+    }
+    let positions = !(columns | diag_dr | diag_dl) & board_mask;
+    if remaining_rows == 1 {
+        return Some(u64::from(positions != 0));
+    }
+    if remaining_rows <= LAST_K {
+        return contract_certified_last_four_u64(
+            remaining_rows,
+            columns,
+            diag_dr,
+            diag_dl,
+            board_mask,
+            coefficient_limit,
+        );
+    }
+    let mut positions = positions;
+    let mut count = 0_u64;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        let child = contract_certified_tail_last_k_u64::<LAST_K>(
+            remaining_rows - 1,
+            next_columns,
+            next_diag_dr,
+            next_diag_dl,
+            board_mask,
+            coefficient_limit,
+        )?;
+        count = count
+            .checked_add(child)
+            .filter(|&value| value <= coefficient_limit)?;
+    }
+    Some(count)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn contract_certified_tail_tasks_u64(
     tasks: &[JointEntry],
     n: usize,
@@ -3421,13 +3536,21 @@ fn contract_certified_tail_tasks_u64(
     coefficient_mask: u64,
     coefficient_limit: u64,
     board_mask: u64,
+    microkernel_rows: usize,
 ) -> Option<u64> {
+    let contract_task: fn(usize, u64, u64, u64, u64, u64) -> Option<u64> = match microkernel_rows {
+        0 | 1 => contract_certified_tail_u64,
+        2 => contract_certified_tail_last_k_u64::<2>,
+        3 => contract_certified_tail_last_k_u64::<3>,
+        4 => contract_certified_tail_last_k_u64::<4>,
+        _ => return None,
+    };
     let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
     if worker_count == 1 {
         let mut total = 0_u64;
         for &entry in tasks {
             let state = PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
-            let completions = contract_certified_tail_u64(
+            let completions = contract_task(
                 n - cut,
                 state.columns,
                 state.diag_dr,
@@ -3461,7 +3584,7 @@ fn contract_certified_tail_tasks_u64(
                     for &entry in &tasks[start..end] {
                         let state =
                             PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
-                        let completions = contract_certified_tail_u64(
+                        let completions = contract_task(
                             n - cut,
                             state.columns,
                             state.diag_dr,
@@ -3542,6 +3665,36 @@ pub fn contract_rows_adaptive_fast_tail(
     shards: usize,
     profile_replay: bool,
 ) -> Result<AdaptiveFastTailResult, String> {
+    contract_rows_adaptive_fast_tail_impl(n, shards, profile_replay, 0, u64::MAX)
+}
+
+pub fn contract_rows_adaptive_last_k_tail(
+    n: usize,
+    shards: usize,
+    profile_replay: bool,
+) -> Result<AdaptiveFastTailResult, String> {
+    contract_rows_adaptive_last_k_tail_with_rows(n, shards, profile_replay, 4)
+}
+
+pub fn contract_rows_adaptive_last_k_tail_with_rows(
+    n: usize,
+    shards: usize,
+    profile_replay: bool,
+    microkernel_rows: usize,
+) -> Result<AdaptiveFastTailResult, String> {
+    if !(2..=4).contains(&microkernel_rows) {
+        return Err("last-k microkernel rows must be in 2..=4".to_owned());
+    }
+    contract_rows_adaptive_fast_tail_impl(n, shards, profile_replay, microkernel_rows, u64::MAX)
+}
+
+fn contract_rows_adaptive_fast_tail_impl(
+    n: usize,
+    shards: usize,
+    profile_replay: bool,
+    microkernel_rows: usize,
+    coefficient_limit: u64,
+) -> Result<AdaptiveFastTailResult, String> {
     if n == 0 {
         return Ok(AdaptiveFastTailResult {
             fast: contract_rows_certified_fast_tail(0, shards, 0, profile_replay)?,
@@ -3602,6 +3755,8 @@ pub fn contract_rows_adaptive_fast_tail(
         selected_prefix,
         selection_start,
         selected_prefix_elapsed,
+        microkernel_rows,
+        coefficient_limit,
     )?;
     Ok(AdaptiveFastTailResult {
         fast,
@@ -3622,6 +3777,8 @@ fn finish_adaptive_selected_prefix(
     prefix: JointKernelResult,
     total_start: Instant,
     prefix_elapsed: Duration,
+    microkernel_rows: usize,
+    coefficient_limit: u64,
 ) -> Result<CertifiedFastTailResult, String> {
     let coefficient_mask = coefficient_mask(coefficient_bits);
     let board_mask = (1_u64 << n) - 1;
@@ -3639,8 +3796,9 @@ fn finish_adaptive_selected_prefix(
         cut,
         coefficient_bits,
         coefficient_mask,
-        u64::MAX,
+        coefficient_limit,
         board_mask,
+        microkernel_rows,
     );
     let tail_elapsed = tail_start.elapsed();
     let fast_elapsed = total_start.elapsed();
@@ -3785,6 +3943,7 @@ fn contract_rows_certified_fast_tail_with_limit(
         coefficient_mask,
         coefficient_limit,
         board_mask,
+        0,
     );
     let tail_elapsed = tail_start.elapsed();
     let fast_elapsed = total_start.elapsed();
@@ -5115,7 +5274,8 @@ mod tests {
         BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
         RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
         contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_adaptive_fast_tail, contract_rows_certified_fast_tail,
+        contract_rows_adaptive_fast_tail, contract_rows_adaptive_fast_tail_impl,
+        contract_rows_adaptive_last_k_tail_with_rows, contract_rows_certified_fast_tail,
         contract_rows_certified_fast_tail_with_limit, contract_rows_d4_orbit_parallel_sort_reduce,
         contract_rows_d4_orbit_sort_reduce, contract_rows_d4_recursive_tail,
         contract_rows_d4_sparse_parallel_sort_reduce, contract_rows_d4_sparse_sort_reduce,
@@ -5423,6 +5583,27 @@ mod tests {
                 assert_eq!(result.probes.last().unwrap().cut, result.selected_cut);
             }
         }
+    }
+
+    #[test]
+    fn certified_last_k_microkernel_and_forced_replay_are_exact() {
+        for n in 0..=10 {
+            for microkernel_rows in 2..=4 {
+                let result =
+                    contract_rows_adaptive_last_k_tail_with_rows(n, 8, true, microkernel_rows)
+                        .unwrap();
+                assert_eq!(
+                    Some(result.fast.contraction.count),
+                    known_count(n),
+                    "N={n}, last-k={microkernel_rows}"
+                );
+                assert!(result.fast.used_u64_fast_path);
+            }
+        }
+        let promoted = contract_rows_adaptive_fast_tail_impl(8, 8, false, 4, 1).unwrap();
+        assert!(!promoted.fast.used_u64_fast_path);
+        assert_eq!(promoted.fast.contraction.count, 92);
+        assert!(promoted.fast.promotion_reason.is_some());
     }
 
     #[test]
