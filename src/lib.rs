@@ -14,6 +14,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+#[cfg(all(feature = "e55-regular-inline", feature = "e55-noinline"))]
+compile_error!("E55 regular-inline and noinline features are mutually exclusive");
+
 use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -3428,7 +3431,8 @@ fn certified_tail_successor(
     )
 }
 
-#[inline]
+#[cfg_attr(feature = "e55-noinline", inline(never))]
+#[cfg_attr(not(feature = "e55-noinline"), inline)]
 fn contract_certified_last_four_u64(
     remaining_rows: usize,
     columns: u64,
@@ -3479,7 +3483,12 @@ fn contract_certified_last_four_u64(
     Some(count)
 }
 
-#[inline(always)]
+#[cfg_attr(feature = "e55-noinline", inline(never))]
+#[cfg_attr(feature = "e55-regular-inline", inline)]
+#[cfg_attr(
+    not(any(feature = "e55-noinline", feature = "e55-regular-inline")),
+    inline(always)
+)]
 fn contract_certified_last_five_u64(
     columns: u64,
     diag_dr: u64,
@@ -3509,7 +3518,12 @@ fn contract_certified_last_five_u64(
     Some(count)
 }
 
-#[inline(always)]
+#[cfg_attr(feature = "e55-noinline", inline(never))]
+#[cfg_attr(feature = "e55-regular-inline", inline)]
+#[cfg_attr(
+    not(any(feature = "e55-noinline", feature = "e55-regular-inline")),
+    inline(always)
+)]
 fn contract_certified_last_six_u64(
     columns: u64,
     diag_dr: u64,
@@ -3829,6 +3843,21 @@ pub struct WideScalarResult {
     pub used_scalar_u64: bool,
     pub promotion_reason: Option<String>,
     pub residues: Vec<u64>,
+}
+
+pub const fn e55_hot_code_shape() -> &'static str {
+    #[cfg(feature = "e55-noinline")]
+    {
+        "noinline"
+    }
+    #[cfg(all(not(feature = "e55-noinline"), feature = "e55-regular-inline"))]
+    {
+        "regular-inline"
+    }
+    #[cfg(not(any(feature = "e55-noinline", feature = "e55-regular-inline")))]
+    {
+        "fully-inline"
+    }
 }
 
 fn is_prime_u32_range(value: u64) -> bool {

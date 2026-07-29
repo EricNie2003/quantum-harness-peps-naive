@@ -9,6 +9,10 @@ default-run = "nqueens-peps-naive"
 [dependencies]
 rayon = "1.10"
 
+[features]
+e55-regular-inline = []
+e55-noinline = []
+
 [profile.release]
 codegen-units = 1
 lto = "thin"
