@@ -9,7 +9,7 @@ pub mod dfs_bitmask;
 pub mod frontier_audit;
 pub mod weighted_dd;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -728,6 +728,22 @@ fn top_row_vertical_orbit_weight(n: usize, successor: BoundaryState) -> Option<u
         Some(1)
     } else {
         Some(2)
+    }
+}
+
+fn reverse_n_bits(value: u64, n: usize) -> u64 {
+    if n == 0 {
+        0
+    } else {
+        value.reverse_bits() >> (u64::BITS as usize - n)
+    }
+}
+
+fn reflect_vertical_boundary(n: usize, state: BoundaryState) -> BoundaryState {
+    BoundaryState {
+        columns: reverse_n_bits(state.columns, n),
+        diag_dr: reverse_n_bits(state.diag_dl, n),
+        diag_dl: reverse_n_bits(state.diag_dr, n),
     }
 }
 
@@ -3831,6 +3847,81 @@ pub struct WideScalarResult {
     pub residues: Vec<u64>,
 }
 
+#[derive(Clone, Debug)]
+pub struct VerticalSuffixAudit {
+    pub n: usize,
+    pub split_depth: usize,
+    pub remaining_rows: usize,
+    pub tasks: usize,
+    pub exact_unique: usize,
+    pub canonical_unique: usize,
+    pub exact_duplicates: usize,
+    pub additional_symmetry_duplicates: usize,
+    pub self_symmetric_states: usize,
+    pub exact_duplicate_rate: f64,
+    pub additional_symmetry_duplicate_rate: f64,
+    pub total_canonical_duplicate_rate: f64,
+    pub elapsed: Duration,
+    pub peak_rss_bytes: u64,
+}
+
+pub fn audit_wide_vertical_suffix_tasks(
+    n: usize,
+    target_tasks_per_thread: usize,
+) -> Result<VerticalSuffixAudit, String> {
+    if n > 20 {
+        return Err("vertical suffix audit currently supports N <= 20".to_owned());
+    }
+    let start = Instant::now();
+    let (_plan, _relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    let mut exact = HashSet::<u128>::with_capacity(tasks.len());
+    let mut canonical = HashSet::<u128>::with_capacity(tasks.len());
+    let mut self_symmetric_states = 0_usize;
+    for task in &tasks {
+        let key = PackedBoundary::pack(task.state, n).0;
+        let reflected_state = reflect_vertical_boundary(n, task.state);
+        let reflected = PackedBoundary::pack(reflected_state, n).0;
+        exact.insert(key);
+        canonical.insert(key.min(reflected));
+        self_symmetric_states += usize::from(key == reflected);
+    }
+    let exact_unique = exact.len();
+    let canonical_unique = canonical.len();
+    let exact_duplicates = tasks.len().saturating_sub(exact_unique);
+    let additional_symmetry_duplicates = exact_unique.saturating_sub(canonical_unique);
+    let exact_duplicate_rate = if tasks.is_empty() {
+        0.0
+    } else {
+        exact_duplicates as f64 / tasks.len() as f64
+    };
+    let additional_symmetry_duplicate_rate = if exact_unique == 0 {
+        0.0
+    } else {
+        additional_symmetry_duplicates as f64 / exact_unique as f64
+    };
+    let total_canonical_duplicate_rate = if tasks.is_empty() {
+        0.0
+    } else {
+        tasks.len().saturating_sub(canonical_unique) as f64 / tasks.len() as f64
+    };
+    Ok(VerticalSuffixAudit {
+        n,
+        split_depth: prefix.split_depth,
+        remaining_rows: n - prefix.split_depth,
+        tasks: tasks.len(),
+        exact_unique,
+        canonical_unique,
+        exact_duplicates,
+        additional_symmetry_duplicates,
+        self_symmetric_states,
+        exact_duplicate_rate,
+        additional_symmetry_duplicate_rate,
+        total_canonical_duplicate_rate,
+        elapsed: start.elapsed(),
+        peak_rss_bytes: peak_rss_bytes(),
+    })
+}
+
 fn is_prime_u32_range(value: u64) -> bool {
     if value < 2 {
         return false;
@@ -6141,8 +6232,8 @@ mod tests {
     use super::{
         BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
         RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
-        contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_adaptive_fast_tail, contract_rows_adaptive_fast_tail_impl,
+        audit_wide_vertical_suffix_tasks, contract_one_row_compiled, contract_one_row_sitewise,
+        contract_rows, contract_rows_adaptive_fast_tail, contract_rows_adaptive_fast_tail_impl,
         contract_rows_adaptive_last_k_tail_with_rows, contract_rows_certified_fast_tail,
         contract_rows_certified_fast_tail_with_limit, contract_rows_d4_orbit_parallel_sort_reduce,
         contract_rows_d4_orbit_sort_reduce, contract_rows_d4_recursive_tail,
@@ -6154,7 +6245,7 @@ mod tests {
         contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
-        top_row_vertical_orbit_weight, wide_crt_plan,
+        reflect_vertical_boundary, reverse_n_bits, top_row_vertical_orbit_weight, wide_crt_plan,
     };
     use std::collections::{HashMap, HashSet};
 
@@ -6590,6 +6681,70 @@ mod tests {
             }
         }
         assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
+    }
+
+    #[test]
+    fn vertical_boundary_canonicalization_is_an_exact_tail_automorphism() {
+        let operator = CompiledRowOperator::compile(&SiteTensorC::sec_vi()).unwrap();
+        let relation = RecursiveTailRelation::compile(&operator).unwrap();
+        for n in 1..=8 {
+            let board_mask = (1_u64 << n) - 1;
+            let mut states = HashSet::from([BoundaryState {
+                columns: 0,
+                diag_dr: 0,
+                diag_dl: 0,
+            }]);
+            for _row in 0..n {
+                let mut next = HashSet::new();
+                for state in states {
+                    let reflected = reflect_vertical_boundary(n, state);
+                    let positions = recursive_tail_positions(state, relation, board_mask);
+                    let reflected_positions =
+                        recursive_tail_positions(reflected, relation, board_mask);
+                    assert_eq!(
+                        reflected_positions,
+                        reverse_n_bits(positions, n),
+                        "N={n}, state={state:?}"
+                    );
+                    let mut remaining = positions;
+                    while remaining != 0 {
+                        let selected = remaining & remaining.wrapping_neg();
+                        remaining &= remaining - 1;
+                        let successor =
+                            recursive_tail_successor(state, selected, relation, board_mask);
+                        let reflected_successor = recursive_tail_successor(
+                            reflected,
+                            reverse_n_bits(selected, n),
+                            relation,
+                            board_mask,
+                        );
+                        assert_eq!(
+                            reflected_successor,
+                            reflect_vertical_boundary(n, successor),
+                            "N={n}, state={state:?}, selected={selected:#x}"
+                        );
+                        next.insert(successor);
+                    }
+                }
+                states = next;
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_suffix_audit_is_lossless_and_bounded() {
+        for n in 0..=12 {
+            let audit = audit_wide_vertical_suffix_tasks(n, 512).unwrap();
+            assert!(audit.canonical_unique <= audit.exact_unique);
+            assert!(audit.exact_unique <= audit.tasks);
+            assert_eq!(audit.exact_duplicates, audit.tasks - audit.exact_unique);
+            assert_eq!(
+                audit.additional_symmetry_duplicates,
+                audit.exact_unique - audit.canonical_unique
+            );
+            assert!((0.0..=1.0).contains(&audit.total_canonical_duplicate_rate));
+        }
+        assert!(audit_wide_vertical_suffix_tasks(21, 512).is_err());
     }
 
     #[test]
