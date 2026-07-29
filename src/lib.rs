@@ -3603,6 +3603,80 @@ fn contract_certified_tail_last_k_u64<const LAST_K: usize>(
     Some(count)
 }
 
+#[inline]
+fn contract_certified_tail_iterative_last_six_u64(
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    if remaining_rows <= 6 {
+        return contract_certified_tail_last_k_u64::<6>(
+            remaining_rows,
+            columns,
+            diag_dr,
+            diag_dl,
+            board_mask,
+            coefficient_limit,
+        );
+    }
+    const MAX_STACK: usize = 35;
+    let target_depth = remaining_rows - 6;
+    debug_assert!(target_depth < MAX_STACK);
+    let mut columns_stack = [0_u64; MAX_STACK];
+    let mut diag_dr_stack = [0_u64; MAX_STACK];
+    let mut diag_dl_stack = [0_u64; MAX_STACK];
+    let mut positions_stack = [0_u64; MAX_STACK];
+    columns_stack[0] = columns;
+    diag_dr_stack[0] = diag_dr;
+    diag_dl_stack[0] = diag_dl;
+    positions_stack[0] = !(columns | diag_dr | diag_dl) & board_mask;
+    let mut depth = 0_usize;
+    let mut count = 0_u64;
+
+    loop {
+        let positions = positions_stack[depth];
+        if positions == 0 {
+            if depth == 0 {
+                break;
+            }
+            depth -= 1;
+            continue;
+        }
+        let selected = positions & positions.wrapping_neg();
+        positions_stack[depth] = positions & (positions - 1);
+        let (next_columns, next_diag_dr, next_diag_dl) = certified_tail_successor(
+            columns_stack[depth],
+            diag_dr_stack[depth],
+            diag_dl_stack[depth],
+            selected,
+            board_mask,
+        );
+        if depth + 1 == target_depth {
+            let child = contract_certified_tail_last_k_u64::<6>(
+                6,
+                next_columns,
+                next_diag_dr,
+                next_diag_dl,
+                board_mask,
+                coefficient_limit,
+            )?;
+            count = count
+                .checked_add(child)
+                .filter(|&value| value <= coefficient_limit)?;
+        } else {
+            depth += 1;
+            columns_stack[depth] = next_columns;
+            diag_dr_stack[depth] = next_diag_dr;
+            diag_dl_stack[depth] = next_diag_dl;
+            positions_stack[depth] = !(next_columns | next_diag_dr | next_diag_dl) & board_mask;
+        }
+    }
+    Some(count)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn contract_certified_tail_tasks_u64(
     tasks: &[JointEntry],
@@ -4059,19 +4133,28 @@ fn contract_wide_crt_tasks<const LANES: usize>(
     total
 }
 
+#[derive(Clone, Copy)]
+enum WideScalarTailTraversal {
+    RecursiveLastK(usize),
+    IterativeLastSix,
+}
+
 fn contract_wide_scalar_tasks(
     tasks: &[WideCrtTask],
     n: usize,
     split_depth: usize,
     board_mask: u64,
     coefficient_limit: u64,
-    microkernel_rows: usize,
+    traversal: WideScalarTailTraversal,
 ) -> Option<u64> {
-    let contract_task: fn(usize, u64, u64, u64, u64, u64) -> Option<u64> = match microkernel_rows {
-        4 => contract_certified_tail_last_k_u64::<4>,
-        5 => contract_certified_tail_last_k_u64::<5>,
-        6 => contract_certified_tail_last_k_u64::<6>,
-        _ => return None,
+    let contract_task: fn(usize, u64, u64, u64, u64, u64) -> Option<u64> = match traversal {
+        WideScalarTailTraversal::RecursiveLastK(microkernel_rows) => match microkernel_rows {
+            4 => contract_certified_tail_last_k_u64::<4>,
+            5 => contract_certified_tail_last_k_u64::<5>,
+            6 => contract_certified_tail_last_k_u64::<6>,
+            _ => return None,
+        },
+        WideScalarTailTraversal::IterativeLastSix => contract_certified_tail_iterative_last_six_u64,
     };
     let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
     let next_task = AtomicUsize::new(0);
@@ -4386,7 +4469,7 @@ pub fn contract_rows_wide_scalar_with_target_and_limit(
         profile_replay,
         target_tasks_per_thread,
         coefficient_limit,
-        4,
+        WideScalarTailTraversal::RecursiveLastK(4),
     )
 }
 
@@ -4404,7 +4487,21 @@ pub fn contract_rows_wide_scalar_last_k_with_target(
         profile_replay,
         target_tasks_per_thread,
         u64::MAX,
-        microkernel_rows,
+        WideScalarTailTraversal::RecursiveLastK(microkernel_rows),
+    )
+}
+
+pub fn contract_rows_wide_scalar_iterative_with_target(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+) -> Result<WideScalarResult, String> {
+    contract_rows_wide_scalar_last_k_impl(
+        n,
+        profile_replay,
+        target_tasks_per_thread,
+        u64::MAX,
+        WideScalarTailTraversal::IterativeLastSix,
     )
 }
 
@@ -4413,7 +4510,7 @@ fn contract_rows_wide_scalar_last_k_impl(
     profile_replay: bool,
     target_tasks_per_thread: usize,
     coefficient_limit: u64,
-    microkernel_rows: usize,
+    traversal: WideScalarTailTraversal,
 ) -> Result<WideScalarResult, String> {
     let total_start = Instant::now();
     let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
@@ -4427,7 +4524,7 @@ fn contract_rows_wide_scalar_last_k_impl(
             prefix.split_depth,
             board_mask,
             coefficient_limit,
-            microkernel_rows,
+            traversal,
         )
     });
     let (count, used_scalar_u64, promotion_reason, residues) = match scalar_count {
@@ -6151,6 +6248,7 @@ mod tests {
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
         contract_rows_wide_crt, contract_rows_wide_scalar,
+        contract_rows_wide_scalar_iterative_with_target,
         contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
@@ -6590,6 +6688,24 @@ mod tests {
             }
         }
         assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
+    }
+
+    #[test]
+    fn iterative_fixed_stack_tail_matches_recursive_last_six_and_generic_c() {
+        for n in 0..=12 {
+            let iterative = contract_rows_wide_scalar_iterative_with_target(n, true, 512).unwrap();
+            let recursive = contract_rows_wide_scalar_last_k_with_target(n, true, 512, 6).unwrap();
+            assert_eq!(
+                iterative.contraction.count, recursive.contraction.count,
+                "N={n}"
+            );
+            assert_eq!(Some(iterative.contraction.count), known_count(n), "N={n}");
+            assert_eq!(iterative.tail_tasks, recursive.tail_tasks, "N={n}");
+            assert_eq!(
+                iterative.recursive_accepted_entries, recursive.recursive_accepted_entries,
+                "N={n}"
+            );
+        }
     }
 
     #[test]
