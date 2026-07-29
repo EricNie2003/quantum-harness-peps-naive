@@ -3603,6 +3603,99 @@ fn contract_certified_tail_last_k_u64<const LAST_K: usize>(
     Some(count)
 }
 
+#[inline(always)]
+fn suffix_cache_key(
+    n: usize,
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+) -> Option<u64> {
+    if n > 19 || remaining_rows >= 32 {
+        return None;
+    }
+    let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
+    if columns & !board_mask != 0 || diag_dr & !board_mask != 0 || diag_dl & !board_mask != 0 {
+        return None;
+    }
+    let packed = columns | (diag_dr << n) | (diag_dl << (2 * n));
+    packed
+        .checked_shl(5)
+        .and_then(|value| value.checked_add(remaining_rows as u64))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn contract_certified_tail_suffix_cached_u64<const MEASURE: bool>(
+    n: usize,
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    coefficient_limit: u64,
+    cache: &mut SuffixCache,
+    metrics: &mut SuffixCacheMetrics,
+) -> Option<u64> {
+    debug_assert_eq!(cache.n, n);
+    if remaining_rows <= 6 {
+        return contract_certified_tail_last_k_u64::<6>(
+            remaining_rows,
+            columns,
+            diag_dr,
+            diag_dl,
+            board_mask,
+            coefficient_limit,
+        );
+    }
+    let cache_key = if remaining_rows == 7 {
+        if MEASURE {
+            metrics.lookups = metrics.lookups.saturating_add(1);
+        }
+        let key = suffix_cache_key(n, remaining_rows, columns, diag_dr, diag_dl)?;
+        if let Some(value) = cache.lookup(key) {
+            if MEASURE {
+                metrics.hits = metrics.hits.saturating_add(1);
+            }
+            return Some(value);
+        }
+        Some(key)
+    } else {
+        None
+    };
+    let mut positions = !(columns | diag_dr | diag_dl) & board_mask;
+    let mut count = 0_u64;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        let child = contract_certified_tail_suffix_cached_u64::<MEASURE>(
+            n,
+            remaining_rows - 1,
+            next_columns,
+            next_diag_dr,
+            next_diag_dl,
+            board_mask,
+            coefficient_limit,
+            cache,
+            metrics,
+        )?;
+        count = count
+            .checked_add(child)
+            .filter(|&value| value <= coefficient_limit)?;
+    }
+    if let Some(key) = cache_key {
+        if MEASURE {
+            metrics.inserts = metrics.inserts.saturating_add(1);
+        }
+        if cache.insert(key, count) && MEASURE {
+            metrics.replacements = metrics.replacements.saturating_add(1);
+        }
+    }
+    Some(count)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn contract_certified_tail_tasks_u64(
     tasks: &[JointEntry],
@@ -3829,6 +3922,95 @@ pub struct WideScalarResult {
     pub used_scalar_u64: bool,
     pub promotion_reason: Option<String>,
     pub residues: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SuffixCacheMetrics {
+    pub lookups: u64,
+    pub hits: u64,
+    pub inserts: u64,
+    pub replacements: u64,
+}
+
+impl SuffixCacheMetrics {
+    fn merge(&mut self, other: Self) {
+        self.lookups = self.lookups.saturating_add(other.lookups);
+        self.hits = self.hits.saturating_add(other.hits);
+        self.inserts = self.inserts.saturating_add(other.inserts);
+        self.replacements = self.replacements.saturating_add(other.replacements);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SuffixCacheWideResult {
+    pub wide: WideScalarResult,
+    pub cache_kib_per_worker: usize,
+    pub cache_slots_per_worker: usize,
+    pub cache_workers: usize,
+    pub cache_bytes: usize,
+    pub cache_max_remaining_rows: usize,
+    pub cache_metrics: SuffixCacheMetrics,
+}
+
+#[derive(Clone, Copy)]
+struct SuffixCacheSlot {
+    key: u64,
+    value: u64,
+}
+
+struct SuffixCache {
+    n: usize,
+    slots: Vec<SuffixCacheSlot>,
+}
+
+impl SuffixCache {
+    fn new(cache_kib: usize, n: usize) -> Result<Self, String> {
+        if !matches!(cache_kib, 4 | 16 | 64 | 256) {
+            return Err("suffix cache must be one of 4/16/64/256 KiB per worker".to_owned());
+        }
+        let bytes = cache_kib
+            .checked_mul(1024)
+            .ok_or_else(|| "suffix cache byte count overflow".to_owned())?;
+        let slots = bytes / std::mem::size_of::<SuffixCacheSlot>();
+        if slots == 0 || !slots.is_power_of_two() {
+            return Err("suffix cache slot count must be a nonzero power of two".to_owned());
+        }
+        Ok(Self {
+            n,
+            slots: vec![
+                SuffixCacheSlot {
+                    key: u64::MAX,
+                    value: 0,
+                };
+                slots
+            ],
+        })
+    }
+
+    #[inline(always)]
+    fn index(&self, key: u64) -> usize {
+        let mut mixed = key;
+        mixed ^= mixed >> 30;
+        mixed = mixed.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        mixed ^= mixed >> 27;
+        mixed = mixed.wrapping_mul(0x94d0_49bb_1331_11eb);
+        mixed ^= mixed >> 31;
+        mixed as usize & (self.slots.len() - 1)
+    }
+
+    #[inline(always)]
+    fn lookup(&self, key: u64) -> Option<u64> {
+        let slot = self.slots[self.index(key)];
+        (slot.key == key).then_some(slot.value)
+    }
+
+    #[inline(always)]
+    fn insert(&mut self, key: u64, value: u64) -> bool {
+        let index = self.index(key);
+        let replaced = self.slots[index].key != u64::MAX && self.slots[index].key != key;
+        self.slots[index] = SuffixCacheSlot { key, value };
+        replaced
+    }
 }
 
 fn is_prime_u32_range(value: u64) -> bool {
@@ -4117,6 +4299,78 @@ fn contract_wide_scalar_tasks(
             .checked_add(partial?)
             .filter(|&value| value <= coefficient_limit)
     })
+}
+
+fn contract_wide_scalar_tasks_suffix_cached<const MEASURE: bool>(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    coefficient_limit: u64,
+    cache_kib_per_worker: usize,
+) -> Result<Option<(u64, SuffixCacheMetrics, usize)>, String> {
+    let _probe = SuffixCache::new(cache_kib_per_worker, n)?;
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            let next_task = &next_task;
+            handles.push(scope.spawn(move || {
+                let mut subtotal = 0_u64;
+                let mut cache = SuffixCache::new(cache_kib_per_worker, n).ok()?;
+                let mut metrics = SuffixCacheMetrics::default();
+                const TASK_CHUNK: usize = 16;
+                loop {
+                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    for task in &tasks[start..end] {
+                        let completions = contract_certified_tail_suffix_cached_u64::<MEASURE>(
+                            n,
+                            n - split_depth,
+                            task.state.columns,
+                            task.state.diag_dr,
+                            task.state.diag_dl,
+                            board_mask,
+                            coefficient_limit,
+                            &mut cache,
+                            &mut metrics,
+                        )?;
+                        let weighted = completions
+                            .checked_mul(task.orbit_weight)
+                            .filter(|&value| value <= coefficient_limit)?;
+                        subtotal = subtotal
+                            .checked_add(weighted)
+                            .filter(|&value| value <= coefficient_limit)?;
+                    }
+                }
+                Some((subtotal, metrics))
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("suffix-cache worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = 0_u64;
+    let mut metrics = SuffixCacheMetrics::default();
+    for partial in partials {
+        let Some((subtotal, local_metrics)) = partial else {
+            return Ok(None);
+        };
+        total = match total
+            .checked_add(subtotal)
+            .filter(|&value| value <= coefficient_limit)
+        {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+        metrics.merge(local_metrics);
+    }
+    Ok(Some((total, metrics, worker_count)))
 }
 
 fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
@@ -4553,6 +4807,140 @@ fn contract_rows_wide_scalar_last_k_impl(
         used_scalar_u64,
         promotion_reason,
         residues,
+    })
+}
+
+pub fn contract_rows_wide_scalar_suffix_cached(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+    cache_kib_per_worker: usize,
+) -> Result<SuffixCacheWideResult, String> {
+    if n > 19 {
+        return Err("lossless suffix-cache key supports N <= 19".to_owned());
+    }
+    let total_start = Instant::now();
+    let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    if plan.factorial_bound > u128::from(u64::MAX) {
+        return Err("suffix-cache scalar experiment requires certified N! <= u64".to_owned());
+    }
+    let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
+    let tail_start = Instant::now();
+    let cached = if profile_replay {
+        contract_wide_scalar_tasks_suffix_cached::<true>(
+            &tasks,
+            n,
+            prefix.split_depth,
+            board_mask,
+            u64::MAX,
+            cache_kib_per_worker,
+        )?
+    } else {
+        contract_wide_scalar_tasks_suffix_cached::<false>(
+            &tasks,
+            n,
+            prefix.split_depth,
+            board_mask,
+            u64::MAX,
+            cache_kib_per_worker,
+        )?
+    };
+    let (count, cache_metrics, cache_workers) =
+        cached.ok_or_else(|| "checked suffix-cache scalar contraction overflow".to_owned())?;
+    let tail_elapsed = tail_start.elapsed();
+    let elapsed = total_start.elapsed();
+    let profile_start = Instant::now();
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    let mut replay_count = 0_u128;
+    if profile_replay {
+        let partials = tasks
+            .par_iter()
+            .map(|task| {
+                let mut metrics = RecursiveTailMetrics::default();
+                let completions = contract_recursive_tail(
+                    n,
+                    prefix.split_depth,
+                    task.state,
+                    relation,
+                    board_mask,
+                    &mut metrics,
+                )?;
+                let weighted = completions
+                    .checked_mul(u128::from(task.orbit_weight))
+                    .ok_or_else(|| "suffix-cache profile task weight overflow".to_owned())?;
+                Ok::<_, String>((weighted, metrics))
+            })
+            .collect::<Vec<_>>();
+        for partial in partials {
+            let (weighted, metrics) = partial?;
+            replay_count = replay_count
+                .checked_add(weighted)
+                .ok_or_else(|| "suffix-cache profile reduction overflow".to_owned())?;
+            recursive_nodes = recursive_nodes
+                .checked_add(metrics.nodes)
+                .ok_or_else(|| "suffix-cache recursive node counter overflow".to_owned())?;
+            recursive_accepted_entries = recursive_accepted_entries
+                .checked_add(metrics.accepted_entries)
+                .ok_or_else(|| "suffix-cache accepted-entry counter overflow".to_owned())?;
+        }
+        if replay_count != u128::from(count) {
+            return Err("suffix-cache result disagrees with generic C replay".to_owned());
+        }
+    }
+    let profile_replay_elapsed = profile_start.elapsed();
+    let total_accepted = prefix
+        .prefix_accepted_entries
+        .checked_add(recursive_accepted_entries)
+        .ok_or_else(|| "suffix-cache total accepted-entry overflow".to_owned())?;
+    let count_u128 = u128::from(count);
+    if count_u128 > plan.factorial_bound {
+        return Err("suffix-cache result exceeds certified N! bound".to_owned());
+    }
+    let slots_per_worker = cache_kib_per_worker * 1024 / std::mem::size_of::<SuffixCacheSlot>();
+    let residues = plan
+        .primes
+        .iter()
+        .map(|&prime| count % prime)
+        .collect::<Vec<_>>();
+    Ok(SuffixCacheWideResult {
+        wide: WideScalarResult {
+            contraction: ContractionResult {
+                n,
+                count: count_u128,
+                elapsed,
+                peak_states: tasks.len().max(1),
+                tensor_entries_examined: 17,
+                tensor_entries_matched: 17,
+                row_operator_candidates: total_accepted,
+                row_operator_matched: total_accepted,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            plan,
+            split_depth: prefix.split_depth,
+            target_tail_tasks: prefix.target_tail_tasks,
+            tail_tasks: tasks.len(),
+            prefix_nodes: prefix.prefix_nodes,
+            prefix_accepted_entries: prefix.prefix_accepted_entries,
+            prefix_kept_entries: prefix.prefix_kept_entries,
+            recursive_nodes,
+            recursive_accepted_entries,
+            seed_elapsed: prefix.seed_elapsed,
+            tail_elapsed,
+            profile_replay_elapsed,
+            used_scalar_u64: true,
+            promotion_reason: None,
+            residues,
+        },
+        cache_kib_per_worker,
+        cache_slots_per_worker: slots_per_worker,
+        cache_workers,
+        cache_bytes: cache_kib_per_worker
+            .saturating_mul(1024)
+            .saturating_mul(cache_workers),
+        cache_max_remaining_rows: 7,
+        cache_metrics,
     })
 }
 
@@ -6151,7 +6539,7 @@ mod tests {
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
         contract_rows_wide_crt, contract_rows_wide_scalar,
-        contract_rows_wide_scalar_last_k_with_target,
+        contract_rows_wide_scalar_last_k_with_target, contract_rows_wide_scalar_suffix_cached,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
         top_row_vertical_orbit_weight, wide_crt_plan,
@@ -6590,6 +6978,28 @@ mod tests {
             }
         }
         assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
+    }
+
+    #[test]
+    fn bounded_tagged_suffix_cache_matches_generic_explicit_c_replay() {
+        assert_eq!(std::mem::size_of::<super::SuffixCacheSlot>(), 16);
+        for cache_kib in [4, 16, 64, 256] {
+            for n in 0..=10 {
+                let result =
+                    contract_rows_wide_scalar_suffix_cached(n, true, 512, cache_kib).unwrap();
+                assert_eq!(
+                    Some(result.wide.contraction.count),
+                    known_count(n),
+                    "N={n}, cache={cache_kib} KiB"
+                );
+                assert_eq!(result.cache_slots_per_worker * 16, cache_kib * 1024);
+            }
+        }
+        let measured = contract_rows_wide_scalar_suffix_cached(14, true, 512, 4).unwrap();
+        assert_eq!(measured.wide.contraction.count, 365_596);
+        assert!(measured.cache_metrics.lookups > 0);
+        assert!(contract_rows_wide_scalar_suffix_cached(8, false, 512, 8).is_err());
+        assert!(contract_rows_wide_scalar_suffix_cached(20, false, 512, 4).is_err());
     }
 
     #[test]
