@@ -2696,6 +2696,7 @@ struct JointKernelResult {
     parallel: ParallelGenerationResult,
     max_coefficient_observed: u64,
     reuse: ArenaReuseMetrics,
+    boundary: Vec<Vec<JointEntry>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2710,12 +2711,16 @@ fn contract_rows_d4_joint_u64_kernel(
     shards: usize,
     coefficient_bits: u32,
     reuse_arenas: bool,
+    stop_after_rows: usize,
 ) -> Result<JointKernelResult, String> {
     if n > 21 {
         return Err("joint-u64 virtual-boundary backend supports N <= 21".to_owned());
     }
     if shards == 0 || !shards.is_power_of_two() || shards > 256 {
         return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if stop_after_rows > n {
+        return Err("joint-u64 prefix cut cannot exceed N".to_owned());
     }
     let key_bits = u32::try_from(3_usize.saturating_mul(n))
         .map_err(|_| "joint-u64 key width does not fit u32".to_owned())?;
@@ -2727,6 +2732,7 @@ fn contract_rows_d4_joint_u64_kernel(
             parallel: contract_rows_d4_compact_parallel_generation_kernel(n, shards)?,
             max_coefficient_observed: 1,
             reuse: ArenaReuseMetrics::default(),
+            boundary: Vec::new(),
         });
     }
 
@@ -2748,7 +2754,7 @@ fn contract_rows_d4_joint_u64_kernel(
     let mut peak_states = 1_usize;
     let mut total_operator_candidates = 0_u128;
     let mut total_operator_matched = 0_u128;
-    let mut layers = Vec::with_capacity(n);
+    let mut layers = Vec::with_capacity(stop_after_rows);
     let mut generation_elapsed = Duration::ZERO;
     let mut sort_elapsed = Duration::ZERO;
     let mut reduce_elapsed = Duration::ZERO;
@@ -2761,7 +2767,7 @@ fn contract_rows_d4_joint_u64_kernel(
         .collect::<Vec<_>>();
     let total_start = Instant::now();
 
-    for row in 0..n {
+    for row in 0..stop_after_rows {
         let config = JointConfig {
             n,
             row,
@@ -2974,6 +2980,7 @@ fn contract_rows_d4_joint_u64_kernel(
         },
         max_coefficient_observed,
         reuse,
+        boundary,
     })
 }
 
@@ -2996,7 +3003,7 @@ fn contract_rows_d4_joint_u64_with_reuse(
 ) -> Result<(JointU64Result, ArenaReuseMetrics), String> {
     let total_start = Instant::now();
     let joint_start = Instant::now();
-    match contract_rows_d4_joint_u64_kernel(n, shards, coefficient_bits, reuse_arenas) {
+    match contract_rows_d4_joint_u64_kernel(n, shards, coefficient_bits, reuse_arenas, n) {
         Ok(result) => {
             let reuse = result.reuse;
             Ok((
@@ -3047,6 +3054,298 @@ fn contract_rows_d4_joint_u64_with_reuse(
         }
         Err(error) => Err(error),
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct RecursiveTailResult {
+    pub contraction: ContractionResult,
+    pub cut: usize,
+    pub prefix_elapsed: Duration,
+    pub tail_elapsed: Duration,
+    pub prefix_support: usize,
+    pub tail_tasks: usize,
+    pub recursive_nodes: u128,
+    pub recursive_accepted_entries: u128,
+    pub coefficient_bits: u32,
+    pub max_prefix_coefficient: u64,
+    pub generation_elapsed: Duration,
+    pub sort_elapsed: Duration,
+    pub reduce_elapsed: Duration,
+    pub peak_thread_local_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RecursiveTailRelation {
+    legs: VirtualLegs,
+    value: u128,
+}
+
+impl RecursiveTailRelation {
+    fn compile(operator: &CompiledRowOperator) -> Result<Self, String> {
+        let entry = operator.occupied;
+        let legs = entry.legs;
+        let binary = [
+            legs.column_in,
+            legs.column_out,
+            legs.row_in,
+            legs.row_out,
+            legs.diag_dr_in,
+            legs.diag_dr_out,
+            legs.diag_dl_in,
+            legs.diag_dl_out,
+        ]
+        .into_iter()
+        .all(|signal| signal <= 1);
+        if !binary || legs.row_in != 0 || legs.row_out != 1 {
+            return Err(
+                "recursive tail requires the compiled binary v0-to-v1 row entry".to_owned(),
+            );
+        }
+        Ok(Self {
+            legs,
+            value: entry.value,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RecursiveTailMetrics {
+    nodes: u128,
+    accepted_entries: u128,
+}
+
+#[inline]
+fn recursive_matching_bits(mask: u64, required: u8, board_mask: u64) -> u64 {
+    if required == 0 {
+        (!mask) & board_mask
+    } else {
+        mask & board_mask
+    }
+}
+
+#[inline]
+fn recursive_tail_positions(
+    parent: BoundaryState,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+) -> u64 {
+    recursive_matching_bits(parent.columns, relation.legs.column_in, board_mask)
+        & recursive_matching_bits(parent.diag_dr, relation.legs.diag_dr_in, board_mask)
+        & recursive_matching_bits(parent.diag_dl, relation.legs.diag_dl_in, board_mask)
+}
+
+#[inline]
+fn recursive_tail_successor(
+    parent: BoundaryState,
+    selected: u64,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+) -> BoundaryState {
+    let column = selected.trailing_zeros() as usize;
+    BoundaryState {
+        columns: replace_bit(parent.columns, column, relation.legs.column_out),
+        diag_dr: (replace_bit(parent.diag_dr, column, relation.legs.diag_dr_out) << 1) & board_mask,
+        diag_dl: replace_bit(parent.diag_dl, column, relation.legs.diag_dl_out) >> 1,
+    }
+}
+
+fn contract_recursive_tail(
+    n: usize,
+    row: usize,
+    parent: BoundaryState,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+    metrics: &mut RecursiveTailMetrics,
+) -> Result<u128, String> {
+    // For N<=21, the complete recursion tree is bounded by
+    // sum_k P(N,k) < e*N!, which is far below u128::MAX.
+    metrics.nodes += 1;
+    if row == n {
+        // Column lines terminate in v1=(0,1): every column signal must be 1.
+        // Both diagonal families terminate in v2=(1,1), so either outgoing
+        // signal is accepted and no diagonal filter is applied here.
+        return Ok(u128::from(parent.columns == board_mask));
+    }
+
+    let mut positions = recursive_tail_positions(parent, relation, board_mask);
+    let mut count = 0_u128;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        metrics.accepted_entries += 1;
+        let successor = recursive_tail_successor(parent, selected, relation, board_mask);
+        let child = contract_recursive_tail(n, row + 1, successor, relation, board_mask, metrics)?;
+        let weighted = child
+            .checked_mul(relation.value)
+            .ok_or_else(|| "coefficient overflow in recursive local C multiplication".to_owned())?;
+        count = count
+            .checked_add(weighted)
+            .ok_or_else(|| "coefficient overflow in recursive tail reduction".to_owned())?;
+    }
+    Ok(count)
+}
+
+pub fn contract_rows_d4_recursive_tail(
+    n: usize,
+    shards: usize,
+    cut: usize,
+) -> Result<RecursiveTailResult, String> {
+    if n > 21 {
+        return Err("recursive-tail virtual-boundary backend supports N <= 21".to_owned());
+    }
+    if cut > n {
+        return Err("recursive-tail cut cannot exceed N".to_owned());
+    }
+    if shards == 0 || !shards.is_power_of_two() || shards > 256 {
+        return Err("shards must be a power of two in 1..=256".to_owned());
+    }
+    if n == 0 {
+        return Ok(RecursiveTailResult {
+            contraction: ContractionResult {
+                n,
+                count: 1,
+                elapsed: Duration::ZERO,
+                peak_states: 1,
+                tensor_entries_examined: 17,
+                tensor_entries_matched: 17,
+                row_operator_candidates: 0,
+                row_operator_matched: 0,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            cut,
+            prefix_elapsed: Duration::ZERO,
+            tail_elapsed: Duration::ZERO,
+            prefix_support: 1,
+            tail_tasks: 1,
+            recursive_nodes: 1,
+            recursive_accepted_entries: 0,
+            coefficient_bits: 64,
+            max_prefix_coefficient: 1,
+            generation_elapsed: Duration::ZERO,
+            sort_elapsed: Duration::ZERO,
+            reduce_elapsed: Duration::ZERO,
+            peak_thread_local_bytes: 0,
+        });
+    }
+
+    let total_start = Instant::now();
+    let coefficient_bits = 64_u32
+        .checked_sub(
+            u32::try_from(3_usize.saturating_mul(n))
+                .map_err(|_| "recursive-tail boundary width does not fit u32".to_owned())?,
+        )
+        .ok_or_else(|| "recursive-tail packing requires N <= 21".to_owned())?;
+    let coefficient_mask = coefficient_mask(coefficient_bits);
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let relation = RecursiveTailRelation::compile(&operator)?;
+    let board_mask = (1_u64 << n) - 1;
+
+    let (mut prefix, boundary, max_prefix_coefficient) =
+        if cut == 0 {
+            let initial = BoundaryState {
+                columns: 0,
+                diag_dr: 0,
+                diag_dl: 0,
+            };
+            let key = u64::try_from(PackedBoundary::pack(initial, n).0)
+                .map_err(|_| "initial recursive-tail key does not fit u64".to_owned())?;
+            let mut boundary = (0..shards)
+                .map(|_| Vec::<JointEntry>::new())
+                .collect::<Vec<_>>();
+            boundary[shard_index(u128::from(key), n, shards, ShardMode::Prefix)]
+                .push(JointEntry::new(key, 1, coefficient_bits));
+            (
+                ParallelGenerationResult {
+                    contraction: ContractionResult {
+                        n,
+                        count: 0,
+                        elapsed: Duration::ZERO,
+                        peak_states: 1,
+                        tensor_entries_examined: 17,
+                        tensor_entries_matched: 17,
+                        row_operator_candidates: 0,
+                        row_operator_matched: 0,
+                        peak_rss_bytes: peak_rss_bytes(),
+                        layers: Vec::new(),
+                    },
+                    generation_elapsed: Duration::ZERO,
+                    sort_elapsed: Duration::ZERO,
+                    reduce_elapsed: Duration::ZERO,
+                    peak_thread_local_bytes: 0,
+                    peak_worker_partials: 0,
+                },
+                boundary,
+                1,
+            )
+        } else {
+            let prefix = contract_rows_d4_joint_u64_kernel(n, shards, coefficient_bits, true, cut)?;
+            (
+                prefix.parallel,
+                prefix.boundary,
+                prefix.max_coefficient_observed,
+            )
+        };
+    let prefix_elapsed = total_start.elapsed();
+    let prefix_support = boundary.iter().map(Vec::len).sum::<usize>();
+
+    let tail_start = Instant::now();
+    let partials = boundary
+        .par_iter()
+        .flat_map_iter(|shard| shard.iter().copied())
+        .map(|entry| {
+            let key = entry.key(coefficient_bits);
+            let weight = entry.weight(coefficient_mask);
+            let mut metrics = RecursiveTailMetrics::default();
+            let completions = contract_recursive_tail(
+                n,
+                cut,
+                PackedBoundary(u128::from(key)).unpack(n),
+                relation,
+                board_mask,
+                &mut metrics,
+            )?;
+            let weighted = completions.checked_mul(u128::from(weight)).ok_or_else(|| {
+                "coefficient overflow joining prefix and recursive tail".to_owned()
+            })?;
+            Ok::<_, String>((weighted, metrics))
+        })
+        .collect::<Vec<_>>();
+    let mut count = 0_u128;
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    for partial in partials {
+        let (weighted, metrics) = partial?;
+        count = count
+            .checked_add(weighted)
+            .ok_or_else(|| "coefficient overflow reducing recursive-tail tasks".to_owned())?;
+        recursive_nodes += metrics.nodes;
+        recursive_accepted_entries += metrics.accepted_entries;
+    }
+    let tail_elapsed = tail_start.elapsed();
+
+    prefix.contraction.count = count;
+    prefix.contraction.elapsed = total_start.elapsed();
+    prefix.contraction.peak_rss_bytes = prefix.contraction.peak_rss_bytes.max(peak_rss_bytes());
+    prefix.contraction.row_operator_candidates += recursive_accepted_entries;
+    prefix.contraction.row_operator_matched += recursive_accepted_entries;
+    Ok(RecursiveTailResult {
+        contraction: prefix.contraction,
+        cut,
+        prefix_elapsed,
+        tail_elapsed,
+        prefix_support,
+        tail_tasks: prefix_support,
+        recursive_nodes,
+        recursive_accepted_entries,
+        coefficient_bits,
+        max_prefix_coefficient,
+        generation_elapsed: prefix.generation_elapsed,
+        sort_elapsed: prefix.sort_elapsed,
+        reduce_elapsed: prefix.reduce_elapsed,
+        peak_thread_local_bytes: prefix.peak_thread_local_bytes,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -4303,13 +4602,14 @@ mod e24_kernel_tests {
 mod tests {
     use super::{
         BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
-        RowCounters, SiteTensorB, SiteTensorC, VirtualLegs, contract_one_row_compiled,
-        contract_one_row_sitewise, contract_rows, contract_rows_d4_orbit_parallel_sort_reduce,
-        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_sparse_parallel_sort_reduce,
+        RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
+        contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
+        contract_rows_d4_orbit_parallel_sort_reduce, contract_rows_d4_orbit_sort_reduce,
+        contract_rows_d4_recursive_tail, contract_rows_d4_sparse_parallel_sort_reduce,
         contract_rows_d4_sparse_sort_reduce, contract_rows_hash_materialization,
         contract_rows_parallel_sort_reduce, contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce, known_count,
-        top_row_vertical_orbit_weight,
+        recursive_tail_positions, recursive_tail_successor, top_row_vertical_orbit_weight,
     };
     use std::collections::{HashMap, HashSet};
 
@@ -4492,6 +4792,80 @@ mod tests {
                     }
                 }
                 boundary = next;
+            }
+        }
+    }
+
+    #[test]
+    fn recursive_tail_successors_replay_compiled_c_on_every_reachable_parent() {
+        let tensor = SiteTensorC::sec_vi();
+        let operator = CompiledRowOperator::compile(&tensor).unwrap();
+        let relation = RecursiveTailRelation::compile(&operator).unwrap();
+
+        for n in 1..=8 {
+            let board_mask = (1_u64 << n) - 1;
+            let mut boundary = HashMap::from([(
+                BoundaryState {
+                    columns: 0,
+                    diag_dr: 0,
+                    diag_dl: 0,
+                },
+                1_u128,
+            )]);
+            for row in 0..n {
+                let mut next = HashMap::new();
+                for (&parent, &parent_weight) in &boundary {
+                    let compiled = contract_one_row_compiled(
+                        n,
+                        &operator,
+                        parent,
+                        1,
+                        &mut RowCounters::default(),
+                    )
+                    .unwrap();
+                    let mut positions = recursive_tail_positions(parent, relation, board_mask);
+                    let mut recursive = Vec::new();
+                    while positions != 0 {
+                        let selected = positions & positions.wrapping_neg();
+                        positions &= positions - 1;
+                        recursive.push((
+                            recursive_tail_successor(parent, selected, relation, board_mask),
+                            relation.value,
+                        ));
+                    }
+                    assert_eq!(
+                        normalized_terms(recursive),
+                        normalized_terms(compiled),
+                        "N={n}, row={}, parent={parent:?}",
+                        row + 1
+                    );
+                    for (state, weight) in contract_one_row_sitewise(
+                        n,
+                        &tensor,
+                        parent,
+                        parent_weight,
+                        &mut RowCounters::default(),
+                    )
+                    .unwrap()
+                    {
+                        *next.entry(state).or_insert(0) += weight;
+                    }
+                }
+                boundary = next;
+            }
+        }
+    }
+
+    #[test]
+    fn every_recursive_tail_cut_matches_known_counts() {
+        for n in 0..=10 {
+            for cut in 0..=n {
+                let result = contract_rows_d4_recursive_tail(n, 8, cut).unwrap();
+                assert_eq!(
+                    Some(result.contraction.count),
+                    known_count(n),
+                    "N={n}, cut={cut}"
+                );
             }
         }
     }
