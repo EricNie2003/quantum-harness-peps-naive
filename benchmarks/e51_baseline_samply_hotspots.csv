@@ -1,0 +1,6 @@
+revision,tool,build,threads,N,phase,function,leaf_samples,cpu_delta_us,phase_leaf_samples,phase_cpu_delta_us,leaf_sample_share,cpu_delta_share,notes
+5dc5128,samply_0.13.1_1000Hz,release_thin_lto_codegen1_debuginfo2,8,17,production_fast_solve,contract_certified_tail_last_k_u64_LAST_K6,38570,36482675,38578,36488259,0.99979262,0.99984696,"two fast solves in the benchmark process; linker MAP maps sampled RVA 0x17a10 to the certified last-k function"
+5dc5128,samply_0.13.1_1000Hz,release_thin_lto_codegen1_debuginfo2,8,17,production_fast_solve,all_other_exe_leaf_functions,8,5584,38578,36488259,0.00020738,0.00015304,"prefix build worker entry and reduction combined"
+5dc5128,samply_0.13.1_1000Hz,release_thin_lto_codegen1_debuginfo2,8,17,generic_profile_replay,contract_recursive_tail,47883,45719229,47883,45719229,1.00000000,1.00000000,"separate validation replay; linker MAP maps sampled RVA 0x11f30"
+5dc5128,WPR_CPU,release_thin_lto_codegen1_debuginfo1,8,17,collection_attempt,not_collected,0,0,0,0,0,0,"WPR refused system-performance profile policy with error 0xc5585011"
+5dc5128,xperf_PmcProfile,release_thin_lto_codegen1_debuginfo2,8,17,collection_attempt,DcacheMisses_IcacheMisses_BranchMispredictions,0,0,0,0,0,0,"xperf listed the PMU sources but failed to configure counters with error 0x1069; no cache-miss rates are claimed"
