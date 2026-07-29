@@ -1584,3 +1584,114 @@ N<=20 可由 `N! < 2^64` 证明安全的单路 checked-u64，再扩大 C-certifi
 terminal supernode并消除递归/调度常数。E46--E50 的 exact obligations、
 消融和 kill gates 写入研究计划 §S；本检查点严格停在 E45，尚未启动
 E46。
+
+## 37. E46–E50 强制五方向复盘
+
+### 37.1 结果、机制与决策
+
+| 方向 | 核心实测 | 机制结论 | 决策 |
+|:---|:---|:---|:---:|
+| E46 direct scalar-u64 | N=17/18 相对 E45 快 35.2%/34.1%；N=18 19.799 s / 7.2 MB | `N!<2^64` 认证后删除双 residue arithmetic；direct sectors 保留 E45 低内存 | KEEP |
+| E47 last-5/6 supernode | last-6 相对 last-4 在 N=16/17 快 21.5%/18.6%，N=18 快 5.2% | 展开最宽的第五/第六层，减少递归、base-case 和 mask setup；C work 不变 | KEEP |
+| E48 fixed stack | 同 revision N=16/17 仅快 0.8%/1.3% | last-6 后剩余 recursion 已窄；固定 arrays 的初始化、动态索引和 spills 抵消 call-frame 节省 | REJECT |
+| E49 cross-sector AVX2 | lane occupancy 89--90%，但 N=16/17 慢 1.6%/2.1% | SIMD 只覆盖根层几个 masks，store/extract 和 lane dispatch 大于收益 | REJECT |
+| E50 residue AVX2 | N=17/18 的 3-lane 慢 3.6%/5.1%；4-lane 慢 2.1%/16.8% | 显式 YMM 递归 ABI/spills 未胜过 LLVM 对固定小数组的展开/寄存器分配 | REJECT AVX2 |
+
+本轮再次推翻了一个过强假设：“hot loop 长得像 bitmask 后，剩余只能靠
+SIMD/手写栈。”真正的大收益仍来自 contraction association 和 arithmetic
+backend：E46 删除不必要 residue lanes，E47 把更大的 C-derived terminal
+subnetwork 编译成 supernode。E48--E50 都没有减少 C work，底层机器级
+改写也未产生可保留收益。
+
+### 37.2 当前 production 与 DFS
+
+当前 main production 是 E46 direct-sector scalar-u64 + E47 last-6；
+E48--E50 候选代码均未合入。E47 raw data 与 E46 checkpoint DFS
+control 使用同机、8 threads、相同 release/thin-LTO 配置；其后没有
+修改 DFS comparator。N=14--17 为 21 samples，N=18 为 3 samples：
+
+| N | E47 PEPS median | DFS median | PEPS/DFS | PEPS RSS | peak sectors | accepted C entries |
+|---:|---:|---:|---:|---:|---:|---:|
+| 14 | 0.008303 s | 0.010550 s | **0.787x** | 6.00 MB | 4,816 | 13,679,283 |
+| 15 | 0.051086 s | 0.068454 s | **0.746x** | 6.28 MB | 7,432 | 91,883,705 |
+| 16 | 0.314296 s | 0.399135 s | **0.787x** | 12.69 MB | 70,906 | 570,595,159 |
+| 17 | 2.335194 s | 2.999933 s | **0.778x** | 16.53 MB | 114,434 | 4,276,033,044 |
+| 18 | 19.027543 s | 25.342626 s | **0.751x** | 7.76 MB | 18,132 | 29,682,922,254 |
+
+因此当前合规 PEPS 在 N=14--18 全窗口比仓库 DFS baseline 快约
+21--25%，不再只是单点 crossover。需要限定结论：这证明 PEPS 可以胜过
+**当前同硬件 comparator**，不是“胜过所有可能的 N-Queens DFS”的定理。
+两者处理的 logical work 已几乎一样；PEPS 的优势主要来自 E47 terminal
+supernode，而 comparator 没有做同样的 last-6 展开。
+
+以端点换算观察窗口倍率 `(T18/T14)^(1/4)`，E47 约 6.92，DFS 约
+7.00；N=17→18 分别约 8.15/8.45。第一次出现 PEPS measured base
+略低于 DFS 的窗口证据，但差异很小、N 也太少，不能当作渐近 exponent
+证明。更诚实的结论是：当前 gap 没有继续扩大，且常数已明确有利于
+PEPS。
+
+Raw data：
+
+- `benchmarks/e46_direct_scalar_release.csv`
+- `benchmarks/e46_controls.csv`
+- `benchmarks/e47_last_k_ablation.csv`
+- `benchmarks/e47_last_six_release.csv`
+- `benchmarks/e47_controls.csv`
+- `benchmarks/e48_iterative_release.csv`
+- `benchmarks/e49_batched_avx2_release.csv`
+- `benchmarks/e50_crt_avx2_release.csv`
+
+### 37.3 Fidelity 与“是否借优化偷偷变成 DFS”
+
+E46/E47 仍满足 §36 的完整反作弊链，新增部分逐项如下：
+
+1. E46 的 task prefix 逐层调用从 explicit 17-entry C 编译的
+   `RecursiveTailRelation`；没有 handwritten first-row queen list。
+2. scalar-u64 的合法性来自 checked `N!<=u64::MAX` 和非负不重叠
+   sectors，不读取 known Q(N)。人工 limit=1 会从相同 C sectors完整
+   replay CRT。
+3. E47 last-5/6 只组合已经由
+   `CertifiedSecViTailPlan` 验证的 occupied C successor；terminal 仍明确
+   contract column v1 和 diagonal v2。
+4. N=0..10 的 k=4/5/6 complete contractions 与 generic checked-u128 C
+   replay一致；既有 reachable-parent test 再逐项连接到 sitewise explicit C。
+5. E48/E49/E50 即使被拒，也都用独立 scalar/generic-C 路径验证 count、
+   tasks、residues 和 accepted entries；被拒代码没有混入 production。
+6. `known_count` 只在 binary 计算完成后设置 CSV `verified`，DFS module
+   仍没有被 PEPS solver 调用。
+
+热循环与 DFS 的 masks 仍相似，原因仍是 row-v1 边界下的 C automaton
+等价编译。E47 的 last-6 是 contraction tree 的局部 reassociation/unroll，
+不是已知 suffix count table。当前正确分类是
+**proved-equivalent optimized PEPS contraction**，不是 naive scan，也
+不是 conventional DFS。
+
+### 37.4 E50 对 CRT/Q(28) 投影的新信息
+
+E50 的 explicit AVX2 失败，但 scalar control 给出重要信息：forced
+3/4-prime small-array loops 没有表现出旧投影假定的 3x/4x 线性 lane
+惩罚；E47 last-6 迁移到 scalar CRT 后，N=18 forced 3/4 lanes 约
+18--19 s，而 E45 last-4 two-lane 为 31.3 s。该收益属于 terminal
+association，不属于 AVX2，必须在下一方向中干净实现和消融。
+
+按 E47 N=17→18 的 8.15x ratio 从约 19 s 外推，Q(28) 仍约
+800--1,000 年。即使取消旧投影的 lane-linear penalty，也没有改变
+exponential recursive tail。当前最大完成并验证仍为 Q(19)，不是 Q(28)。
+
+### 37.5 treeSA 的新定位
+
+用户建议的 treeSA 现在值得重新进入候选，但必须吸收 E13/E30 的失败：
+
+- 不再只优化 dense tensor width/flop proxy；
+- 搜索原子必须是 explicit-C 派生的 row/half-row/terminal macro edges；
+- score 需要由 actual sparse support、materialization bytes 和已校准
+  kernel cost构成；
+- 按用户要求，offline treeSA 搜索耗时不计入 solver wall time；
+- 但获胜路径的 **exact contraction execution time、RSS 和 C work**
+  必须完整计入；
+- 在 N=10--16 分别搜索并比较归一化 tree/cut motif，再把共性路径冻结后
+  迁移到 N=17/18，迁移 benchmark 不允许重新搜索。
+
+数学上 D4 与 treeSA 可以组合，但 E39 表明 full D4 在 row cut 上无益。
+只有 treeSA 找到让更多 D4 actions 提前可比较的新 cut，才重启 D4
+消融。下一五方向与 gates 见研究计划 §T；本复盘完成前未启动 E51。

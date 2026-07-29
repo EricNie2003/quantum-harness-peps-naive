@@ -2963,3 +2963,65 @@ base 仍不低于 DFS，下一次 review 必须重新寻找改变 contraction ex
     `benchmarks/`；
 11. 完成 E50 后必须执行下一次 five-direction review；复盘前不得启动
     E51。当前检查点严格停在 E45，E46 尚未开始。
+
+## T. E46–E50 强制复盘后的修订（2026-07-29）
+
+完整复盘见 `REPORT.md` §37。E46 direct scalar-u64 和 E47 last-6
+KEEP；E48 fixed stack、E49 cross-sector AVX2、E50 explicit residue
+AVX2 REJECT。当前 production PEPS 在 N=14--18 比仓库 DFS comparator
+快约 21--25%，窗口 geometric wall base 约 6.92 vs DFS 7.00；这不是
+渐近证明，但已经稳定超过同硬件 baseline。
+
+### T.1 新判断
+
+1. 后端/association 仍比手写低层机器优化更重要；
+2. E47 last-6 尚未干净迁移到 E45 的 N>20 scalar CRT path；
+3. last-5/6 收益表明 last-7/8 仍值得一次有 kill gate 的扩展；
+4. E13/E30 只否定 dense/site-level cost model，未否定由 actual sparse
+   macro cost 驱动的离线 treeSA；
+5. treeSA 搜索时间可按用户要求排除，但获胜路径的 contraction execution
+   不能排除任何 setup/materialization/reduction；
+6. 不同 N 的最优路径是否共享 normalized cut/tree motif 必须单独验证，
+   不能从小 N 最优直接假定可迁移到大 N。
+
+### T.2 E51–E55
+
+| ID | 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E51 | **clean scalar-CRT last-6 migration** | E45 1--4 prime backend 的每个 node 使用 E47 certified last-6；prime/N!/CRT 证明不变；不得合入 E50 intrinsics | 高 / 2 | forced 2/3/4 lanes 在 N=16--18 两档相对 last-4 快 10%；residues/work identical；scalar-u64 path 不回退 | 两档收益 <5%、任一 residue mismatch，或代码把 AVX candidate 混入 |
+| E52 | **C-generated last-7/last-8 terminal supernode** | 由 `CertifiedSecViTailPlan` 组合完整 7/8-row subtree；逐 boundary 与 generic recursive C replay；checked promotion 保留 | 中高 / 3 | k=6/7/8 中 N=16--18 两档再快 8%；binary/compile 增幅 <30% | 两档收益 <3%、code-size explosion，或 replay mismatch |
+| E53 | **actual-sparse macro treeSA（离线搜索）** | tree leaves/edges 只允许 explicit-C site、half-row、row、terminal macros；每个候选 tree 覆盖所有 virtual bonds 和 v0/v1/v2；winning tree exact execute | 中低 / 5 | N=10--16 至少两档 winning-path execution 比 E52 baseline 快 15% 或 peak support/materialization 降 25%；search time不计 | 只有 dense proxy 改善、actual execution不降，或 interface 无法 exact materialize |
+| E54 | **跨 N tree motif 提取与冻结迁移** | 从 E53 各 N 最优树提取 normalized cut depth、subtree balance、macro sequence；目标 N=17/18 禁止重新搜索，只加载冻结 motif | 低 / 5 | transferred path 在 N=15--18 距 per-N searched best ≤5%，且两档比 row baseline 快 10%；给出可复查共性规律 | 小 N trees 无稳定 motif、迁移回退 >10%，或 target 必须重新 treeSA |
+| E55 | **treeSA-cut 上的 D4 stabilizer 消融** | 仅当 E53/E54 产生非 row cut 时启动；显式计算该 cut 的 D4 stabilizer/orbit weights；none/vertical/full 与同一 tree 对照 | 低 / 5 | 相对 treeSA+vertical 两档 nodes 降 20% 或 wall 降 15%，所有 orbit counts exact | 新 cut 仍只有 row-cut stabilizer、增量 nodes <10%，或任何 orbit replay mismatch |
+
+### T.3 treeSA 搜索协议
+
+1. 先以 N=10--12 的 explicit-C exact executor校准每种 macro edge 的
+   actual output support、candidate entries、peak live bytes 和 kernel
+   ns/entry；
+2. treeSA state 是合法 contraction tree；move set 仅含 subtree rotation、
+   macro regroup 和合法 separator exchange，不改 tensor values；
+3. objective 同时报告 estimated cost 与 winner 的 actual execution；
+   禁止只凭 treewidth/FLOP proxy KEEP；
+4. 搜索时间、proposal 数和 seed仍记录到 raw CSV，但不计入用户指定的
+   solver wall comparison；
+5. 每个 N 至少使用多个 deterministic seeds，保存 winner tree 的
+   machine-readable serialization、cut widths 和 actual sparse trace；
+6. E54 的 source N 与 target N 预先分离；看到 N=17/18 结果后不得回改
+   motif extraction rule；
+7. treeSA winner仍必须通过 B/C 17-entry、boundary、generic-C replay、
+   independent oracle 和 known Q(N) tests。
+
+### T.4 执行与停止规则
+
+1. 严格按 E51 → E52 → E53 → E54 → E55，每项独立 worktree/branch；
+2. E53 即使 REJECT，也必须保留 searched trees、seeds、estimated/actual
+   cost scatter 和失败机制；不能只留最佳数字；
+3. E54/E55 的 dependency 不成立时按 dependency REJECT 归档，不临时
+   偷换成第六方向；
+4. full D4 的比较基线必须是相同 tree 的 vertical mode，不得引用 vs none
+   制造增益；
+5. checkpoint 继续固定 Ryzen 9 7945HX、rustc 1.94、release/thin-LTO、
+   8 threads；raw CSV 存 `benchmarks/`；
+6. 完成 E55 后执行下一次 five-direction review；复盘前不得启动 E56。
+   当前检查点停在 E50，E51 尚未开始。
