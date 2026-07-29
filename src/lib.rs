@@ -3735,6 +3735,26 @@ pub struct WideCrtResult {
     pub residues: Vec<u64>,
 }
 
+#[derive(Clone, Debug)]
+pub struct WideScalarResult {
+    pub contraction: ContractionResult,
+    pub plan: WideCrtPlan,
+    pub split_depth: usize,
+    pub target_tail_tasks: usize,
+    pub tail_tasks: usize,
+    pub prefix_nodes: u128,
+    pub prefix_accepted_entries: u128,
+    pub prefix_kept_entries: u128,
+    pub recursive_nodes: u128,
+    pub recursive_accepted_entries: u128,
+    pub seed_elapsed: Duration,
+    pub tail_elapsed: Duration,
+    pub profile_replay_elapsed: Duration,
+    pub used_scalar_u64: bool,
+    pub promotion_reason: Option<String>,
+    pub residues: Vec<u64>,
+}
+
 fn is_prime_u32_range(value: u64) -> bool {
     if value < 2 {
         return false;
@@ -3961,6 +3981,59 @@ fn contract_wide_crt_tasks<const LANES: usize>(
         }
     }
     total
+}
+
+fn contract_wide_scalar_tasks(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = 0_u64;
+                const TASK_CHUNK: usize = 16;
+                loop {
+                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    for task in &tasks[start..end] {
+                        let completions = contract_certified_tail_last_k_u64::<4>(
+                            n - split_depth,
+                            task.state.columns,
+                            task.state.diag_dr,
+                            task.state.diag_dl,
+                            board_mask,
+                            coefficient_limit,
+                        )?;
+                        let weighted = completions
+                            .checked_mul(task.orbit_weight)
+                            .filter(|&value| value <= coefficient_limit)?;
+                        subtotal = subtotal
+                            .checked_add(weighted)
+                            .filter(|&value| value <= coefficient_limit)?;
+                    }
+                }
+                Some(subtotal)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("wide scalar worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    partials.into_iter().try_fold(0_u64, |total, partial| {
+        total
+            .checked_add(partial?)
+            .filter(|&value| value <= coefficient_limit)
+    })
 }
 
 fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
@@ -4195,6 +4268,166 @@ pub fn contract_rows_wide_crt_with_target(
         seed_elapsed: prefix.seed_elapsed,
         tail_elapsed,
         profile_replay_elapsed,
+        residues,
+    })
+}
+
+pub fn contract_rows_wide_scalar(
+    n: usize,
+    profile_replay: bool,
+) -> Result<WideScalarResult, String> {
+    contract_rows_wide_scalar_with_target_and_limit(n, profile_replay, 512, u64::MAX)
+}
+
+pub fn contract_rows_wide_scalar_with_target(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+) -> Result<WideScalarResult, String> {
+    contract_rows_wide_scalar_with_target_and_limit(
+        n,
+        profile_replay,
+        target_tasks_per_thread,
+        u64::MAX,
+    )
+}
+
+pub fn contract_rows_wide_scalar_with_target_and_limit(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+    coefficient_limit: u64,
+) -> Result<WideScalarResult, String> {
+    let total_start = Instant::now();
+    let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
+    let scalar_bound_certified = plan.factorial_bound <= u128::from(u64::MAX);
+    let tail_start = Instant::now();
+    let scalar_count = scalar_bound_certified.then(|| {
+        contract_wide_scalar_tasks(&tasks, n, prefix.split_depth, board_mask, coefficient_limit)
+    });
+    let (count, used_scalar_u64, promotion_reason, residues) = match scalar_count {
+        Some(Some(count)) => {
+            let residues = plan
+                .primes
+                .iter()
+                .map(|&prime| count % prime)
+                .collect::<Vec<_>>();
+            (u128::from(count), true, None, residues)
+        }
+        Some(None) => {
+            let residues = contract_wide_crt_residues(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                &plan.primes,
+            )?;
+            let count = reconstruct_crt(&residues, &plan.primes)?;
+            (
+                count,
+                false,
+                Some(
+                    "checked scalar-u64 limit exceeded; replayed identical C sectors with CRT"
+                        .to_owned(),
+                ),
+                residues,
+            )
+        }
+        None => {
+            let residues = contract_wide_crt_residues(
+                &tasks,
+                n,
+                prefix.split_depth,
+                board_mask,
+                &plan.primes,
+            )?;
+            let count = reconstruct_crt(&residues, &plan.primes)?;
+            (
+                count,
+                false,
+                Some("N! exactness bound exceeds u64; used certified CRT backend".to_owned()),
+                residues,
+            )
+        }
+    };
+    let tail_elapsed = tail_start.elapsed();
+    let elapsed = total_start.elapsed();
+    if count > plan.factorial_bound {
+        return Err("wide scalar/CRT reconstruction exceeds certified N! count bound".to_owned());
+    }
+
+    let profile_start = Instant::now();
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    let mut replay_count = 0_u128;
+    if profile_replay {
+        let partials = tasks
+            .par_iter()
+            .map(|task| {
+                let mut metrics = RecursiveTailMetrics::default();
+                let completions = contract_recursive_tail(
+                    n,
+                    prefix.split_depth,
+                    task.state,
+                    relation,
+                    board_mask,
+                    &mut metrics,
+                )?;
+                let weighted = completions
+                    .checked_mul(u128::from(task.orbit_weight))
+                    .ok_or_else(|| "wide scalar profile task weight overflow".to_owned())?;
+                Ok::<_, String>((weighted, metrics))
+            })
+            .collect::<Vec<_>>();
+        for partial in partials {
+            let (weighted, metrics) = partial?;
+            replay_count = replay_count
+                .checked_add(weighted)
+                .ok_or_else(|| "wide scalar profile reduction overflow".to_owned())?;
+            recursive_nodes = recursive_nodes
+                .checked_add(metrics.nodes)
+                .ok_or_else(|| "wide scalar recursive node counter overflow".to_owned())?;
+            recursive_accepted_entries = recursive_accepted_entries
+                .checked_add(metrics.accepted_entries)
+                .ok_or_else(|| "wide scalar accepted-entry counter overflow".to_owned())?;
+        }
+        if replay_count != count {
+            return Err("wide scalar/CRT result disagrees with generic C replay".to_owned());
+        }
+    }
+    let profile_replay_elapsed = profile_start.elapsed();
+    let total_accepted = prefix
+        .prefix_accepted_entries
+        .checked_add(recursive_accepted_entries)
+        .ok_or_else(|| "wide scalar total accepted-entry counter overflow".to_owned())?;
+    Ok(WideScalarResult {
+        contraction: ContractionResult {
+            n,
+            count,
+            elapsed,
+            peak_states: tasks.len().max(1),
+            tensor_entries_examined: 17,
+            tensor_entries_matched: 17,
+            row_operator_candidates: total_accepted,
+            row_operator_matched: total_accepted,
+            peak_rss_bytes: peak_rss_bytes(),
+            layers: Vec::new(),
+        },
+        plan,
+        split_depth: prefix.split_depth,
+        target_tail_tasks: prefix.target_tail_tasks,
+        tail_tasks: tasks.len(),
+        prefix_nodes: prefix.prefix_nodes,
+        prefix_accepted_entries: prefix.prefix_accepted_entries,
+        prefix_kept_entries: prefix.prefix_kept_entries,
+        recursive_nodes,
+        recursive_accepted_entries,
+        seed_elapsed: prefix.seed_elapsed,
+        tail_elapsed,
+        profile_replay_elapsed,
+        used_scalar_u64,
+        promotion_reason,
         residues,
     })
 }
@@ -5793,9 +6026,10 @@ mod tests {
         contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
-        contract_rows_wide_crt, known_count, probe_wide_crt_prefix, reconstruct_crt,
-        recursive_tail_positions, recursive_tail_successor, top_row_vertical_orbit_weight,
-        wide_crt_plan,
+        contract_rows_wide_crt, contract_rows_wide_scalar,
+        contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
+        reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
+        top_row_vertical_orbit_weight, wide_crt_plan,
     };
     use std::collections::{HashMap, HashSet};
 
@@ -6198,6 +6432,21 @@ mod tests {
             assert!(prefix.split_depth <= n);
             assert_eq!(prefix.plan.n, n);
         }
+    }
+
+    #[test]
+    fn wide_scalar_fast_path_and_forced_crt_replay_are_explicit_c_exact() {
+        for n in 0..=12 {
+            let result = contract_rows_wide_scalar(n, true).unwrap();
+            assert!(result.used_scalar_u64, "N={n}");
+            assert_eq!(Some(result.contraction.count), known_count(n), "N={n}");
+            assert!(result.plan.factorial_bound <= u128::from(u64::MAX));
+        }
+        let promoted = contract_rows_wide_scalar_with_target_and_limit(8, true, 512, 1).unwrap();
+        assert!(!promoted.used_scalar_u64);
+        assert!(promoted.promotion_reason.is_some());
+        assert_eq!(promoted.contraction.count, 92);
+        assert_eq!(promoted.residues.len(), promoted.plan.primes.len());
     }
 
     #[test]
