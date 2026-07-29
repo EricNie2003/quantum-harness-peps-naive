@@ -1,0 +1,10 @@
+N,microkernel_rows,count,verified,median_elapsed_s,min_elapsed_s,p90_elapsed_s,peak_rss_bytes,repeats,warmup,algorithm_class
+14,2,365596,true,0.011660200,0.011221400,0.011792600,7901184,7,2,certified_explicit_C_last_k_PEPS
+15,2,2279184,true,0.068416400,0.067505300,0.074128400,9797632,7,2,certified_explicit_C_last_k_PEPS
+16,2,14772512,true,0.418457200,0.413165600,0.423064000,18341888,7,2,certified_explicit_C_last_k_PEPS
+14,3,365596,true,0.011739500,0.011139100,0.011774800,8151040,7,2,certified_explicit_C_last_k_PEPS
+15,3,2279184,true,0.066423900,0.064194300,0.066646600,9613312,7,2,certified_explicit_C_last_k_PEPS
+16,3,14772512,true,0.396405200,0.390471300,0.400251900,19537920,7,2,certified_explicit_C_last_k_PEPS
+14,4,365596,true,0.010732600,0.010582300,0.011419700,8065024,7,2,certified_explicit_C_last_k_PEPS
+15,4,2279184,true,0.061407300,0.060469300,0.062103800,9818112,7,2,certified_explicit_C_last_k_PEPS
+16,4,14772512,true,0.379314400,0.373135800,0.380773100,18870272,7,2,certified_explicit_C_last_k_PEPS
