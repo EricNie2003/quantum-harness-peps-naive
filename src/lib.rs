@@ -3479,6 +3479,65 @@ fn contract_certified_last_four_u64(
     Some(count)
 }
 
+#[inline(always)]
+fn contract_certified_last_five_u64(
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    let mut count = 0_u64;
+    let mut first = !(columns | diag_dr | diag_dl) & board_mask;
+    while first != 0 {
+        let selected = first & first.wrapping_neg();
+        first &= first - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        let child = contract_certified_last_four_u64(
+            4,
+            next_columns,
+            next_diag_dr,
+            next_diag_dl,
+            board_mask,
+            coefficient_limit,
+        )?;
+        count = count
+            .checked_add(child)
+            .filter(|&value| value <= coefficient_limit)?;
+    }
+    Some(count)
+}
+
+#[inline(always)]
+fn contract_certified_last_six_u64(
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    let mut count = 0_u64;
+    let mut first = !(columns | diag_dr | diag_dl) & board_mask;
+    while first != 0 {
+        let selected = first & first.wrapping_neg();
+        first &= first - 1;
+        let (next_columns, next_diag_dr, next_diag_dl) =
+            certified_tail_successor(columns, diag_dr, diag_dl, selected, board_mask);
+        let child = contract_certified_last_five_u64(
+            next_columns,
+            next_diag_dr,
+            next_diag_dl,
+            board_mask,
+            coefficient_limit,
+        )?;
+        count = count
+            .checked_add(child)
+            .filter(|&value| value <= coefficient_limit)?;
+    }
+    Some(count)
+}
+
 #[inline]
 fn contract_certified_tail_last_k_u64<const LAST_K: usize>(
     remaining_rows: usize,
@@ -3496,14 +3555,31 @@ fn contract_certified_tail_last_k_u64<const LAST_K: usize>(
         return Some(u64::from(positions != 0));
     }
     if remaining_rows <= LAST_K {
-        return contract_certified_last_four_u64(
-            remaining_rows,
-            columns,
-            diag_dr,
-            diag_dl,
-            board_mask,
-            coefficient_limit,
-        );
+        return match remaining_rows {
+            2..=4 => contract_certified_last_four_u64(
+                remaining_rows,
+                columns,
+                diag_dr,
+                diag_dl,
+                board_mask,
+                coefficient_limit,
+            ),
+            5 => contract_certified_last_five_u64(
+                columns,
+                diag_dr,
+                diag_dl,
+                board_mask,
+                coefficient_limit,
+            ),
+            6 => contract_certified_last_six_u64(
+                columns,
+                diag_dr,
+                diag_dl,
+                board_mask,
+                coefficient_limit,
+            ),
+            _ => None,
+        };
     }
     let mut positions = positions;
     let mut count = 0_u64;
@@ -3989,7 +4065,14 @@ fn contract_wide_scalar_tasks(
     split_depth: usize,
     board_mask: u64,
     coefficient_limit: u64,
+    microkernel_rows: usize,
 ) -> Option<u64> {
+    let contract_task: fn(usize, u64, u64, u64, u64, u64) -> Option<u64> = match microkernel_rows {
+        4 => contract_certified_tail_last_k_u64::<4>,
+        5 => contract_certified_tail_last_k_u64::<5>,
+        6 => contract_certified_tail_last_k_u64::<6>,
+        _ => return None,
+    };
     let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
     let next_task = AtomicUsize::new(0);
     let partials = std::thread::scope(|scope| {
@@ -4005,7 +4088,7 @@ fn contract_wide_scalar_tasks(
                     }
                     let end = (start + TASK_CHUNK).min(tasks.len());
                     for task in &tasks[start..end] {
-                        let completions = contract_certified_tail_last_k_u64::<4>(
+                        let completions = contract_task(
                             n - split_depth,
                             task.state.columns,
                             task.state.diag_dr,
@@ -4298,13 +4381,54 @@ pub fn contract_rows_wide_scalar_with_target_and_limit(
     target_tasks_per_thread: usize,
     coefficient_limit: u64,
 ) -> Result<WideScalarResult, String> {
+    contract_rows_wide_scalar_last_k_impl(
+        n,
+        profile_replay,
+        target_tasks_per_thread,
+        coefficient_limit,
+        4,
+    )
+}
+
+pub fn contract_rows_wide_scalar_last_k_with_target(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+    microkernel_rows: usize,
+) -> Result<WideScalarResult, String> {
+    if !(4..=6).contains(&microkernel_rows) {
+        return Err("wide scalar last-k rows must be in 4..=6".to_owned());
+    }
+    contract_rows_wide_scalar_last_k_impl(
+        n,
+        profile_replay,
+        target_tasks_per_thread,
+        u64::MAX,
+        microkernel_rows,
+    )
+}
+
+fn contract_rows_wide_scalar_last_k_impl(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+    coefficient_limit: u64,
+    microkernel_rows: usize,
+) -> Result<WideScalarResult, String> {
     let total_start = Instant::now();
     let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
     let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
     let scalar_bound_certified = plan.factorial_bound <= u128::from(u64::MAX);
     let tail_start = Instant::now();
     let scalar_count = scalar_bound_certified.then(|| {
-        contract_wide_scalar_tasks(&tasks, n, prefix.split_depth, board_mask, coefficient_limit)
+        contract_wide_scalar_tasks(
+            &tasks,
+            n,
+            prefix.split_depth,
+            board_mask,
+            coefficient_limit,
+            microkernel_rows,
+        )
     });
     let (count, used_scalar_u64, promotion_reason, residues) = match scalar_count {
         Some(Some(count)) => {
@@ -6027,6 +6151,7 @@ mod tests {
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
         contract_rows_wide_crt, contract_rows_wide_scalar,
+        contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
         top_row_vertical_orbit_weight, wide_crt_plan,
@@ -6447,6 +6572,24 @@ mod tests {
         assert!(promoted.promotion_reason.is_some());
         assert_eq!(promoted.contraction.count, 92);
         assert_eq!(promoted.residues.len(), promoted.plan.primes.len());
+    }
+
+    #[test]
+    fn wide_scalar_last_five_and_six_match_generic_c_replay() {
+        for n in 0..=10 {
+            for microkernel_rows in 4..=6 {
+                let result =
+                    contract_rows_wide_scalar_last_k_with_target(n, true, 512, microkernel_rows)
+                        .unwrap();
+                assert!(result.used_scalar_u64, "N={n}, last-k={microkernel_rows}");
+                assert_eq!(
+                    Some(result.contraction.count),
+                    known_count(n),
+                    "N={n}, last-k={microkernel_rows}"
+                );
+            }
+        }
+        assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
     }
 
     #[test]
