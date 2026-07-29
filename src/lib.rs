@@ -3831,6 +3831,23 @@ pub struct WideScalarResult {
     pub residues: Vec<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CacheTileSchedule {
+    Dynamic,
+    Contiguous,
+    BlockCyclic,
+}
+
+#[derive(Clone, Debug)]
+pub struct CacheTileWideResult {
+    pub wide: WideScalarResult,
+    pub schedule: CacheTileSchedule,
+    pub cache_lines_per_tile: usize,
+    pub tasks_per_tile: usize,
+    pub worker_task_counts: Vec<usize>,
+    pub worker_recursive_nodes: Vec<u128>,
+}
+
 fn is_prime_u32_range(value: u64) -> bool {
     if value < 2 {
         return false;
@@ -4117,6 +4134,192 @@ fn contract_wide_scalar_tasks(
             .checked_add(partial?)
             .filter(|&value| value <= coefficient_limit)
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contract_wide_scalar_tasks_cache_tiled(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    board_mask: u64,
+    coefficient_limit: u64,
+    schedule: CacheTileSchedule,
+    cache_lines_per_tile: usize,
+) -> Option<(u64, Vec<usize>)> {
+    if !matches!(cache_lines_per_tile, 1 | 2 | 4 | 8 | 16) {
+        return None;
+    }
+    let tasks_per_cache_line = 64 / std::mem::size_of::<WideCrtTask>();
+    let tasks_per_tile = cache_lines_per_tile.checked_mul(tasks_per_cache_line)?;
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for worker_id in 0..worker_count {
+            let next_task = &next_task;
+            handles.push(scope.spawn(move || {
+                let mut subtotal = 0_u64;
+                let mut visited = 0_usize;
+                let mut contract_range = |start: usize, end: usize| -> Option<()> {
+                    for task in &tasks[start..end] {
+                        let completions = contract_certified_tail_last_k_u64::<6>(
+                            n - split_depth,
+                            task.state.columns,
+                            task.state.diag_dr,
+                            task.state.diag_dl,
+                            board_mask,
+                            coefficient_limit,
+                        )?;
+                        let weighted = completions
+                            .checked_mul(task.orbit_weight)
+                            .filter(|&value| value <= coefficient_limit)?;
+                        subtotal = subtotal
+                            .checked_add(weighted)
+                            .filter(|&value| value <= coefficient_limit)?;
+                        visited += 1;
+                    }
+                    Some(())
+                };
+                match schedule {
+                    CacheTileSchedule::Dynamic => loop {
+                        let start = next_task.fetch_add(tasks_per_tile, Ordering::Relaxed);
+                        if start >= tasks.len() {
+                            break;
+                        }
+                        contract_range(start, (start + tasks_per_tile).min(tasks.len()))?;
+                    },
+                    CacheTileSchedule::Contiguous => {
+                        let start = tasks.len() * worker_id / worker_count;
+                        let end = tasks.len() * (worker_id + 1) / worker_count;
+                        contract_range(start, end)?;
+                    }
+                    CacheTileSchedule::BlockCyclic => {
+                        let tile_count = tasks.len().div_ceil(tasks_per_tile);
+                        let mut tile = worker_id;
+                        while tile < tile_count {
+                            let start = tile * tasks_per_tile;
+                            contract_range(start, (start + tasks_per_tile).min(tasks.len()))?;
+                            tile += worker_count;
+                        }
+                    }
+                }
+                Some((subtotal, visited))
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("cache-tiled scalar worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = 0_u64;
+    let mut worker_task_counts = Vec::with_capacity(partials.len());
+    for partial in partials {
+        let (subtotal, visited) = partial?;
+        total = total
+            .checked_add(subtotal)
+            .filter(|&value| value <= coefficient_limit)?;
+        worker_task_counts.push(visited);
+    }
+    Some((total, worker_task_counts))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn profile_wide_tasks_cache_tiled(
+    tasks: &[WideCrtTask],
+    n: usize,
+    split_depth: usize,
+    relation: RecursiveTailRelation,
+    board_mask: u64,
+    schedule: CacheTileSchedule,
+    tasks_per_tile: usize,
+) -> Result<(u128, Vec<u128>, u128), String> {
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for worker_id in 0..worker_count {
+            let next_task = &next_task;
+            handles.push(scope.spawn(move || {
+                let mut subtotal = 0_u128;
+                let mut nodes = 0_u128;
+                let mut accepted = 0_u128;
+                let mut contract_range = |start: usize, end: usize| -> Result<(), String> {
+                    for task in &tasks[start..end] {
+                        let mut metrics = RecursiveTailMetrics::default();
+                        let completions = contract_recursive_tail(
+                            n,
+                            split_depth,
+                            task.state,
+                            relation,
+                            board_mask,
+                            &mut metrics,
+                        )?;
+                        subtotal = subtotal
+                            .checked_add(
+                                completions
+                                    .checked_mul(u128::from(task.orbit_weight))
+                                    .ok_or_else(|| {
+                                        "cache-tiled profile task weight overflow".to_owned()
+                                    })?,
+                            )
+                            .ok_or_else(|| "cache-tiled profile subtotal overflow".to_owned())?;
+                        nodes = nodes
+                            .checked_add(metrics.nodes)
+                            .ok_or_else(|| "cache-tiled profile node overflow".to_owned())?;
+                        accepted =
+                            accepted
+                                .checked_add(metrics.accepted_entries)
+                                .ok_or_else(|| {
+                                    "cache-tiled profile accepted-entry overflow".to_owned()
+                                })?;
+                    }
+                    Ok(())
+                };
+                match schedule {
+                    CacheTileSchedule::Dynamic => loop {
+                        let start = next_task.fetch_add(tasks_per_tile, Ordering::Relaxed);
+                        if start >= tasks.len() {
+                            break;
+                        }
+                        contract_range(start, (start + tasks_per_tile).min(tasks.len()))?;
+                    },
+                    CacheTileSchedule::Contiguous => {
+                        let start = tasks.len() * worker_id / worker_count;
+                        let end = tasks.len() * (worker_id + 1) / worker_count;
+                        contract_range(start, end)?;
+                    }
+                    CacheTileSchedule::BlockCyclic => {
+                        let tile_count = tasks.len().div_ceil(tasks_per_tile);
+                        let mut tile = worker_id;
+                        while tile < tile_count {
+                            let start = tile * tasks_per_tile;
+                            contract_range(start, (start + tasks_per_tile).min(tasks.len()))?;
+                            tile += worker_count;
+                        }
+                    }
+                }
+                Ok::<_, String>((subtotal, nodes, accepted))
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("cache-tiled profile worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = 0_u128;
+    let mut total_accepted = 0_u128;
+    let mut worker_nodes = Vec::with_capacity(partials.len());
+    for partial in partials {
+        let (subtotal, nodes, accepted) = partial?;
+        total = total
+            .checked_add(subtotal)
+            .ok_or_else(|| "cache-tiled profile count overflow".to_owned())?;
+        total_accepted = total_accepted
+            .checked_add(accepted)
+            .ok_or_else(|| "cache-tiled profile accepted reduction overflow".to_owned())?;
+        worker_nodes.push(nodes);
+    }
+    Ok((total, worker_nodes, total_accepted))
 }
 
 fn mod_pow(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
@@ -4553,6 +4756,112 @@ fn contract_rows_wide_scalar_last_k_impl(
         used_scalar_u64,
         promotion_reason,
         residues,
+    })
+}
+
+pub fn contract_rows_wide_scalar_cache_tiled(
+    n: usize,
+    profile_replay: bool,
+    target_tasks_per_thread: usize,
+    schedule: CacheTileSchedule,
+    cache_lines_per_tile: usize,
+) -> Result<CacheTileWideResult, String> {
+    let total_start = Instant::now();
+    let (plan, relation, tasks, prefix) = prepare_wide_crt_prefix(n, target_tasks_per_thread)?;
+    if plan.factorial_bound > u128::from(u64::MAX) {
+        return Err("cache-tiled scalar experiment requires certified N! <= u64".to_owned());
+    }
+    if !matches!(cache_lines_per_tile, 1 | 2 | 4 | 8 | 16) {
+        return Err("cache-tiled lines must be one of 1/2/4/8/16".to_owned());
+    }
+    let board_mask = if n == 0 { 0 } else { (1_u64 << n) - 1 };
+    let tasks_per_tile = cache_lines_per_tile
+        .checked_mul(64 / std::mem::size_of::<WideCrtTask>())
+        .ok_or_else(|| "cache-tiled task count overflow".to_owned())?;
+    let tail_start = Instant::now();
+    let (count, worker_task_counts) = contract_wide_scalar_tasks_cache_tiled(
+        &tasks,
+        n,
+        prefix.split_depth,
+        board_mask,
+        u64::MAX,
+        schedule,
+        cache_lines_per_tile,
+    )
+    .ok_or_else(|| "checked cache-tiled scalar contraction overflow".to_owned())?;
+    let tail_elapsed = tail_start.elapsed();
+    let elapsed = total_start.elapsed();
+    let profile_start = Instant::now();
+    let (recursive_nodes, recursive_accepted_entries, worker_recursive_nodes) = if profile_replay {
+        let (replay_count, worker_nodes, accepted) = profile_wide_tasks_cache_tiled(
+            &tasks,
+            n,
+            prefix.split_depth,
+            relation,
+            board_mask,
+            schedule,
+            tasks_per_tile,
+        )?;
+        if replay_count != u128::from(count) {
+            return Err("cache-tiled scalar result disagrees with generic C replay".to_owned());
+        }
+        let nodes = worker_nodes.iter().try_fold(0_u128, |sum, &value| {
+            sum.checked_add(value)
+                .ok_or_else(|| "cache-tiled node reduction overflow".to_owned())
+        })?;
+        (nodes, accepted, worker_nodes)
+    } else {
+        (0, 0, Vec::new())
+    };
+    let profile_replay_elapsed = profile_start.elapsed();
+    let total_accepted = prefix
+        .prefix_accepted_entries
+        .checked_add(recursive_accepted_entries)
+        .ok_or_else(|| "cache-tiled total accepted-entry overflow".to_owned())?;
+    let count_u128 = u128::from(count);
+    if count_u128 > plan.factorial_bound {
+        return Err("cache-tiled count exceeds certified N! bound".to_owned());
+    }
+    let residues = plan
+        .primes
+        .iter()
+        .map(|&prime| count % prime)
+        .collect::<Vec<_>>();
+    Ok(CacheTileWideResult {
+        wide: WideScalarResult {
+            contraction: ContractionResult {
+                n,
+                count: count_u128,
+                elapsed,
+                peak_states: tasks.len().max(1),
+                tensor_entries_examined: 17,
+                tensor_entries_matched: 17,
+                row_operator_candidates: total_accepted,
+                row_operator_matched: total_accepted,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            plan,
+            split_depth: prefix.split_depth,
+            target_tail_tasks: prefix.target_tail_tasks,
+            tail_tasks: tasks.len(),
+            prefix_nodes: prefix.prefix_nodes,
+            prefix_accepted_entries: prefix.prefix_accepted_entries,
+            prefix_kept_entries: prefix.prefix_kept_entries,
+            recursive_nodes,
+            recursive_accepted_entries,
+            seed_elapsed: prefix.seed_elapsed,
+            tail_elapsed,
+            profile_replay_elapsed,
+            used_scalar_u64: true,
+            promotion_reason: None,
+            residues,
+        },
+        schedule,
+        cache_lines_per_tile,
+        tasks_per_tile,
+        worker_task_counts,
+        worker_recursive_nodes,
     })
 }
 
@@ -6139,8 +6448,8 @@ mod e24_kernel_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
-        RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
+        BoundaryState, CacheTileSchedule, CompiledRowOperator, ConstraintFamily, D4Symmetry,
+        PackedBoundary, RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
         contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
         contract_rows_adaptive_fast_tail, contract_rows_adaptive_fast_tail_impl,
         contract_rows_adaptive_last_k_tail_with_rows, contract_rows_certified_fast_tail,
@@ -6150,7 +6459,7 @@ mod tests {
         contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
         contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce,
-        contract_rows_wide_crt, contract_rows_wide_scalar,
+        contract_rows_wide_crt, contract_rows_wide_scalar, contract_rows_wide_scalar_cache_tiled,
         contract_rows_wide_scalar_last_k_with_target,
         contract_rows_wide_scalar_with_target_and_limit, known_count, probe_wide_crt_prefix,
         reconstruct_crt, recursive_tail_positions, recursive_tail_successor,
@@ -6590,6 +6899,40 @@ mod tests {
             }
         }
         assert!(contract_rows_wide_scalar_last_k_with_target(8, false, 512, 7).is_err());
+    }
+
+    #[test]
+    fn cache_tiled_schedules_visit_every_explicit_c_sector_once() {
+        for n in 0..=10 {
+            for schedule in [
+                CacheTileSchedule::Dynamic,
+                CacheTileSchedule::Contiguous,
+                CacheTileSchedule::BlockCyclic,
+            ] {
+                for cache_lines in [1, 8, 16] {
+                    let result =
+                        contract_rows_wide_scalar_cache_tiled(n, true, 512, schedule, cache_lines)
+                            .unwrap();
+                    assert_eq!(
+                        Some(result.wide.contraction.count),
+                        known_count(n),
+                        "N={n}, schedule={schedule:?}, lines={cache_lines}"
+                    );
+                    assert_eq!(
+                        result.worker_task_counts.iter().sum::<usize>(),
+                        result.wide.tail_tasks
+                    );
+                    assert_eq!(
+                        result.worker_recursive_nodes.iter().sum::<u128>(),
+                        result.wide.recursive_nodes
+                    );
+                }
+            }
+        }
+        assert!(
+            contract_rows_wide_scalar_cache_tiled(8, false, 512, CacheTileSchedule::Dynamic, 3)
+                .is_err()
+        );
     }
 
     #[test]
