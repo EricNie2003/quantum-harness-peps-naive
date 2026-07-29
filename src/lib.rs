@@ -11,6 +11,7 @@ pub mod weighted_dd;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -3348,6 +3349,516 @@ pub fn contract_rows_d4_recursive_tail(
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CertifiedSecViTailPlan;
+
+impl CertifiedSecViTailPlan {
+    fn compile(relation: RecursiveTailRelation) -> Result<Self, String> {
+        let expected = VirtualLegs {
+            column_in: 0,
+            column_out: 1,
+            row_in: 0,
+            row_out: 1,
+            diag_dr_in: 0,
+            diag_dr_out: 1,
+            diag_dl_in: 0,
+            diag_dl_out: 1,
+        };
+        if relation.legs != expected || relation.value != 1 {
+            return Err(
+                "certified tail fast path requires the explicit Sec. VI occupied C entry"
+                    .to_owned(),
+            );
+        }
+        Ok(Self)
+    }
+}
+
+#[inline]
+fn contract_certified_tail_u64(
+    remaining_rows: usize,
+    columns: u64,
+    diag_dr: u64,
+    diag_dl: u64,
+    board_mask: u64,
+    coefficient_limit: u64,
+) -> Option<u64> {
+    if remaining_rows == 0 {
+        // Contract the column endpoints with v1. Diagonal endpoints use v2
+        // and therefore require no filter.
+        return Some(u64::from(columns == board_mask));
+    }
+    let mut positions = !(columns | diag_dr | diag_dl) & board_mask;
+    if remaining_rows == 1 {
+        // Exactly one unused column remains. Any available occupied C entry
+        // completes column v1, while both diagonal outputs are accepted by v2.
+        return Some(u64::from(positions != 0));
+    }
+    let mut count = 0_u64;
+    while positions != 0 {
+        let selected = positions & positions.wrapping_neg();
+        positions &= positions - 1;
+        let child = contract_certified_tail_u64(
+            remaining_rows - 1,
+            columns | selected,
+            ((diag_dr | selected) << 1) & board_mask,
+            (diag_dl | selected) >> 1,
+            board_mask,
+            coefficient_limit,
+        )?;
+        count = count
+            .checked_add(child)
+            .filter(|&value| value <= coefficient_limit)?;
+    }
+    Some(count)
+}
+
+fn contract_certified_tail_tasks_u64(
+    tasks: &[JointEntry],
+    n: usize,
+    cut: usize,
+    coefficient_bits: u32,
+    coefficient_mask: u64,
+    coefficient_limit: u64,
+    board_mask: u64,
+) -> Option<u64> {
+    let worker_count = rayon::current_num_threads().max(1).min(tasks.len().max(1));
+    if worker_count == 1 {
+        let mut total = 0_u64;
+        for &entry in tasks {
+            let state = PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
+            let completions = contract_certified_tail_u64(
+                n - cut,
+                state.columns,
+                state.diag_dr,
+                state.diag_dl,
+                board_mask,
+                coefficient_limit,
+            )?;
+            let weighted = completions
+                .checked_mul(entry.weight(coefficient_mask))
+                .filter(|&value| value <= coefficient_limit)?;
+            total = total
+                .checked_add(weighted)
+                .filter(|&value| value <= coefficient_limit)?;
+        }
+        return Some(total);
+    }
+
+    let next_task = AtomicUsize::new(0);
+    let partials = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            handles.push(scope.spawn(|| {
+                let mut subtotal = 0_u64;
+                const TASK_CHUNK: usize = 16;
+                loop {
+                    let start = next_task.fetch_add(TASK_CHUNK, Ordering::Relaxed);
+                    if start >= tasks.len() {
+                        break;
+                    }
+                    let end = (start + TASK_CHUNK).min(tasks.len());
+                    for &entry in &tasks[start..end] {
+                        let state =
+                            PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
+                        let completions = contract_certified_tail_u64(
+                            n - cut,
+                            state.columns,
+                            state.diag_dr,
+                            state.diag_dl,
+                            board_mask,
+                            coefficient_limit,
+                        )?;
+                        let weighted = completions
+                            .checked_mul(entry.weight(coefficient_mask))
+                            .filter(|&value| value <= coefficient_limit)?;
+                        subtotal = subtotal
+                            .checked_add(weighted)
+                            .filter(|&value| value <= coefficient_limit)?;
+                    }
+                }
+                Some(subtotal)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("certified tail worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut total = 0_u64;
+    for partial in partials {
+        total = total
+            .checked_add(partial?)
+            .filter(|&value| value <= coefficient_limit)?;
+    }
+    Some(total)
+}
+
+#[derive(Clone, Debug)]
+pub struct CertifiedFastTailResult {
+    pub contraction: ContractionResult,
+    pub cut: usize,
+    pub used_u64_fast_path: bool,
+    pub promotion_reason: Option<String>,
+    pub prefix_elapsed: Duration,
+    pub tail_elapsed: Duration,
+    pub profile_replay_elapsed: Duration,
+    pub prefix_support: usize,
+    pub tail_tasks: usize,
+    pub recursive_nodes: u128,
+    pub recursive_accepted_entries: u128,
+    pub coefficient_bits: u32,
+    pub max_prefix_coefficient: u64,
+}
+
+pub fn contract_rows_certified_fast_tail(
+    n: usize,
+    shards: usize,
+    cut: usize,
+    profile_replay: bool,
+) -> Result<CertifiedFastTailResult, String> {
+    contract_rows_certified_fast_tail_with_limit(n, shards, cut, profile_replay, u64::MAX)
+}
+
+#[derive(Clone, Debug)]
+pub struct AdaptiveCutProbe {
+    pub cut: usize,
+    pub prefix_support: usize,
+    pub prefix_elapsed: Duration,
+    pub prefix_accepted_entries: u128,
+}
+
+#[derive(Clone, Debug)]
+pub struct AdaptiveFastTailResult {
+    pub fast: CertifiedFastTailResult,
+    pub selected_cut: usize,
+    pub target_tail_tasks: usize,
+    pub selection_elapsed: Duration,
+    pub probes: Vec<AdaptiveCutProbe>,
+}
+
+pub fn contract_rows_adaptive_fast_tail(
+    n: usize,
+    shards: usize,
+    profile_replay: bool,
+) -> Result<AdaptiveFastTailResult, String> {
+    if n == 0 {
+        return Ok(AdaptiveFastTailResult {
+            fast: contract_rows_certified_fast_tail(0, shards, 0, profile_replay)?,
+            selected_cut: 0,
+            target_tail_tasks: 1,
+            selection_elapsed: Duration::ZERO,
+            probes: Vec::new(),
+        });
+    }
+    if n > 21 {
+        return Err("adaptive fast-tail backend supports N <= 21".to_owned());
+    }
+    let selection_start = Instant::now();
+    let target_tail_tasks = rayon::current_num_threads().max(1).saturating_mul(512);
+    let coefficient_bits = 64_u32
+        .checked_sub(
+            u32::try_from(3_usize.saturating_mul(n))
+                .map_err(|_| "adaptive fast-tail boundary width does not fit u32".to_owned())?,
+        )
+        .ok_or_else(|| "adaptive fast-tail packing requires N <= 21".to_owned())?;
+    // E38 showed that early-tail recursive work is nearly cut-invariant.
+    // Start at the shallowest plausible merge and deepen only until there
+    // are enough actual sectors for dynamic scheduling.
+    let mut selected_cut = n.saturating_sub(11).max(1);
+    let mut probes = Vec::new();
+    let selected_prefix;
+    loop {
+        let probe_start = Instant::now();
+        let prefix =
+            contract_rows_d4_joint_u64_kernel(n, shards, coefficient_bits, true, selected_cut)?;
+        let prefix_support = prefix.boundary.iter().map(Vec::len).sum::<usize>();
+        probes.push(AdaptiveCutProbe {
+            cut: selected_cut,
+            prefix_support,
+            prefix_elapsed: probe_start.elapsed(),
+            prefix_accepted_entries: prefix.parallel.contraction.row_operator_matched,
+        });
+        if prefix_support >= target_tail_tasks || selected_cut == n {
+            selected_prefix = prefix;
+            break;
+        }
+        selected_cut += 1;
+    }
+    let selection_elapsed = selection_start.elapsed();
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let relation = RecursiveTailRelation::compile(&operator)?;
+    let _plan = CertifiedSecViTailPlan::compile(relation)?;
+    let selected_prefix_elapsed = probes
+        .last()
+        .map_or(Duration::ZERO, |probe| probe.prefix_elapsed);
+    let fast = finish_adaptive_selected_prefix(
+        n,
+        selected_cut,
+        profile_replay,
+        coefficient_bits,
+        relation,
+        selected_prefix,
+        selection_start,
+        selected_prefix_elapsed,
+    )?;
+    Ok(AdaptiveFastTailResult {
+        fast,
+        selected_cut,
+        target_tail_tasks,
+        selection_elapsed,
+        probes,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_adaptive_selected_prefix(
+    n: usize,
+    cut: usize,
+    profile_replay: bool,
+    coefficient_bits: u32,
+    relation: RecursiveTailRelation,
+    prefix: JointKernelResult,
+    total_start: Instant,
+    prefix_elapsed: Duration,
+) -> Result<CertifiedFastTailResult, String> {
+    let coefficient_mask = coefficient_mask(coefficient_bits);
+    let board_mask = (1_u64 << n) - 1;
+    let tail_tasks = prefix
+        .boundary
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    let prefix_support = tail_tasks.len();
+    let tail_start = Instant::now();
+    let fast_count = contract_certified_tail_tasks_u64(
+        &tail_tasks,
+        n,
+        cut,
+        coefficient_bits,
+        coefficient_mask,
+        u64::MAX,
+        board_mask,
+    );
+    let tail_elapsed = tail_start.elapsed();
+    let fast_elapsed = total_start.elapsed();
+    let should_replay = profile_replay || fast_count.is_none();
+    let profile_start = Instant::now();
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    let mut replay_count = 0_u128;
+    if should_replay {
+        let partials = tail_tasks
+            .par_iter()
+            .map(|&entry| {
+                let state = PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
+                let mut metrics = RecursiveTailMetrics::default();
+                let completions =
+                    contract_recursive_tail(n, cut, state, relation, board_mask, &mut metrics)?;
+                let weighted = completions
+                    .checked_mul(u128::from(entry.weight(coefficient_mask)))
+                    .ok_or_else(|| {
+                        "coefficient overflow joining profiled adaptive tail".to_owned()
+                    })?;
+                Ok::<_, String>((weighted, metrics))
+            })
+            .collect::<Vec<_>>();
+        for partial in partials {
+            let (weighted, metrics) = partial?;
+            replay_count = replay_count
+                .checked_add(weighted)
+                .ok_or_else(|| "coefficient overflow reducing profiled adaptive tail".to_owned())?;
+            recursive_nodes += metrics.nodes;
+            recursive_accepted_entries += metrics.accepted_entries;
+        }
+    }
+    let profile_replay_elapsed = profile_start.elapsed();
+    let count = match fast_count {
+        Some(count) => {
+            if profile_replay && replay_count != u128::from(count) {
+                return Err("adaptive u64 tail disagrees with u128 profile replay".to_owned());
+            }
+            u128::from(count)
+        }
+        None => replay_count,
+    };
+    let used_u64_fast_path = fast_count.is_some();
+    let mut contraction = prefix.parallel.contraction;
+    contraction.count = count;
+    contraction.elapsed = if used_u64_fast_path {
+        fast_elapsed
+    } else {
+        total_start.elapsed()
+    };
+    contraction.peak_rss_bytes = contraction.peak_rss_bytes.max(peak_rss_bytes());
+    contraction.row_operator_candidates += recursive_accepted_entries;
+    contraction.row_operator_matched += recursive_accepted_entries;
+    Ok(CertifiedFastTailResult {
+        contraction,
+        cut,
+        used_u64_fast_path,
+        promotion_reason: (!used_u64_fast_path)
+            .then(|| "checked u64 adaptive tail overflow; exact u128 replay used".to_owned()),
+        prefix_elapsed,
+        tail_elapsed,
+        profile_replay_elapsed,
+        prefix_support,
+        tail_tasks: prefix_support,
+        recursive_nodes,
+        recursive_accepted_entries,
+        coefficient_bits,
+        max_prefix_coefficient: prefix.max_coefficient_observed,
+    })
+}
+
+fn contract_rows_certified_fast_tail_with_limit(
+    n: usize,
+    shards: usize,
+    cut: usize,
+    profile_replay: bool,
+    coefficient_limit: u64,
+) -> Result<CertifiedFastTailResult, String> {
+    if n == 0 {
+        return Ok(CertifiedFastTailResult {
+            contraction: ContractionResult {
+                n,
+                count: 1,
+                elapsed: Duration::ZERO,
+                peak_states: 1,
+                tensor_entries_examined: 17,
+                tensor_entries_matched: 17,
+                row_operator_candidates: 0,
+                row_operator_matched: 0,
+                peak_rss_bytes: peak_rss_bytes(),
+                layers: Vec::new(),
+            },
+            cut,
+            used_u64_fast_path: true,
+            promotion_reason: None,
+            prefix_elapsed: Duration::ZERO,
+            tail_elapsed: Duration::ZERO,
+            profile_replay_elapsed: Duration::ZERO,
+            prefix_support: 1,
+            tail_tasks: 1,
+            recursive_nodes: 1,
+            recursive_accepted_entries: 0,
+            coefficient_bits: 64,
+            max_prefix_coefficient: 1,
+        });
+    }
+    if n > 21 {
+        return Err("certified fast-tail backend supports N <= 21".to_owned());
+    }
+    if cut == 0 || cut > n {
+        return Err("certified fast-tail cut must be in 1..=N".to_owned());
+    }
+    let total_start = Instant::now();
+    let coefficient_bits = 64_u32
+        .checked_sub(
+            u32::try_from(3_usize.saturating_mul(n))
+                .map_err(|_| "certified fast-tail boundary width does not fit u32".to_owned())?,
+        )
+        .ok_or_else(|| "certified fast-tail packing requires N <= 21".to_owned())?;
+    let coefficient_mask = coefficient_mask(coefficient_bits);
+    let tensor = SiteTensorC::sec_vi();
+    let operator = CompiledRowOperator::compile(&tensor)?;
+    let relation = RecursiveTailRelation::compile(&operator)?;
+    let _plan = CertifiedSecViTailPlan::compile(relation)?;
+    let board_mask = (1_u64 << n) - 1;
+    let prefix = contract_rows_d4_joint_u64_kernel(n, shards, coefficient_bits, true, cut)?;
+    let prefix_elapsed = total_start.elapsed();
+    let tail_tasks = prefix
+        .boundary
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    let prefix_support = tail_tasks.len();
+    let tail_start = Instant::now();
+    let fast_count = contract_certified_tail_tasks_u64(
+        &tail_tasks,
+        n,
+        cut,
+        coefficient_bits,
+        coefficient_mask,
+        coefficient_limit,
+        board_mask,
+    );
+    let tail_elapsed = tail_start.elapsed();
+    let fast_elapsed = total_start.elapsed();
+
+    let should_replay = profile_replay || fast_count.is_none();
+    let profile_start = Instant::now();
+    let mut recursive_nodes = 0_u128;
+    let mut recursive_accepted_entries = 0_u128;
+    let mut replay_count = 0_u128;
+    if should_replay {
+        let partials = tail_tasks
+            .par_iter()
+            .map(|&entry| {
+                let state = PackedBoundary(u128::from(entry.key(coefficient_bits))).unpack(n);
+                let mut metrics = RecursiveTailMetrics::default();
+                let completions =
+                    contract_recursive_tail(n, cut, state, relation, board_mask, &mut metrics)?;
+                let weighted = completions
+                    .checked_mul(u128::from(entry.weight(coefficient_mask)))
+                    .ok_or_else(|| {
+                        "coefficient overflow joining profiled certified tail".to_owned()
+                    })?;
+                Ok::<_, String>((weighted, metrics))
+            })
+            .collect::<Vec<_>>();
+        for partial in partials {
+            let (weighted, metrics) = partial?;
+            replay_count = replay_count.checked_add(weighted).ok_or_else(|| {
+                "coefficient overflow reducing profiled certified tail".to_owned()
+            })?;
+            recursive_nodes += metrics.nodes;
+            recursive_accepted_entries += metrics.accepted_entries;
+        }
+    }
+    let profile_replay_elapsed = profile_start.elapsed();
+    let count = match fast_count {
+        Some(count) => {
+            if profile_replay && replay_count != u128::from(count) {
+                return Err("u64 certified tail disagrees with u128 profile replay".to_owned());
+            }
+            u128::from(count)
+        }
+        None => replay_count,
+    };
+    let used_u64_fast_path = fast_count.is_some();
+    let promotion_reason = (!used_u64_fast_path)
+        .then(|| "checked u64 tail overflow; exact u128 replay used".to_owned());
+    let mut contraction = prefix.parallel.contraction;
+    contraction.count = count;
+    contraction.elapsed = if used_u64_fast_path {
+        fast_elapsed
+    } else {
+        total_start.elapsed()
+    };
+    contraction.peak_rss_bytes = contraction.peak_rss_bytes.max(peak_rss_bytes());
+    contraction.row_operator_candidates += recursive_accepted_entries;
+    contraction.row_operator_matched += recursive_accepted_entries;
+    Ok(CertifiedFastTailResult {
+        contraction,
+        cut,
+        used_u64_fast_path,
+        promotion_reason,
+        prefix_elapsed,
+        tail_elapsed,
+        profile_replay_elapsed,
+        prefix_support,
+        tail_tasks: prefix_support,
+        recursive_nodes,
+        recursive_accepted_entries,
+        coefficient_bits,
+        max_prefix_coefficient: prefix.max_coefficient_observed,
+    })
+}
+
 #[derive(Clone, Copy)]
 struct DeferredCandidate {
     state: u64,
@@ -4604,10 +5115,12 @@ mod tests {
         BoundaryState, CompiledRowOperator, ConstraintFamily, D4Symmetry, PackedBoundary,
         RecursiveTailRelation, RowCounters, SiteTensorB, SiteTensorC, VirtualLegs,
         contract_one_row_compiled, contract_one_row_sitewise, contract_rows,
-        contract_rows_d4_orbit_parallel_sort_reduce, contract_rows_d4_orbit_sort_reduce,
-        contract_rows_d4_recursive_tail, contract_rows_d4_sparse_parallel_sort_reduce,
-        contract_rows_d4_sparse_sort_reduce, contract_rows_hash_materialization,
-        contract_rows_parallel_sort_reduce, contract_rows_sitewise, contract_rows_sort_reduce,
+        contract_rows_adaptive_fast_tail, contract_rows_certified_fast_tail,
+        contract_rows_certified_fast_tail_with_limit, contract_rows_d4_orbit_parallel_sort_reduce,
+        contract_rows_d4_orbit_sort_reduce, contract_rows_d4_recursive_tail,
+        contract_rows_d4_sparse_parallel_sort_reduce, contract_rows_d4_sparse_sort_reduce,
+        contract_rows_hash_materialization, contract_rows_parallel_sort_reduce,
+        contract_rows_sitewise, contract_rows_sort_reduce,
         contract_rows_sparse_parallel_sort_reduce, contract_rows_sparse_sort_reduce, known_count,
         recursive_tail_positions, recursive_tail_successor, top_row_vertical_orbit_weight,
     };
@@ -4866,6 +5379,48 @@ mod tests {
                     known_count(n),
                     "N={n}, cut={cut}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn certified_u64_tail_and_forced_u128_replay_are_exact() {
+        assert_eq!(
+            contract_rows_certified_fast_tail(0, 8, 0, true)
+                .unwrap()
+                .contraction
+                .count,
+            1
+        );
+        for n in 1..=10 {
+            for cut in 1..=n {
+                let result = contract_rows_certified_fast_tail(n, 8, cut, true).unwrap();
+                assert!(result.used_u64_fast_path, "N={n}, cut={cut}");
+                assert_eq!(
+                    Some(result.contraction.count),
+                    known_count(n),
+                    "N={n}, cut={cut}"
+                );
+                if result.prefix_support > 0 {
+                    assert!(result.recursive_nodes > 0);
+                }
+            }
+        }
+        let promoted = contract_rows_certified_fast_tail_with_limit(8, 8, 1, false, 1).unwrap();
+        assert!(!promoted.used_u64_fast_path);
+        assert_eq!(promoted.contraction.count, 92);
+        assert!(promoted.promotion_reason.is_some());
+    }
+
+    #[test]
+    fn adaptive_actual_support_cut_selection_is_exact() {
+        for n in 0..=10 {
+            let result = contract_rows_adaptive_fast_tail(n, 8, true).unwrap();
+            assert_eq!(Some(result.fast.contraction.count), known_count(n), "N={n}");
+            assert!(result.selected_cut <= n);
+            if n > 0 {
+                assert!(!result.probes.is_empty());
+                assert_eq!(result.probes.last().unwrap().cut, result.selected_cut);
             }
         }
     }
