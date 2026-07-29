@@ -1695,3 +1695,147 @@ exponential recursive tail。当前最大完成并验证仍为 Q(19)，不是 Q(
 数学上 D4 与 treeSA 可以组合，但 E39 表明 full D4 在 row cut 上无益。
 只有 treeSA 找到让更多 D4 actions 提前可比较的新 cut，才重启 D4
 消融。下一五方向与 gates 见研究计划 §T；本复盘完成前未启动 E51。
+
+## 38. E51–E55 cache 方向强制五方向复盘与热点分析
+
+### 38.1 结果、机制与决策
+
+用户在 E51 启动前要求暂缓 treeSA，优先穷举当前 production 的
+CPU-cache-friendly 方向。五项均在独立 worktree/branch 完成；所有
+candidate 均保持 explicit-C exact contraction，全部被 REJECT，production
+仍为 E46 direct scalar-u64 + E47 certified last-6。
+
+| 方向 | 核心实测 | 机制判断 | 决策 |
+|:---|:---|:---|:---:|
+| E51 packed task tape | task 从 32 bytes 降到 8 bytes；N=16 快 1.9%，N=17 慢 0.3%，RSS 未降 15% | task tape 的 4x 压缩真实存在，但 fast solve 几乎不在搬 task；收益落入系统波动 | REJECT |
+| E52 cache-budget prefix cut | 64 KiB/worker 令 N=16/17/18 RSS 降约 35%/40%/22%，但 wall 慢 0.7%/0.9%/3.0% | 更深/更浅 cut 可压低常驻 tasks，但增加了每 task tail work、减少并行裕量；N=18 触发 >2% kill | REJECT |
+| E53 cache-line task ownership | dynamic 1-line N=16/17 慢 1.3%/0.7%；block-cyclic 复测慢 6.9%/5.9% | contiguous 有 56% worker-node imbalance；cyclic 消除到约 1.7%，但索引/调度与 locality 损失更大 | REJECT |
+| E54 bounded suffix cache | 4--256 KiB/worker 的 N=17 hit rate 仅 0.047%--0.277%；4 KiB formal 慢 11.7% | virtual-boundary suffix 几乎不重新汇合；tag/hash/load/branch 的成本作用于几乎每个 node | REJECT |
+| E55 hot-code/I-cache shaping | regular-inline 慢 3.9%/6.4%；noinline 慢 16.4%/17.9%；`.text` 仅缩 0.315%/0.397% | fully-inline 在删除 call/return、分支与参数搬运；没有代码容量过大导致 I-cache 主导的证据 | REJECT |
+
+原假设是 task working set、worker ownership、suffix locality 或 hot-code
+footprint 至少有一个能解释 remaining gap。结果推翻了这个假设：
+E51--E53 即使显著改变 task bytes、RSS 和 worker balance，也不能持续改善
+wall；E54 直接测得 suffix temporal locality 小于 0.28%；E55 则表明减少
+代码 footprint 反而显著变慢。当前 kernel 已经相当 cache-friendly：
+tail state 是三个标量 masks，大部分时间没有 heap-resident frontier。
+
+各实验的自包含报告与 raw data：
+
+- `experiments/e51_packed_task/REPORT.md`
+- `experiments/e52_cache_cut/REPORT.md`
+- `experiments/e53_cache_tiles/REPORT.md`
+- `experiments/e54_suffix_cache/REPORT.md`
+- `experiments/e55_icache_shape/REPORT.md`
+- `benchmarks/e51_baseline_samply_hotspots.csv`
+- `benchmarks/e51_aos_control.csv`
+- `benchmarks/e51_packed_candidate.csv`
+- `benchmarks/e52_cache_cut_control.csv`
+- `benchmarks/e52_cache_cut_candidate.csv`
+- `benchmarks/e53_cache_tile_formal.csv`
+- `benchmarks/e53_cyclic_resample.csv`
+- `benchmarks/e54_suffix_cache_formal.csv`
+- `benchmarks/e55_icache_shape_formal.csv`
+- `benchmarks/e55_icache_shape_early_kill.csv`
+- `benchmarks/e55_icache_shape_sections.csv`
+
+### 38.2 Profile：99.98% 热点到底是什么
+
+E51 在 production 源码未被任何 E51--E55 candidate 改动前，用 Samply
+0.13.1、1 kHz 对 N=17、8-thread、release/thin-LTO、
+codegen-units=1、debuginfo=2 的 fast solve 采样。结果为：
+
+| phase | function | EXE leaf samples | leaf share | sample CPU-delta share |
+|:---|:---|---:|---:|---:|
+| production fast solve | `contract_certified_tail_last_k_u64::<6>` | 38,570 / 38,578 | **99.979262%** | **99.984696%** |
+| production fast solve | all other EXE leaf functions | 8 / 38,578 | 0.020738% | 0.015304% |
+| independent generic replay | `contract_recursive_tail` | 47,883 / 47,883 | 100% | 100% |
+
+linker MAP 把 sampled production RVA `0x17a10` 映射到
+`contract_certified_tail_last_k_u64::<6>`。generic replay 是独立
+explicit-C 验证阶段，未混入 production wall comparison；它的热点属于
+`contract_recursive_tail`，进一步说明采样器能把两个阶段分开。
+
+这个 99.98% 是可信且有用的定位，但不能解读成“99.98% 都是一个多余
+wrapper”。该 monomorphized function 正是完成指数级 tail contraction 的
+主循环，并且由于 last-6 被强制内联，最后 4/5/6 层的绝大部分机器码也归到
+同一个符号。把大量必要工作聚合进一个函数名，本身不会提供接近 100% 的
+Amdahl 可消除比例。
+
+本机没有获得更细的硬件 stall counter：WPR 以 policy error
+`0xc5585011` 拒绝 system-performance profile；xperf 能列出
+`DcacheMisses/IcacheMisses/BranchMispredictions` PMU source，但配置以
+`0x1069` 失败。因此本报告不虚构 cache-miss、branch-mispredict、IPC 或
+line-level 占比。函数级 99.98% 是采样实测；函数内部归因来自源码控制流
+与五项独立消融。
+
+### 38.3 热点内部在做什么，瓶颈在哪里
+
+`contract_certified_tail_last_k_u64::<6>` 有两个连续区域：
+
+1. `remaining_rows > 6`：计算
+   `positions = !(columns | diag_dr | diag_dl) & board_mask`，循环做
+   low-bit extraction，更新 column 与两族 diagonal virtual masks，
+   递归 contract child，再做 exact accumulation；
+2. `remaining_rows <= 6`：进入 C-certified last-6/5/4 nested loops，
+   把通用递归、base-case、match 和重复 mask setup 展开。
+
+所以当前真正瓶颈是**低复用且数据依赖强的 exact C-state expansion
+吞吐**，不是一个独立的内存加载函数：
+
+- 每条 accepted occupation transition 都依赖父节点三个 masks；OR/NOT/
+  AND、low-bit selection、两个 diagonal shift、循环退出和 child return
+  构成紧密的 dependency chain；
+- 绝大多数 prefix 不汇合到同一个完整 suffix boundary。E54 在最可能复用
+  的 remaining=7 边界做 lossless cache，N=17 的 190,357,772 lookups 中，
+  最大 table 只命中 527,989 次；
+- E51--E53 表明 task load、prefix RSS 与 ownership 都在函数外或函数入口，
+  占不了 99.98% 的主体；
+- E55 的 regular/noinline 消融只让全程序 `.text` 缩不到 0.4%，却慢
+  4%--18%。这与 I-cache capacity 主导相反，说明 fully-inline 正在减少
+  热循环的 function boundary、控制转移和状态搬运；
+- work counter 不变时所有 cache candidates 都没有正收益，说明下一次
+  大幅提速不能只移动相同数量的 nodes。
+
+### 38.4 如何消除这个瓶颈
+
+不能删除整个热点函数而仍完成相同 contraction；必须分别针对“每 node
+动态指令数”和“node 总数”：
+
+1. **扩大 certified terminal association。** last-6 是已有最大正收益，
+   下一次先做 last-7/8，固定比较 code growth、register spills 与 runtime；
+   这能继续删除递归层，而不改变 explicit-C work。
+2. **把 overflow/cold failure path 移出 hot loop。** 对 N<=20 和每个
+   remaining-depth completion 给出阶乘上界证书，尝试返回 infallible
+   `u64` 的 terminal kernel；人工小 limit仍必须完整 replay checked/CRT
+   backend。只有证明成立才能删除逐 child `Option`、`checked_add` 与
+   `filter` 控制流。
+3. **生成固定深度 scalar kernels。** 用 source-generated depth-specific
+   functions 比较 nested loop、单出口 accumulation 和 cold-outlined
+   promotion；必须以 assembly/code-size 和 same-node wall 消融，防止
+   再次制造 code bloat。
+4. **增加 independent-state ILP，而不是重复失败的显式 AVX2。** 每 worker
+   同时推进少量独立 sectors，尝试隐藏 mask/branch dependency latency；
+   保持逐 lane exact replay，并先测 scalar interleave 2/4。
+5. **若常数优化达到 kill gate，转向减少 nodes。** 普通 memoization 已被
+   E54 否定；下一表示必须先证明新的 symmetry canonicalization 或
+   contraction association 能产生可观汇合/剪枝，再承担 table/search
+   成本。按用户本轮要求，treeSA 继续暂缓。
+
+这五类后续实验的精确顺序与 gates 记录在研究计划 §V。E56 尚未启动，
+本轮停在 E55 review checkpoint。
+
+### 38.5 production、DFS 与资源投影
+
+E51--E55 没有 KEEP，因此 §37 的同批 certified checkpoint 不变：当前
+production PEPS 在 N=14--18 比仓库 DFS comparator 快约 21%--25%；
+E47/DFS 的观察窗口 geometric wall base 为约 6.92/7.00。E55 的
+0.330/2.894 s 是另一系统时段的 paired ablation control，不能替换或拼接
+§37 的 scaling CSV。
+
+本轮没有减少 recursive C nodes，也没有改变 N=17→18 的指数倍率，所以
+Q(28) 投影仍约 800--1,000 年，最大完整 exact count 仍为 Q(19)。
+E52 的内存下降不能改变这个结论：N=28 prefix 本来就很小，限制是 tail
+expansion time，不是 task-tape RSS。要让 Q(28) 现实可算，最终必须获得
+数量级的 exact node reduction 或大规模并行吞吐；cache layout 的几个百分
+点常数不足以做到。
