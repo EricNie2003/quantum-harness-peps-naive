@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>N-Queens PEPS E1–E60 优化复盘报告</title>
+<style>
+:root{--bg:#f5f7fb;--paper:#fff;--ink:#162033;--muted:#667085;--line:#dfe5ee;--accent:#3157d5;--accent2:#00a68a;--good:#087a55;--goodbg:#e8f7f1;--warn:#9a5b00;--warnbg:#fff3d8;--bad:#b42318;--badbg:#feeceb;--mixed:#6950b8;--mixedbg:#f0ebff;--shadow:0 12px 30px rgba(27,39,67,.08);--radius:18px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"Noto Sans SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;line-height:1.62}a{color:var(--accent)}code{font-family:"Cascadia Code",Consolas,monospace;background:#eef2f8;padding:.08em .35em;border-radius:5px;font-size:.92em}.wrap{max-width:1380px;margin:auto;padding:0 28px}header.hero{background:linear-gradient(130deg,#111b3d 0%,#243d91 55%,#087e78 100%);color:white;padding:54px 0 46px;position:relative;overflow:hidden}header.hero:after{content:"";position:absolute;width:460px;height:460px;border-radius:50%;right:-120px;top:-180px;background:rgba(255,255,255,.08)}.eyebrow{letter-spacing:.16em;text-transform:uppercase;font-size:12px;opacity:.8}h1{font-size:clamp(32px,5vw,60px);line-height:1.08;margin:12px 0 16px;max-width:980px}.lead{font-size:18px;max-width:980px;color:#e2e9ff}.hero-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:28px}.hero-stat{background:rgba(255,255,255,.11);border:1px solid rgba(255,255,255,.2);border-radius:14px;padding:16px;backdrop-filter:blur(6px)}.hero-stat b{display:block;font-size:28px}.hero-stat span{font-size:13px;color:#dbe4ff}nav.toc{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}nav .wrap{display:flex;gap:18px;align-items:center;overflow:auto;white-space:nowrap;padding-top:10px;padding-bottom:10px}nav a{text-decoration:none;color:#344054;font-size:14px;font-weight:700}nav a:hover{color:var(--accent)}main{padding:28px 0 70px}section.block{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:28px;margin:22px 0}.section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:20px}.section-head h2{font-size:28px;margin:0}.section-head p{margin:0;color:var(--muted);max-width:760px}.kpi-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.kpi{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fbfcff}.kpi b{display:block;font-size:24px}.kpi span{font-size:12px;color:var(--muted)}.callout{border-left:5px solid var(--accent);background:#f1f5ff;padding:18px 20px;border-radius:0 14px 14px 0;margin:18px 0}.callout strong{color:#17358f}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px}.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.chart-card{border:1px solid var(--line);border-radius:16px;padding:20px;background:#fcfdff}.chart-card h3{margin:0 0 12px;font-size:18px}.chart-card p{color:var(--muted);font-size:13px}.bar-row{display:grid;grid-template-columns:100px 1fr 86px;gap:10px;align-items:center;margin:9px 0;font-size:13px}.bar-track{height:14px;background:#edf1f7;border-radius:999px;overflow:hidden}.bar-track i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#7c8ff0);border-radius:999px}.ratio-row{display:grid;grid-template-columns:55px 1fr;gap:10px;margin:10px 0;align-items:center}.ratio-track{position:relative;height:28px;background:#edf1f7;border-radius:8px;overflow:hidden}.ratio-track i{display:block;height:100%;background:linear-gradient(90deg,#18a77f,#77d7b8)}.ratio-track em{position:absolute;inset:3px 8px;font-size:12px;font-style:normal;font-weight:700;color:#153d34}.cat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.cat-card{border:1px solid var(--line);border-radius:14px;padding:16px}.cat-card h3{margin:0 0 8px;font-size:16px}.cat-numbers{font-size:12px;color:var(--muted)}.cat-numbers b{font-size:22px;color:var(--ink)}.stack{height:9px;background:#eee;border-radius:999px;display:flex;overflow:hidden;margin:12px 0 6px}.stack i{height:100%}.s-keep{background:#10a37f}.s-mixed{background:#8066cf}.s-reject{background:#e06158}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;white-space:nowrap}.badge-prod{color:var(--good);background:var(--goodbg)}.badge-optional{color:#075985;background:#e0f2fe}.badge-research{color:#5b3aa5;background:#eee8ff}.badge-mixed{color:var(--mixed);background:var(--mixedbg)}.badge-reject{color:var(--bad);background:var(--badbg)}.badge-dependency{color:var(--warn);background:var(--warnbg)}.cat-chip{display:inline-flex;background:#eef2f7;color:#475467;border-radius:999px;padding:3px 9px;font-size:11px;white-space:nowrap}.accept-toolbar{display:flex;gap:10px;margin-bottom:14px}button,.filter-select,input[type=search]{font:inherit;border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 12px;color:var(--ink)}button{cursor:pointer;font-weight:700}button:hover{border-color:var(--accent);color:var(--accent)}.accept-card{border:1px solid var(--line);border-radius:14px;margin:10px 0;overflow:hidden;background:#fff}.accept-card summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:15px;padding:15px 18px;background:#fbfcff}.accept-card summary::-webkit-details-marker{display:none}.accept-card summary:before{content:"＋";font-weight:900;color:var(--accent);margin-right:8px}.accept-card[open] summary:before{content:"−"}.accept-card summary>div:first-child{display:flex;align-items:center;gap:10px;flex:1}.summary-meta{display:flex;gap:8px;align-items:center}.exp-id{font-family:"Cascadia Code",Consolas,monospace;font-size:12px;font-weight:900;color:#fff;background:#263d8f;padding:3px 7px;border-radius:6px;white-space:nowrap}.accept-body{padding:18px}.metric-strip{display:flex;gap:12px;align-items:flex-start;background:#f1f8f6;border-radius:10px;padding:10px 12px;margin-bottom:14px}.metric-strip b{color:#087a55;white-space:nowrap}.four-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.four-grid section{border:1px solid var(--line);border-radius:12px;padding:13px}.four-grid h4{margin:0 0 5px;font-size:14px}.four-grid p{margin:0;color:#475467;font-size:14px}.pattern-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.pattern-col{border-radius:16px;padding:18px}.pattern-col.good{background:#effaf6;border:1px solid #bdebdc}.pattern-col.bad{background:#fff4f2;border:1px solid #f7c9c4}.pattern-col h2{margin-top:0}.pattern-col article{background:rgba(255,255,255,.78);border-radius:12px;padding:12px 14px;margin:10px 0}.pattern-col article h3{font-size:15px;margin:0 0 4px}.pattern-col article p{margin:0;color:#475467;font-size:14px}.filters{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:10px;margin:10px 0 16px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:14px}table{border-collapse:collapse;width:100%;min-width:1100px;font-size:13px}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{position:sticky;top:0;background:#eef2f8;z-index:2;font-size:12px;color:#344054}tbody tr:hover{background:#fafcff}.decision-text{font-size:11px;color:var(--muted);margin-top:4px}.hidden{display:none!important}.note{font-size:12px;color:var(--muted)}.timeline{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.phase{border:1px solid var(--line);border-radius:14px;padding:16px;position:relative}.phase:before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:14px 0 0 14px;background:var(--accent)}.phase h3{margin:0 0 8px;font-size:16px}.phase p{font-size:13px;color:#475467;margin:0}.phase b{color:var(--accent)}footer{color:var(--muted);font-size:12px;padding:20px 0 50px;text-align:center}@media(max-width:1000px){.hero-grid,.kpi-grid{grid-template-columns:repeat(2,1fr)}.cat-grid,.timeline{grid-template-columns:repeat(2,1fr)}.two-col,.pattern-grid{grid-template-columns:1fr}}@media(max-width:680px){.wrap{padding:0 14px}section.block{padding:18px;border-radius:14px}.hero-grid,.kpi-grid,.cat-grid,.timeline,.four-grid{grid-template-columns:1fr}.filters{grid-template-columns:1fr}.summary-meta{display:none}.bar-row{grid-template-columns:80px 1fr 70px}h1{font-size:36px}}
+@media print{nav.toc,.accept-toolbar,.filters{display:none}body{background:#fff}section.block{box-shadow:none;break-inside:avoid}.accept-card{break-inside:avoid}details:not([open]) .accept-body{display:block}}
+</style>
+</head>
+<body>
+<header class="hero"><div class="wrap">
+  <div class="eyebrow">N-QUEENS · PEPS · EXACT CONTRACTION · E1–E60</div>
+  <h1>从 25 秒到超过仓库 DFS baseline：60 个优化方向的机制复盘</h1>
+  <p class="lead">基于原始 REPORT.md，对所有 KEEP / REJECT 方向重新按“局域工作、状态表示、物化、对称性、路径、符号压缩、算术、微架构”分类。重点不是罗列 benchmark，而是解释每个被接受优化究竟改了什么、为什么有效，以及失败方向暴露了怎样的成本模型错误。</p>
+  <div class="hero-grid">
+    <div class="hero-stat"><b>60</b><span>已完成实验方向</span></div>
+    <div class="hero-stat"><b>19 + 1</b><span>生产 KEEP + 可选 exact 后端</span></div>
+    <div class="hero-stat"><b>0.746×</b><span>E47 / DFS，N=15（越低越快）</span></div>
+    <div class="hero-stat"><b>Q(19)</b><span>当前最大完整 exact count；Q(28) 仍不可行</span></div>
+  </div>
+</div></header>
+<nav class="toc"><div class="wrap">
+<a href="#executive">结论</a><a href="#timeline">演化阶段</a><a href="#accepted">接受优化详解</a><a href="#classification">方向分类</a><a href="#patterns">成败机制</a><a href="#matrix">E1–E60 矩阵</a><a href="#current">当前边界</a>
+</div></nav>
+<main class="wrap">
+<section id="executive" class="block">
+  <div class="section-head"><div><h2>执行摘要</h2><p>“成功”需要分三种：生产实现被 KEEP、可选 exact 后端被 KEEP、以及只保留研究证据/诊断资产。不能把它们混成同一种 accept。</p></div></div>
+  <div class="kpi-grid"><div class="kpi"><b>19</b><span>生产 KEEP</span></div><div class="kpi"><b>1</b><span>可选后端 KEEP</span></div><div class="kpi"><b>2</b><span>研究结论 KEEP</span></div><div class="kpi"><b>9</b><span>混合：生产拒绝但保留机制/诊断</span></div><div class="kpi"><b>28</b><span>REJECT</span></div><div class="kpi"><b>1</b><span>依赖拒绝</span></div></div>
+  <div class="callout"><strong>最重要的结论：</strong>早期 E1–E37 的成功主要是在同一个 flat frontier 上减少局域解释、哈希、分配与 record bytes；真正的结构转折是 <b>E38/E40</b>，它们改变晚层 contraction association，避免整层 candidate 物化与排序。最终 <b>E46/E47</b> 再用 exact arithmetic certificate 与 last-6 supernode 把常数压到仓库 DFS baseline 以下。</div>
+  <div class="two-col">
+    <div class="chart-card"><h3>早期同口径 N=14 串行链（E1–E9）</h3><p>同一 flat-frontier 设计中，局域编译、紧凑 key、缓冲复用、sort-reduce 累计把 25.19 s 降到 3.09 s；support 始终不变。</p><div class="bar-row"><span>初始 naive</span><div class="bar-track"><i style="width:100.0%"></i></div><b>25.192 s</b></div><div class="bar-row"><span>E1</span><div class="bar-track"><i style="width:91.4%"></i></div><b>19.308 s</b></div><div class="bar-row"><span>E3</span><div class="bar-track"><i style="width:88.4%"></i></div><b>17.611 s</b></div><div class="bar-row"><span>E5a</span><div class="bar-track"><i style="width:74.4%"></i></div><b>11.09 s</b></div><div class="bar-row"><span>E6</span><div class="bar-track"><i style="width:57.4%"></i></div><b>5.8532 s</b></div><div class="bar-row"><span>E9</span><div class="bar-track"><i style="width:43.7%"></i></div><b>3.085 s</b></div></div>
+    <div class="chart-card"><h3>结构转折的同批增量链（N=15，8 threads）</h3><p>从 E32 到 E40 的 paired chain：先压 record bytes，再用 recursive tail 删除晚层 materialization。</p><div class="bar-row"><span>E32 merged</span><div class="bar-track"><i style="width:100.0%"></i></div><b>0.76741 s</b></div><div class="bar-row"><span>E36 8B</span><div class="bar-track"><i style="width:88.0%"></i></div><b>0.51327 s</b></div><div class="bar-row"><span>E37 arena</span><div class="bar-track"><i style="width:85.2%"></i></div><b>0.46563 s</b></div><div class="bar-row"><span>E38 hybrid</span><div class="bar-track"><i style="width:54.3%"></i></div><b>0.14079 s</b></div><div class="bar-row"><span>E40 adaptive</span><div class="bar-track"><i style="width:41.0%"></i></div><b>0.07122 s</b></div></div>
+  </div>
+</section>
+
+<section id="timeline" class="block">
+ <div class="section-head"><div><h2>四个演化阶段</h2><p>每个阶段的“主瓶颈”不同，所以同一个优化在不同阶段可能从 KEEP 变成无效。</p></div></div>
+ <div class="timeline">
+  <article class="phase"><h3>阶段 A · 解释与容器</h3><p><b>E1–E10</b>：消除 17-entry 扫描、压缩 key、复用 buffer、改用 sort-reduce、并行 slicing。结果是串行约 8.17×，但 support 完全没降。</p></article>
+  <article class="phase"><h3>阶段 B · 结构压缩探索</h3><p><b>E11–E35</b>：D4 vertical 成功；DD/ZDD、low-rank、future quotient 证明结构存在，但大多因先物化 concrete support 而无法生产化。</p></article>
+  <article class="phase"><h3>阶段 C · record traffic 与 association</h3><p><b>E24–E47</b>：shards、紧凑 entries、bounded flush、窄算术；E38/E40 把晚层改为 recursive tail；E42/E47 编译 terminal supernode。</p></article>
+  <article class="phase"><h3>阶段 D · 热核边际耗尽</h3><p><b>E48–E60</b>：stack、SIMD、cache、I-cache、ILP、更多 unroll 全部未过 gate。99.98% 热点是必要的低复用 C-state expansion，不是可删 wrapper。</p></article>
+ </div>
+</section>
+
+<section id="accepted" class="block">
+ <div class="section-head"><div><h2>每个被接受的优化：做了什么、为何成功</h2><p>这里列出 19 个 production KEEP 与 E45 可选 exact/低内存 backend。研究证据类 KEEP 另在分类与矩阵中标记。</p></div></div>
+ <div class="accept-toolbar"><button id="expandAll">展开全部</button><button id="collapseAll">折叠全部</button></div>
+ 
+    <details class="accept-card" data-cat="local" open>
+      <summary>
+        <div><span class="exp-id">E1</span><strong>C 输入签名索引</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">局域算子与稀疏转移</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14 25.1915→19.3084 s；局域扫描减少 93.8%</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>在 <code>SiteTensorC::from_b</code> 生成 17 个非零元后，再按四个 incoming virtual bits 机械分桶。收缩时不再扫描 17 项，而是只读取对应 signature 的小桶。</p></section>
+          <section><h4>为什么有效</h4><p>这是对显式 C 的索引化，不改变局域 truth table。收益直接来自消除大量不可能匹配的局域项检查。</p></section>
+          <section><h4>没有解决什么</h4><p>peak boundary support、HashMap 状态数和物化方式完全不变，因此只能解决局域扫描常数。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="repr">
+      <summary>
+        <div><span class="exp-id">E3</span><strong>三组 virtual masks 打包为 u128</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">边界表示与内存布局</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14 RSS 986.67→666.17 MiB；时间 19.3084→17.6112 s</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>把 columns、diag_dr、diag_dl 三个开放 virtual masks 从结构体/多字段 key 压成一个 u128。</p></section>
+          <section><h4>为什么有效</h4><p>哈希、比较和存储都围绕一个紧凑标量进行，降低 key 元数据和每状态内存占用；RSS 的大幅下降证明 bytes/state 是真实瓶颈。</p></section>
+          <section><h4>没有解决什么</h4><p>support 数量不变；只是让同样多的状态更便宜。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="repr">
+      <summary>
+        <div><span class="exp-id">E5a</span><strong>复用逐格点 partial-row buffers</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">边界表示与内存布局</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14 17.6112→11.0897 s；support 不变</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>逐格点推进一行时，不再反复分配 partial-row Vec，而是复用两组缓冲区并清空重用。</p></section>
+          <section><h4>为什么有效</h4><p>消除了高频 allocator 调用、capacity growth 和临时对象生命周期管理，尤其对大量 parent states 的内层循环有效。</p></section>
+          <section><h4>没有解决什么</h4><p>不减少候选数、support 或局域 C work，是纯分配层优化。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="local">
+      <summary>
+        <div><span class="exp-id">E6</span><strong>由显式 C 编译 exact row operator</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">局域算子与稀疏转移</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14 11.0897→5.8532 s，约 1.89×</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>编译器遍历真实 <code>C.entries()</code>，只有确认 16 个 pass-through、唯一 occupied 0→1 项且系数均为 1 时，才生成 exact row operator。</p></section>
+          <section><h4>为什么有效</h4><p>把逐 site 的横向 automaton 合并成一行级转移，避免重复解释同一局域规则；N=14 的 matched C steps 降为更少的 row candidates。</p></section>
+          <section><h4>没有解决什么</h4><p>仍会为每个 parent 生成并物化 row candidates；support/materialization 仍主导。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="mat">
+      <summary>
+        <div><span class="exp-id">E9</span><strong>exact sort-reduce 替代 HashMap 物化</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">物化、排序与聚合</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14 6.0380→3.0850 s；RSS 666.17→444.28 MiB</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>层输出先顺序写入连续 vector，再按完整 packed key 排序，最后原地 checked-u128 reduce；不再边生成边插入 HashMap。</p></section>
+          <section><h4>为什么有效</h4><p>即使重复 key 不多，顺序写入、紧凑 entry、cache-friendly sort 和避免随机 probing 仍带来近 2×收益。该实验推翻了“merge ratio 低所以 sort-reduce 不值”的旧模型。</p></section>
+          <section><h4>没有解决什么</h4><p>仍然物化完整 candidate 层；排序和内存流量后来成为新瓶颈。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="parallel">
+      <summary>
+        <div><span class="exp-id">E10</span><strong>boundary slicing + parallel expansion/sort</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">并行、调度与任务组织</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14 1t 3.1559 s；16t 0.6249 s；32t 0.6046 s</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>把 unique parent boundary vector 切成约 <code>4×threads</code> 份，各 worker 调用同一 compiled-C operator，合并后并行排序并 exact reduce。</p></section>
+          <section><h4>为什么有效</h4><p>大层有足够并行度，N=14 16 线程获得约 5×；正确性通过逐层等价测试。</p></section>
+          <section><h4>没有解决什么</h4><p>32 线程相对 16 线程只快 3.4%，说明 memory traffic、拼接和串行尾部很快饱和；并行不能掩盖算法差距。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="sym" open>
+      <summary>
+        <div><span class="exp-id">E12</span><strong>D4 cut-stabilizer orbit contraction</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">对称性</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14 2.7088→1.4062 s；support 5,479,934→2,847,130；RSS 443.5→226.6 MiB</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>实现完整 D4 action 审计，但只在 interior row cut 使用真正的 stabilizer <code>{identity, vertical reflection}</code>。首行左右反射 orbit 只保留代表并带 multiplicity。</p></section>
+          <section><h4>为什么有效</h4><p>这是唯一在 cut 上可早期比较、成本近乎为零的对称性；直接减少 42–46% candidate work、约一半 support/RSS。</p></section>
+          <section><h4>没有解决什么</h4><p>不能把完整 D4 直接当作 8×。其余六个作用会改变 cut/orientation；后续 E39 也证明 full D4 额外收益极小。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="mat">
+      <summary>
+        <div><span class="exp-id">E24</span><strong>arena + fused batch + sparse iterator 生产内核</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">物化、排序与聚合</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>serial 2.27–2.46×；N=15 11.0346→4.8224 s（1t）/2.7549 s（8t sort）</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>把 arena、fused batch generation、标准并行 sort 与 E11 的 sparse position iterator 组合为新的 flat-frontier 生产内核。</p></section>
+          <section><h4>为什么有效</h4><p>单独稀疏 iterator 只减少 predicate；与 arena/batch 组合后，allocation 与无效 position checks 同时下降，serial 获得 2.27–2.46×。</p></section>
+          <section><h4>没有解决什么</h4><p>peak support 仍为 1818 万，整层 8000 万 candidates 仍需写入、排序、聚合；瓶颈转移到 record traffic。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="mat">
+      <summary>
+        <div><span class="exp-id">E26</span><strong>key-prefix sharded sort-reduce</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">物化、排序与聚合</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=15 8t 2.7549→1.8586 s；RSS -26.6%</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>按 packed key 的固定 prefix 把输出空间划成 256 个不重叠 shards，每个 shard 独立 sort/reduce，并让下一层保持 sharded。</p></section>
+          <section><h4>为什么有效</h4><p>更小的排序工作集、更自然的 bucket-level 并行、较少 over-reservation 与更好的 cache locality 同时降低时间和 RSS。</p></section>
+          <section><h4>没有解决什么</h4><p>不改变 candidate multiset 或 support，属于高质量的常数/布局优化。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="repr">
+      <summary>
+        <div><span class="exp-id">E28</span><strong>24-byte compact exact entries</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">边界表示与内存布局</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>entry 32→24 B；N=15 time -13.3%，RSS -24.7%</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>在 N≤21 时用 u64 保存 3N-bit virtual key，并把 u128 coefficient 拆成两个 u64，使 entry 从 32 B 降到 24 B。</p></section>
+          <section><h4>为什么有效</h4><p>sort/reduce 管线是 memory-traffic-heavy；真实减少每条 record 的字节数同时改善 RSS 与时间。</p></section>
+          <section><h4>没有解决什么</h4><p>仍需完整 u128 范围；只是布局压缩，没有消除 record。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="parallel">
+      <summary>
+        <div><span class="exp-id">E31</span><strong>按父状态数均衡的并行生成 + bounded flush</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">并行、调度与任务组织</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=15 1.612→1.287 s；thread-local capacity 675.8→7.28 MB</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>不再让 Rayon 产生大量 per-fold partials，也不做不均衡固定切片；按各 shard 的实际 parent 数均衡，并用 bounded shared flush。</p></section>
+          <section><h4>为什么有效</h4><p>同时解决负载与内存：thread-local capacity 从 675.8 MB 降到 7.28 MB，且 N=15 更快。</p></section>
+          <section><h4>没有解决什么</h4><p>仍生成同样数量候选；只是让并行生成不再复制整层容量。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="arith">
+      <summary>
+        <div><span class="exp-id">E32</span><strong>u64 coefficient fast path + u128 promotion</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">精确算术与宽键后端</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>entry 24→16 B；N=15 1.228→1.021 s；RSS -32.9%</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>常见路径把 coefficient 放入 u64，使 entry 24→16 B；任何 add/mul 超限时，从相同初始边界完整 replay u128。</p></section>
+          <section><h4>为什么有效</h4><p>减少 1/3 candidate/boundary traffic，同时保留可证明 exact fallback；人工 limit=1 测试证明 promotion 路径不是摆设。</p></section>
+          <section><h4>没有解决什么</h4><p>正常 N=14–16 未触发 promotion，但这不能推广到任意 N；宽键与大系数仍需 E45。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="repr">
+      <summary>
+        <div><span class="exp-id">E36</span><strong>key/coefficient 联合装入 u64</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">边界表示与内存布局</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>entry 16→8 B；N=15 0.767→0.513 s；RSS 642→328 MB</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>把 packed key 与小 coefficient 联合装入一个 u64：key 在高位、coefficient 在低位；按联合字排序后原地聚合。</p></section>
+          <section><h4>为什么有效</h4><p>entry 再从 16 B 降到 8 B，排序、写入与边界扫描的字节流量减半；两级 promotion 保证 exactness。</p></section>
+          <section><h4>没有解决什么</h4><p>只适用于 key 与 coefficient bit budget 足够的区间，不能解决 N&gt;21 的宽键问题。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="repr">
+      <summary>
+        <div><span class="exp-id">E37</span><strong>cross-row arena reuse</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">边界表示与内存布局</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=15 0.5325→0.4656 s；最终配对 RSS 不增</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>两套 row bucket arenas 交替使用并跨层保留 capacity，不在每一行重新增长/释放。</p></section>
+          <section><h4>为什么有效</h4><p>减少 allocator growth 与容量抖动，N=15 在同 revision 再快 12.6%。</p></section>
+          <section><h4>没有解决什么</h4><p>属于 flat merged frontier 的末期优化；E38 后大部分晚层 arena 本身被结构性移除。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="path" open>
+      <summary>
+        <div><span class="exp-id">E38</span><strong>C-derived recursive tail hybrid</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">收缩路径、宏与分隔面</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=15 0.4656→0.1408 s；RSS 333.5→30.9 MB</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>选择一个 cut：前几行仍用 exact sparse sort-reduce 形成 prefix sectors；剩余行不再逐层物化，而是递归消费 compiled-C successor。</p></section>
+          <section><h4>为什么有效</h4><p>这是结构转折点。它删除最昂贵的“晚层 record 写入→全局排序→聚合”，把 N=15 RSS 从数百 MB 降到 30.9 MB，时间约 3.3×下降。</p></section>
+          <section><h4>没有解决什么</h4><p>递归 tail 的机器操作与 bitmask DFS 很相似，但证据链仍是 explicit B→C→row compiler→逐 parent replay；指数 tail work 仍存在。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="path">
+      <summary>
+        <div><span class="exp-id">E40</span><strong>adaptive certified fast tail</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">收缩路径、宏与分隔面</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=14/15 0.01197/0.07122 s；接近 DFS 0.01007/0.06600 s</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>用 explicit-C 认证 <code>CertifiedSecViTailPlan</code>，对多个 cut 做低成本 probe，并选择 merge→recursive-tail 的实际最佳点；快路径用 checked u64，失败完整 replay u128。</p></section>
+          <section><h4>为什么有效</h4><p>把 cut 从“固定猜测”变成 actual-support 决策；N=15 只保留 7426 个 prefix states，total accepted work 已接近 DFS placements。</p></section>
+          <section><h4>没有解决什么</h4><p>selector 只能在已有候选 association 中选；不能自动发现新的 treeSA 路径或改变指数。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="micro">
+      <summary>
+        <div><span class="exp-id">E42</span><strong>certified last-4 terminal microkernel</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>相对 E40 N=14/15 快 8.6%/13.4%；N=15 首次稳定快于 DFS 6.9%</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>对 <code>remaining_rows≤4</code> 的 terminal subnetwork 生成 certified nested-loop microkernel，展开最后 2/3/4 层。</p></section>
+          <section><h4>为什么有效</h4><p>删除函数调用、base-case 分支与重复 mask setup，而不改变 C transition 数；N=15 首次稳定超过仓库 DFS baseline。</p></section>
+          <section><h4>没有解决什么</h4><p>只降低每 transition 指令常数；E56–E58 表明继续无止境扩大 unroll 很快进入递减收益。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="arith">
+      <summary>
+        <div><span class="exp-id">E45</span><strong>wide key + certified CRT backend</strong></div>
+        <div class="summary-meta"><span class="badge badge-optional">可选后端 KEEP</span><span class="cat-chip">精确算术与宽键后端</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>完整验证 Q(19)；N=18 31.30 s / 7.3 MB；支持更宽 key 和 1–4 residue lanes</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>不再把 3N key 强行联合装入 u64，而是分离 masks；计数在 1–4 个素域中 exact 收缩，CRT product 必须超过 N! 才重构。</p></section>
+          <section><h4>为什么有效</h4><p>解决 N&gt;21 的 key width 和大计数 exactness，同时让 N=18 RSS 仅约 7 MB，并完整验证到 Q(19)。</p></section>
+          <section><h4>没有解决什么</h4><p>多 residue lanes 带来约 26–27% 时间成本；它解决“能表示/能精确算”，没有解决指数 recursive tail，因此不是默认最快后端。</p></section>
+          <section><h4>在演化链中的位置</h4><p>可选 exact/低内存后端，不替代最快生产链。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="arith">
+      <summary>
+        <div><span class="exp-id">E46</span><strong>direct-sector scalar-u64 backend</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">精确算术与宽键后端</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>N=17/18 相对 E45 快 35.2%/34.1%；N=18 19.799 s / 7.2 MB</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>当 <code>N! &lt; 2^64</code> 可证明成立时，direct sectors 使用单路 scalar-u64；否则或人工限制触发时回退 CRT。</p></section>
+          <section><h4>为什么有效</h4><p>删去不必要的双/多 residue arithmetic，同时保留 E45 的低内存 direct-sector 结构，N=17/18 快约 34–35%。</p></section>
+          <section><h4>没有解决什么</h4><p>只覆盖可由阶乘上界认证的 N 区间；更大 N 必须回到 CRT。</p></section>
+          <section><h4>在演化链中的位置</h4><p>在当时通过 gate；部分后来被更高层结构优化取代或吸收。</p></section>
+        </div>
+      </div>
+    </details>
+    <details class="accept-card" data-cat="micro" open>
+      <summary>
+        <div><span class="exp-id">E47</span><strong>certified last-5/6 terminal supernode</strong></div>
+        <div class="summary-meta"><span class="badge badge-prod">生产 KEEP</span><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></div>
+      </summary>
+      <div class="accept-body">
+        <div class="metric-strip"><b>关键结果</b><span>last-6 比 last-4：N=16/17 快 21.5%/18.6%；N=14–18 比仓库 DFS 快约 21–25%</span></div>
+        <div class="four-grid">
+          <section><h4>做了什么</h4><p>把 E42 的 last-4 扩大为 certified last-5/6 terminal supernode，直接组合最后六行的 C-derived transitions。</p></section>
+          <section><h4>为什么有效</h4><p>减少最宽 terminal 层中的递归、base-case 与 mask setup；N=14–18 全窗口比仓库 DFS comparator 快约 21–25%，成为当前 production。</p></section>
+          <section><h4>没有解决什么</h4><p>优势主要是更强的 terminal supernode，而 comparator 未做同样展开；不能据此声称胜过所有 DFS，也未证明渐近指数更低。</p></section>
+          <section><h4>在演化链中的位置</h4><p>当前默认生产链的一部分。</p></section>
+        </div>
+      </div>
+    </details>
+</section>
+
+<section id="classification" class="block">
+ <div class="section-head"><div><h2>按优化方向分类</h2><p>“明确 KEEP 率”只统计 production、optional backend 和明确研究结论 KEEP；混合保留单独显示。</p></div></div>
+ <div class="cat-grid">
+      <article class="cat-card">
+        <h3>局域算子与稀疏转移</h3>
+        <div class="cat-numbers"><b>3</b> 个方向 · <span>2 个明确 KEEP</span> · <span>1 个混合保留</span></div>
+        <div class="stack"><i style="width:66.67%" class="s-keep"></i><i style="width:33.33%" class="s-mixed"></i><i style="width:0.00%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 67%</small>
+      </article>
+      <article class="cat-card">
+        <h3>边界表示与内存布局</h3>
+        <div class="cat-numbers"><b>7</b> 个方向 · <span>5 个明确 KEEP</span> · <span>0 个混合保留</span></div>
+        <div class="stack"><i style="width:71.43%" class="s-keep"></i><i style="width:0.00%" class="s-mixed"></i><i style="width:28.57%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 71%</small>
+      </article>
+      <article class="cat-card">
+        <h3>物化、排序与聚合</h3>
+        <div class="cat-numbers"><b>5</b> 个方向 · <span>3 个明确 KEEP</span> · <span>0 个混合保留</span></div>
+        <div class="stack"><i style="width:60.00%" class="s-keep"></i><i style="width:0.00%" class="s-mixed"></i><i style="width:40.00%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 60%</small>
+      </article>
+      <article class="cat-card">
+        <h3>并行、调度与任务组织</h3>
+        <div class="cat-numbers"><b>4</b> 个方向 · <span>2 个明确 KEEP</span> · <span>0 个混合保留</span></div>
+        <div class="stack"><i style="width:50.00%" class="s-keep"></i><i style="width:0.00%" class="s-mixed"></i><i style="width:50.00%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 50%</small>
+      </article>
+      <article class="cat-card">
+        <h3>对称性</h3>
+        <div class="cat-numbers"><b>3</b> 个方向 · <span>1 个明确 KEEP</span> · <span>2 个混合保留</span></div>
+        <div class="stack"><i style="width:33.33%" class="s-keep"></i><i style="width:66.67%" class="s-mixed"></i><i style="width:0.00%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 33%</small>
+      </article>
+      <article class="cat-card">
+        <h3>收缩路径、宏与分隔面</h3>
+        <div class="cat-numbers"><b>11</b> 个方向 · <span>2 个明确 KEEP</span> · <span>2 个混合保留</span></div>
+        <div class="stack"><i style="width:18.18%" class="s-keep"></i><i style="width:18.18%" class="s-mixed"></i><i style="width:63.64%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 18%</small>
+      </article>
+      <article class="cat-card">
+        <h3>符号压缩、等价类与低秩</h3>
+        <div class="cat-numbers"><b>11</b> 个方向 · <span>2 个明确 KEEP</span> · <span>4 个混合保留</span></div>
+        <div class="stack"><i style="width:18.18%" class="s-keep"></i><i style="width:36.36%" class="s-mixed"></i><i style="width:45.45%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 18%</small>
+      </article>
+      <article class="cat-card">
+        <h3>精确算术与宽键后端</h3>
+        <div class="cat-numbers"><b>3</b> 个方向 · <span>3 个明确 KEEP</span> · <span>0 个混合保留</span></div>
+        <div class="stack"><i style="width:100.00%" class="s-keep"></i><i style="width:0.00%" class="s-mixed"></i><i style="width:0.00%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 100%</small>
+      </article>
+      <article class="cat-card">
+        <h3>热核、缓存、SIMD 与指令级优化</h3>
+        <div class="cat-numbers"><b>13</b> 个方向 · <span>2 个明确 KEEP</span> · <span>0 个混合保留</span></div>
+        <div class="stack"><i style="width:15.38%" class="s-keep"></i><i style="width:0.00%" class="s-mixed"></i><i style="width:84.62%" class="s-reject"></i></div>
+        <small>明确 KEEP 率 15%</small>
+      </article></div>
+ <div class="callout"><strong>从分类看：</strong>成功密度最高的不是“更聪明的抽象表示”，而是能够直接减少真实 C-transition 解释、record bytes、排序/物化和递归控制的方向。符号压缩类实验大量产生了有价值的结构证据，但几乎都卡在“构造表示前仍需访问完整 concrete graph”。</div>
+</section>
+
+<section id="patterns" class="block">
+ <div class="section-head"><div><h2>哪些思路成功，哪些失败，为什么</h2><p>以下结论是跨多轮消融重复出现的机制，而不是单个 benchmark 的偶然胜负。</p></div></div>
+ <div class="pattern-grid">
+  <div class="pattern-col good"><h2>成功模式</h2><article><h3>机械 partial evaluation</h3><p>E1、E6、E11/E24、E40 都从显式 C 自动推导快路径。成功前提是 fail-closed 编译与逐 parent replay，而不是手写替代模型。</p></article><article><h3>减少真实 record bytes/traffic</h3><p>E3、E9、E24、E26、E28、E31、E32、E36、E37 持续有效。只要算法仍物化 frontier，bytes/entry、顺序访问和 capacity 就直接映射为 wall/RSS。</p></article><article><h3>只用 cut 上便宜可比较的对称性</h3><p>E12 的 vertical reflection 约 2×且稳定；它减少真实 state/candidate，而不是对最终答案形式上除以群阶。</p></article><article><h3>改变 contraction association 以避免物化</h3><p>E38/E40 是最大转折：不再对晚层写入并排序整层 records。它比继续优化 sort/hash 更接近根因。</p></article><article><h3>由 exact certificate 选择窄算术和 terminal supernode</h3><p>E32/E36/E45/E46/E42/E47 把 exactness 证明转化为更窄数据路径和更少控制开销。</p></article><article><h3>并行必须与内存组织共同设计</h3><p>E10 有初期收益但很快饱和；E31 只有在按 parent counts 均衡并 bounded flush 后才同时改善 wall 和内存。</p></article></div>
+  <div class="pattern-col bad"><h2>失败模式</h2><article><h3>只调容器参数，不改变访问模式</h3><p>E2、E4a 失败；E51–E53 在后期也说明 task/RSS/balance 不是 99.98% 热核主体。</p></article><article><h3>post-hoc 压缩太晚</h3><p>E14/E15 证明 quotient/low-rank 真实存在，但 E16–E18、E35 都必须先访问 concrete graph；在物化后压缩无法成为生产收益。</p></article><article><h3>generic DD/BDD 的共享假设不成立</h3><p>E7、E21–E23 的 nodes/support 大于 1 或仅小幅下降；hash-cons/apply 成本超过共享。</p></article><article><h3>按几何或 dense proxy 搜路径</h3><p>E8、E13、E19、E20、E29、E30、E34 失败，因为实际活跃 constraint lines、canonical merge 和 tensor-value macro 比抽象 width 更重要。</p></article><article><h3>期待 memoization，但状态几乎不汇合</h3><p>E44、E54、E60 的 hit/duplicate 比例太低；查询成本施加在每个 node 上。</p></article><article><h3>手写 radix/SIMD/stack/ILP 未胜过编译器与现有库</h3><p>E33、E48–E50、E55–E59 的额外 pass、spill、divergence、代码增长或控制开销超过收益。</p></article><article><h3>full D4 不等于 8×</h3><p>E39 额外只降 1.3–1.8% nodes 且变慢；多数群作用在当前 cut 上不能提前比较。</p></article><article><h3>减少候选峰值不等于减少 RSS/时间</h3><p>E27 的 retained runs 与最终输出重叠，heap operations 爆炸；E41 删除很小的 prefix merge 也触碰不到指数 tail。</p></article></div>
+ </div>
+</section>
+
+<section id="matrix" class="block">
+ <div class="section-head"><div><h2>E1–E60 全量实验矩阵</h2><p>可按状态、方向或关键词筛选。混合状态表示“生产实现被拒绝，但机制、oracle 或 diagnostic 被保留”。</p></div></div>
+ <div class="filters">
+  <input id="q" type="search" placeholder="搜索 E 编号、优化名、结果或原因…">
+  <select id="statusFilter" class="filter-select"><option value="all">全部状态</option><option value="prod">生产 KEEP</option><option value="optional">可选后端 KEEP</option><option value="research">研究结论 KEEP</option><option value="mixed">混合：生产拒绝但保留机制/诊断</option><option value="reject">REJECT</option><option value="dependency">依赖拒绝</option></select>
+  <select id="catFilter" class="filter-select"><option value="all">全部方向</option><option value="local">局域算子与稀疏转移</option><option value="repr">边界表示与内存布局</option><option value="mat">物化、排序与聚合</option><option value="parallel">并行、调度与任务组织</option><option value="sym">对称性</option><option value="path">收缩路径、宏与分隔面</option><option value="symbolic">符号压缩、等价类与低秩</option><option value="arith">精确算术与宽键后端</option><option value="micro">热核、缓存、SIMD 与指令级优化</option></select>
+  <button id="resetFilters">重置</button>
+ </div>
+ <div class="table-wrap"><table><thead><tr><th>方向</th><th>优化</th><th>主分类</th><th>决策</th><th>关键实测</th><th>机制解释</th></tr></thead><tbody id="expBody">
+      <tr data-status="prod" data-cat="local" data-search="e1 c 输入签名索引 n=14 25.1915→19.3084 s；局域扫描减少 93.8% 从显式 17-entry c 机械生成 incoming-signature 桶，避免每次线性扫描全部非零元。">
+        <td><span class="exp-id">E1</span></td>
+        <td><b>C 输入签名索引</b></td>
+        <td><span class="cat-chip">局域算子与稀疏转移</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=14 25.1915→19.3084 s；局域扫描减少 93.8%</td>
+        <td>从显式 17-entry C 机械生成 incoming-signature 桶，避免每次线性扫描全部非零元。</td>
+      </tr>
+      <tr data-status="reject" data-cat="repr" data-search="e2 按输入 support 预留 hashmap n=13 仅约 3.4% 改善，rss 无稳定下降 扩容并非主成本；预留时机与真实输出规模不匹配，也不改变 entry 数、局部性或探测次数。">
+        <td><span class="exp-id">E2</span></td>
+        <td><b>按输入 support 预留 HashMap</b></td>
+        <td><span class="cat-chip">边界表示与内存布局</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=13 仅约 3.4% 改善，RSS 无稳定下降</td>
+        <td>扩容并非主成本；预留时机与真实输出规模不匹配，也不改变 entry 数、局部性或探测次数。</td>
+      </tr>
+      <tr data-status="prod" data-cat="repr" data-search="e3 三组 virtual masks 打包为 u128 n=14 rss 986.67→666.17 mib；时间 19.3084→17.6112 s 缩小 key 与哈希表元数据，降低 bytes/state、比较成本和内存流量。">
+        <td><span class="exp-id">E3</span></td>
+        <td><b>三组 virtual masks 打包为 u128</b></td>
+        <td><span class="cat-chip">边界表示与内存布局</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=14 RSS 986.67→666.17 MiB；时间 19.3084→17.6112 s</td>
+        <td>缩小 key 与哈希表元数据，降低 bytes/state、比较成本和内存流量。</td>
+      </tr>
+      <tr data-status="reject" data-cat="repr" data-search="e4a 替换确定性 hasher n=13 中位数慢约 2.1%，rss 不变 哈希计算并非主瓶颈；新 hasher 的代码生成/质量没有抵消物化与内存流量。">
+        <td><span class="exp-id">E4a</span></td>
+        <td><b>替换确定性 hasher</b></td>
+        <td><span class="cat-chip">边界表示与内存布局</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=13 中位数慢约 2.1%，RSS 不变</td>
+        <td>哈希计算并非主瓶颈；新 hasher 的代码生成/质量没有抵消物化与内存流量。</td>
+      </tr>
+      <tr data-status="prod" data-cat="repr" data-search="e5a 复用逐格点 partial-row buffers n=14 17.6112→11.0897 s；support 不变 消除每个格点反复创建和增长 vec 的 allocator/capacity 成本。">
+        <td><span class="exp-id">E5a</span></td>
+        <td><b>复用逐格点 partial-row buffers</b></td>
+        <td><span class="cat-chip">边界表示与内存布局</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=14 17.6112→11.0897 s；support 不变</td>
+        <td>消除每个格点反复创建和增长 Vec 的 allocator/capacity 成本。</td>
+      </tr>
+      <tr data-status="prod" data-cat="local" data-search="e6 由显式 c 编译 exact row operator n=14 11.0897→5.8532 s，约 1.89× 把逐格点 horizontal automaton 做机械 partial evaluation；仍由完整 c truth table fail-closed 编译。">
+        <td><span class="exp-id">E6</span></td>
+        <td><b>由显式 C 编译 exact row operator</b></td>
+        <td><span class="cat-chip">局域算子与稀疏转移</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=14 11.0897→5.8532 s，约 1.89×</td>
+        <td>把逐格点 horizontal automaton 做机械 partial evaluation；仍由完整 C truth table fail-closed 编译。</td>
+      </tr>
+      <tr data-status="reject" data-cat="symbolic" data-search="e7 weighted add/zdd 边界压缩 n=11 最佳 48,302 nodes / 39,307 states=1.23；约慢 15× 固定变量顺序下 residual subfunction 共享不足，节点数反而高于显式 support。">
+        <td><span class="exp-id">E7</span></td>
+        <td><b>weighted ADD/ZDD 边界压缩</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=11 最佳 48,302 nodes / 39,307 states=1.23；约慢 15×</td>
+        <td>固定变量顺序下 residual subfunction 共享不足，节点数反而高于显式 support。</td>
+      </tr>
+      <tr data-status="reject" data-cat="path" data-search="e8 snake/diagonal direct-tn ordering n=6 diagonal support 125，对比 row/snake 72（高 73.6%） 对角波前同时切穿更多行、列和两族对角约束线，actual cutwidth 变大。">
+        <td><span class="exp-id">E8</span></td>
+        <td><b>snake/diagonal direct-TN ordering</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=6 diagonal support 125，对比 row/snake 72（高 73.6%）</td>
+        <td>对角波前同时切穿更多行、列和两族对角约束线，actual cutwidth 变大。</td>
+      </tr>
+      <tr data-status="prod" data-cat="mat" data-search="e9 exact sort-reduce 替代 hashmap 物化 n=14 6.0380→3.0850 s；rss 666.17→444.28 mib 连续写入、紧凑 entry、排序后的顺序访问优于近乎唯一 key 的随机 hashmap probing。">
+        <td><span class="exp-id">E9</span></td>
+        <td><b>exact sort-reduce 替代 HashMap 物化</b></td>
+        <td><span class="cat-chip">物化、排序与聚合</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=14 6.0380→3.0850 s；RSS 666.17→444.28 MiB</td>
+        <td>连续写入、紧凑 entry、排序后的顺序访问优于近乎唯一 key 的随机 HashMap probing。</td>
+      </tr>
+      <tr data-status="prod" data-cat="parallel" data-search="e10 boundary slicing + parallel expansion/sort n=14 1t 3.1559 s；16t 0.6249 s；32t 0.6046 s 父边界切片并行生成与排序；但 16→32 仅再快 3.4%，很快受内存流量和串行 reduce 限制。">
+        <td><span class="exp-id">E10</span></td>
+        <td><b>boundary slicing + parallel expansion/sort</b></td>
+        <td><span class="cat-chip">并行、调度与任务组织</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=14 1t 3.1559 s；16t 0.6249 s；32t 0.6046 s</td>
+        <td>父边界切片并行生成与排序；但 16→32 仅再快 3.4%，很快受内存流量和串行 reduce 限制。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="local" data-search="e11 c-derived sparse legal-position iterator n=15 position checks 12.46× 减少；serial 仅 1.38–1.42×，parallel 1.04× 少做 predicate 后，candidate 写入、排序和 merge 接管瓶颈；后来在 e24 的 arena/batch 管线中重新组合才有价值。">
+        <td><span class="exp-id">E11</span></td>
+        <td><b>C-derived sparse legal-position iterator</b></td>
+        <td><span class="cat-chip">局域算子与稀疏转移</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">Standalone REJECT；保留诊断/后续组合</div></td>
+        <td>N=15 position checks 12.46× 减少；serial 仅 1.38–1.42×，parallel 1.04×</td>
+        <td>少做 predicate 后，candidate 写入、排序和 merge 接管瓶颈；后来在 E24 的 arena/batch 管线中重新组合才有价值。</td>
+      </tr>
+      <tr data-status="prod" data-cat="sym" data-search="e12 d4 cut-stabilizer orbit contraction n=14 2.7088→1.4062 s；support 5,479,934→2,847,130；rss 443.5→226.6 mib 只使用 row cut 真正保持的 identity + vertical reflection；首行 orbit 代表直接减少真实 states/candidates。">
+        <td><span class="exp-id">E12</span></td>
+        <td><b>D4 cut-stabilizer orbit contraction</b></td>
+        <td><span class="cat-chip">对称性</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP D4-only（生产）</div></td>
+        <td>N=14 2.7088→1.4062 s；support 5,479,934→2,847,130；RSS 443.5→226.6 MiB</td>
+        <td>只使用 row cut 真正保持的 identity + vertical reflection；首行 orbit 代表直接减少真实 states/candidates。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="path" data-search="e13 rust 简化 contraction-path exploration n=9–11 greedy support 为 d4 row 的 21–27× generic site tree 暴露更多开放腿；production full-row macro 已利用 tensor-value structure，dense/tree proxy 不公平。">
+        <td><span class="exp-id">E13</span></td>
+        <td><b>Rust 简化 contraction-path exploration</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">REJECT 候选；保留 path oracle</div></td>
+        <td>N=9–11 greedy support 为 D4 row 的 21–27×</td>
+        <td>generic site tree 暴露更多开放腿；production full-row macro 已利用 tensor-value structure，dense/tree proxy 不公平。</td>
+      </tr>
+      <tr data-status="research" data-cat="symbolic" data-search="e14 exact future-equivalence quotient n=13 future classes 57,215 / concrete 541,745=10.56%；build 慢 4.3–6.7× frontier 确有 6–10×未来行为等价压缩，但当前必须先枚举完整 concrete graph，再反向构造 quotient。">
+        <td><span class="exp-id">E14</span></td>
+        <td><b>exact future-equivalence quotient</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-research">研究结论 KEEP</span><div class="decision-text">KEEP 结构证据；非生产</div></td>
+        <td>N=13 future classes 57,215 / concrete 541,745=10.56%；build 慢 4.3–6.7×</td>
+        <td>frontier 确有 6–10×未来行为等价压缩，但当前必须先枚举完整 concrete graph，再反向构造 quotient。</td>
+      </tr>
+      <tr data-status="research" data-cat="symbolic" data-search="e15 exact finite-field rank 诊断 n=13 rank/support=3.77%，rank growth 显著慢于 support 证明存在多维线性压缩潜力；但 post-hoc gaussian 先物化完整边界，n=13 比 direct d4 慢约 42×。">
+        <td><span class="exp-id">E15</span></td>
+        <td><b>exact finite-field rank 诊断</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-research">研究结论 KEEP</span><div class="decision-text">KEEP 低秩研究方向；非生产</div></td>
+        <td>N=13 rank/support=3.77%，rank growth 显著慢于 support</td>
+        <td>证明存在多维线性压缩潜力；但 post-hoc Gaussian 先物化完整边界，N=13 比 direct D4 慢约 42×。</td>
+      </tr>
+      <tr data-status="reject" data-cat="symbolic" data-search="e16 streaming exact mps/mpo row apply n=8 rank 正确但 40.7896 s；d4 baseline 0.0000879 s dense 有限域消元与 o(n²) adjacent swap 抵消低秩收益。">
+        <td><span class="exp-id">E16</span></td>
+        <td><b>streaming exact MPS/MPO row apply</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=8 rank 正确但 40.7896 s；D4 baseline 0.0000879 s</td>
+        <td>dense 有限域消元与 O(N²) adjacent SWAP 抵消低秩收益。</td>
+      </tr>
+      <tr data-status="reject" data-cat="symbolic" data-search="e17 two-block exact pluq n=12 rank 8,334，但 factor products 25,875,207（support 的 261.5×） 代数秩低不代表 pivot factors 稀疏；fill-in 造成巨大 cross product。">
+        <td><span class="exp-id">E17</span></td>
+        <td><b>two-block exact PLUQ</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT plain PLUQ</div></td>
+        <td>N=12 rank 8,334，但 factor products 25,875,207（support 的 261.5×）</td>
+        <td>代数秩低不代表 pivot factors 稀疏；fill-in 造成巨大 cross product。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="symbolic" data-search="e18 online future quotient class/support 16.3%→10.6%，但总时间为 direct 的 2.93–4.44× 去掉第二遍 replay 仍无法避免访问全部 concrete states 才能形成 exact signature。">
+        <td><span class="exp-id">E18</span></td>
+        <td><b>online future quotient</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">KEEP oracle；REJECT production</div></td>
+        <td>class/support 16.3%→10.6%，但总时间为 direct 的 2.93–4.44×</td>
+        <td>去掉第二遍 replay 仍无法避免访问全部 concrete states 才能形成 exact signature。</td>
+      </tr>
+      <tr data-status="reject" data-cat="path" data-search="e19 d4-conditioned macro tree half-row generic 内快 20.9–24.1%，但仍慢 production 3.9e3–1.28e5× 宏关联有小收益，但远不及 full-row c partial evaluation；表示层级仍错。">
+        <td><span class="exp-id">E19</span></td>
+        <td><b>D4-conditioned macro tree</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT candidate；保留 baseline</div></td>
+        <td>half-row generic 内快 20.9–24.1%，但仍慢 production 3.9e3–1.28e5×</td>
+        <td>宏关联有小收益，但远不及 full-row C partial evaluation；表示层级仍错。</td>
+      </tr>
+      <tr data-status="reject" data-cat="path" data-search="e20 bidirectional separator join n=7 bottom support 13,589；live support 比单向 baseline 高 158× join 本身不贵，但 v1/v2 bottom boundary 在 join 前制造巨大开放接口。">
+        <td><span class="exp-id">E20</span></td>
+        <td><b>bidirectional separator join</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=7 bottom support 13,589；live support 比单向 baseline 高 158×</td>
+        <td>join 本身不贵，但 v1/v2 bottom boundary 在 join 前制造巨大开放接口。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="symbolic" data-search="e21 c-derived exact weighted dd n=8/9 nodes/support=4.53/3.65；慢 59–71× canonical relational apply 没有产生足够共享，unique/apply hash 开销放大表示。">
+        <td><span class="exp-id">E21</span></td>
+        <td><b>C-derived exact weighted DD</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">REJECT production；保留 canonical baseline</div></td>
+        <td>N=8/9 nodes/support=4.53/3.65；慢 59–71×</td>
+        <td>canonical relational apply 没有产生足够共享，unique/apply hash 开销放大表示。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="symbolic" data-search="e22 actual-node dd order search n=8/9 nodes 降 21.3%/22.2%，但仍慢 80–105× 变量顺序确实影响 actual nodes；但 20% 改善无法修复 dd 本身大 3–6×的数量级问题。">
+        <td><span class="exp-id">E22</span></td>
+        <td><b>actual-node DD order search</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">KEEP 搜索机制；REJECT DD production</div></td>
+        <td>N=8/9 nodes 降 21.3%/22.2%，但仍慢 80–105×</td>
+        <td>变量顺序确实影响 actual nodes；但 20% 改善无法修复 DD 本身大 3–6×的数量级问题。</td>
+      </tr>
+      <tr data-status="reject" data-cat="symbolic" data-search="e23 two-prime proportional edge quotient n=8–10 nodes 仅降 5.4–14.6%，时间增 26–46% 多数 residual functions 不是标量倍数；一维 edge scaling 捕获不了多维低秩。">
+        <td><span class="exp-id">E23</span></td>
+        <td><b>two-prime proportional edge quotient</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=8–10 nodes 仅降 5.4–14.6%，时间增 26–46%</td>
+        <td>多数 residual functions 不是标量倍数；一维 edge scaling 捕获不了多维低秩。</td>
+      </tr>
+      <tr data-status="prod" data-cat="mat" data-search="e24 arena + fused batch + sparse iterator 生产内核 serial 2.27–2.46×；n=15 11.0346→4.8224 s（1t）/2.7549 s（8t sort） 把 e11 稀疏迭代与 arena、融合批生成、标准并行排序组合，减少 allocation 和 11–13×无效检查。">
+        <td><span class="exp-id">E24</span></td>
+        <td><b>arena + fused batch + sparse iterator 生产内核</b></td>
+        <td><span class="cat-chip">物化、排序与聚合</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>serial 2.27–2.46×；N=15 11.0346→4.8224 s（1t）/2.7549 s（8t sort）</td>
+        <td>把 E11 稀疏迭代与 arena、融合批生成、标准并行排序组合，减少 allocation 和 11–13×无效检查。</td>
+      </tr>
+      <tr data-status="dependency" data-cat="path" data-search="e25 symbolic tilted separator 未启动 e21/e23 未通过 symbolic production gate；没有合法 bottom 表示，重跑 concrete separator 只会重复 e20。">
+        <td><span class="exp-id">E25</span></td>
+        <td><b>symbolic tilted separator</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-dependency">依赖拒绝</span><div class="decision-text">DEPENDENCY REJECT</div></td>
+        <td>未启动</td>
+        <td>E21/E23 未通过 symbolic production gate；没有合法 bottom 表示，重跑 concrete separator 只会重复 E20。</td>
+      </tr>
+      <tr data-status="prod" data-cat="mat" data-search="e26 key-prefix sharded sort-reduce n=15 8t 2.7549→1.8586 s；rss -26.6% 256 个不重叠 key buckets 形成更小 sorts、并行 bucket reduce、较低 capacity over-reservation。">
+        <td><span class="exp-id">E26</span></td>
+        <td><b>key-prefix sharded sort-reduce</b></td>
+        <td><span class="cat-chip">物化、排序与聚合</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP Prefix/256（生产）</div></td>
+        <td>N=15 8t 2.7549→1.8586 s；RSS -26.6%</td>
+        <td>256 个不重叠 key buckets 形成更小 sorts、并行 bucket reduce、较低 capacity over-reservation。</td>
+      </tr>
+      <tr data-status="reject" data-cat="mat" data-search="e27 chunked sorted runs + k-way merge n=15 candidates -53.7%，rss 仅 -5.1%，时间 +74.8% retained runs 与最终 output 同时存活，且产生 1.48e8 heap operations。">
+        <td><span class="exp-id">E27</span></td>
+        <td><b>chunked sorted runs + k-way merge</b></td>
+        <td><span class="cat-chip">物化、排序与聚合</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=15 candidates -53.7%，RSS 仅 -5.1%，时间 +74.8%</td>
+        <td>retained runs 与最终 output 同时存活，且产生 1.48e8 heap operations。</td>
+      </tr>
+      <tr data-status="prod" data-cat="repr" data-search="e28 24-byte compact exact entries entry 32→24 b；n=15 time -13.3%，rss -24.7% n≤21 的 3n key 用 u64，u128 coefficient 拆为两个 u64，直接降低 bytes/entry 和 memory traffic。">
+        <td><span class="exp-id">E28</span></td>
+        <td><b>24-byte compact exact entries</b></td>
+        <td><span class="cat-chip">边界表示与内存布局</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>entry 32→24 B；N=15 time -13.3%，RSS -24.7%</td>
+        <td>N≤21 的 3N key 用 u64，u128 coefficient 拆为两个 u64，直接降低 bytes/entry 和 memory traffic。</td>
+      </tr>
+      <tr data-status="reject" data-cat="path" data-search="e29 two-row c-derived macro n=10–13 transitions +1.2%→+2.4%；n=13 time 2.06× 跳过第一行 canonical merge 后，第二行对等价 intermediate states 重复执行 c apply。">
+        <td><span class="exp-id">E29</span></td>
+        <td><b>two-row C-derived macro</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=10–13 transitions +1.2%→+2.4%；N=13 time 2.06×</td>
+        <td>跳过第一行 canonical merge 后，第二行对等价 intermediate states 重复执行 C apply。</td>
+      </tr>
+      <tr data-status="reject" data-cat="path" data-search="e30 actual-cost macro tree search 89–377 paths；最佳 work 改善 0%；search 0.175→54.9 s 候选 macro edge 本身无正收益，路径搜索不能凭空创造更低成本 association。">
+        <td><span class="exp-id">E30</span></td>
+        <td><b>actual-cost macro tree search</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>89–377 paths；最佳 work 改善 0%；search 0.175→54.9 s</td>
+        <td>候选 macro edge 本身无正收益，路径搜索不能凭空创造更低成本 association。</td>
+      </tr>
+      <tr data-status="prod" data-cat="parallel" data-search="e31 按父状态数均衡的并行生成 + bounded flush n=15 1.612→1.287 s；thread-local capacity 675.8→7.28 mb 按 actual parent counts 分配工作，并以 256-parent/1024-entry bounded flush 避免每线程完整层复制。">
+        <td><span class="exp-id">E31</span></td>
+        <td><b>按父状态数均衡的并行生成 + bounded flush</b></td>
+        <td><span class="cat-chip">并行、调度与任务组织</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=15 1.612→1.287 s；thread-local capacity 675.8→7.28 MB</td>
+        <td>按 actual parent counts 分配工作，并以 256-parent/1024-entry bounded flush 避免每线程完整层复制。</td>
+      </tr>
+      <tr data-status="prod" data-cat="arith" data-search="e32 u64 coefficient fast path + u128 promotion entry 24→16 b；n=15 1.228→1.021 s；rss -32.9% 常见系数走窄路径，overflow 时从原始边界完整重放 checked u128，兼顾吞吐与 exactness。">
+        <td><span class="exp-id">E32</span></td>
+        <td><b>u64 coefficient fast path + u128 promotion</b></td>
+        <td><span class="cat-chip">精确算术与宽键后端</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>entry 24→16 B；N=15 1.228→1.021 s；RSS -32.9%</td>
+        <td>常见系数走窄路径，overflow 时从原始边界完整重放 checked u128，兼顾吞吐与 exactness。</td>
+      </tr>
+      <tr data-status="reject" data-cat="mat" data-search="e33 compact shard radix sort n=15 radix 1.121 s，standard 0.835 s；sort 0.501 vs 0.290 s 3 次稳定 histogram/scatter 仍重于 pdqsort；自写 radix 的 pass 与写流量成本更高。">
+        <td><span class="exp-id">E33</span></td>
+        <td><b>compact shard radix sort</b></td>
+        <td><span class="cat-chip">物化、排序与聚合</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=15 radix 1.121 s，standard 0.835 s；sort 0.501 vs 0.290 s</td>
+        <td>3 次稳定 histogram/scatter 仍重于 pdqsort；自写 radix 的 pass 与写流量成本更高。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="path" data-search="e34 corner/diamond contraction path n=10–12 support 为 production 的 9.86–13.23× shell cut 同时暴露四族 constraint lines；实际 c-oracle 证明不是 dense proxy 误差。">
+        <td><span class="exp-id">E34</span></td>
+        <td><b>corner/diamond contraction path</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">REJECT path；KEEP generic-C oracle</div></td>
+        <td>N=10–12 support 为 production 的 9.86–13.23×</td>
+        <td>shell cut 同时暴露四族 constraint lines；实际 C-oracle 证明不是 dense proxy 误差。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="symbolic" data-search="e35 certified frontier lower-bound audit n=14 reachable 2,847,130；certified classes 313,373；class fit base 4.444 给出当前 row ordering deterministic weighted quotient 的下界证据，但构造证书仍先访问完整 concrete graph。">
+        <td><span class="exp-id">E35</span></td>
+        <td><b>certified frontier lower-bound audit</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">KEEP diagnostic；REJECT production</div></td>
+        <td>N=14 reachable 2,847,130；certified classes 313,373；class fit base 4.444</td>
+        <td>给出当前 row ordering deterministic weighted quotient 的下界证据，但构造证书仍先访问完整 concrete graph。</td>
+      </tr>
+      <tr data-status="prod" data-cat="repr" data-search="e36 key/coefficient 联合装入 u64 entry 16→8 b；n=15 0.767→0.513 s；rss 642→328 mb key 放高位、coefficient 放低位，一次排序即可；两级 checked promotion 保证 exactness。">
+        <td><span class="exp-id">E36</span></td>
+        <td><b>key/coefficient 联合装入 u64</b></td>
+        <td><span class="cat-chip">边界表示与内存布局</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>entry 16→8 B；N=15 0.767→0.513 s；RSS 642→328 MB</td>
+        <td>key 放高位、coefficient 放低位，一次排序即可；两级 checked promotion 保证 exactness。</td>
+      </tr>
+      <tr data-status="prod" data-cat="repr" data-search="e37 cross-row arena reuse n=15 0.5325→0.4656 s；最终配对 rss 不增 两组 row buckets 交替复用，减少跨层 growth、reallocation 与 capacity 抖动。">
+        <td><span class="exp-id">E37</span></td>
+        <td><b>cross-row arena reuse</b></td>
+        <td><span class="cat-chip">边界表示与内存布局</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=15 0.5325→0.4656 s；最终配对 RSS 不增</td>
+        <td>两组 row buckets 交替复用，减少跨层 growth、reallocation 与 capacity 抖动。</td>
+      </tr>
+      <tr data-status="prod" data-cat="path" data-search="e38 c-derived recursive tail hybrid n=15 0.4656→0.1408 s；rss 333.5→30.9 mb 前缀仍 exact sparse merge；晚层改为逐项 replay compiled-c successor，避免整层 record materialization + sort/reduce。">
+        <td><span class="exp-id">E38</span></td>
+        <td><b>C-derived recursive tail hybrid</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=15 0.4656→0.1408 s；RSS 333.5→30.9 MB</td>
+        <td>前缀仍 exact sparse merge；晚层改为逐项 replay compiled-C successor，避免整层 record materialization + sort/reduce。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="sym" data-search="e39 recursive sectors 上的 full d4 额外仅降 1.3–1.8% nodes；n=15 0.1505→0.1553 s 除 vertical 外的 d4 action 到很晚才可比较，canonical 检查抵消微小剪枝。">
+        <td><span class="exp-id">E39</span></td>
+        <td><b>recursive sectors 上的 full D4</b></td>
+        <td><span class="cat-chip">对称性</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">REJECT production；KEEP diagnostic</div></td>
+        <td>额外仅降 1.3–1.8% nodes；N=15 0.1505→0.1553 s</td>
+        <td>除 vertical 外的 D4 action 到很晚才可比较，canonical 检查抵消微小剪枝。</td>
+      </tr>
+      <tr data-status="prod" data-cat="path" data-search="e40 adaptive certified fast tail n=14/15 0.01197/0.07122 s；接近 dfs 0.01007/0.06600 s 用 explicit-c 认证 bit plan，按实际 support 选择 merge→tail cut，并使用 checked u64/u128 replay 与 chunked tasks。">
+        <td><span class="exp-id">E40</span></td>
+        <td><b>adaptive certified fast tail</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=14/15 0.01197/0.07122 s；接近 DFS 0.01007/0.06600 s</td>
+        <td>用 explicit-C 认证 bit plan，按实际 support 选择 merge→tail cut，并使用 checked u64/u128 replay 与 chunked tasks。</td>
+      </tr>
+      <tr data-status="reject" data-cat="path" data-search="e41 prefix-free direct sectors n=14/15/16 仅 n=14 达 8% 改善 prefix seed 本来只占 0.04–0.13 ms；删除 prefix merge 不改变 13.7m–570.6m-entry tail。">
+        <td><span class="exp-id">E41</span></td>
+        <td><b>prefix-free direct sectors</b></td>
+        <td><span class="cat-chip">收缩路径、宏与分隔面</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=14/15/16 仅 N=14 达 8% 改善</td>
+        <td>prefix seed 本来只占 0.04–0.13 ms；删除 prefix merge 不改变 13.7M–570.6M-entry tail。</td>
+      </tr>
+      <tr data-status="prod" data-cat="micro" data-search="e42 certified last-4 terminal microkernel 相对 e40 n=14/15 快 8.6%/13.4%；n=15 首次稳定快于 dfs 6.9% 展开最宽最后四层，删除函数调用、重复 base-case 与 mask 重算；c work 不变，属于局部 contraction reassociation。">
+        <td><span class="exp-id">E42</span></td>
+        <td><b>certified last-4 terminal microkernel</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>相对 E40 N=14/15 快 8.6%/13.4%；N=15 首次稳定快于 DFS 6.9%</td>
+        <td>展开最宽最后四层，删除函数调用、重复 base-case 与 mask 重算；C work 不变，属于局部 contraction reassociation。</td>
+      </tr>
+      <tr data-status="reject" data-cat="parallel" data-search="e43 task ordering/chunk 探索 n=14/15/16 相对 e42 为 -3.4%/-0.1%/+1.6% cheap score 预测力不足，probe 本身接近一次 contraction；系统双峰不是 queue imbalance。">
+        <td><span class="exp-id">E43</span></td>
+        <td><b>task ordering/chunk 探索</b></td>
+        <td><span class="cat-chip">并行、调度与任务组织</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=14/15/16 相对 E42 为 -3.4%/-0.1%/+1.6%</td>
+        <td>cheap score 预测力不足，probe 本身接近一次 contraction；系统双峰不是 queue imbalance。</td>
+      </tr>
+      <tr data-status="reject" data-cat="symbolic" data-search="e44 exact transposition table hit rate 0.43–0.58%；慢 1.36–1.55× row-ordered virtual boundary 几乎不重新汇合；每节点 hash/lookup/write 成本远高于极少复用。">
+        <td><span class="exp-id">E44</span></td>
+        <td><b>exact transposition table</b></td>
+        <td><span class="cat-chip">符号压缩、等价类与低秩</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>hit rate 0.43–0.58%；慢 1.36–1.55×</td>
+        <td>row-ordered virtual boundary 几乎不重新汇合；每节点 hash/lookup/write 成本远高于极少复用。</td>
+      </tr>
+      <tr data-status="optional" data-cat="arith" data-search="e45 wide key + certified crt backend 完整验证 q(19)；n=18 31.30 s / 7.3 mb；支持更宽 key 和 1–4 residue lanes 分离三组 masks 消除 n≤21 joint-key 限制；crt product 经 n! 上界认证，换取低内存与 n&gt;21 可扩展性。">
+        <td><span class="exp-id">E45</span></td>
+        <td><b>wide key + certified CRT backend</b></td>
+        <td><span class="cat-chip">精确算术与宽键后端</span></td>
+        <td><span class="badge badge-optional">可选后端 KEEP</span><div class="decision-text">KEEP（可选 exact/低内存后端）</div></td>
+        <td>完整验证 Q(19)；N=18 31.30 s / 7.3 MB；支持更宽 key 和 1–4 residue lanes</td>
+        <td>分离三组 masks 消除 N≤21 joint-key 限制；CRT product 经 N! 上界认证，换取低内存与 N&gt;21 可扩展性。</td>
+      </tr>
+      <tr data-status="prod" data-cat="arith" data-search="e46 direct-sector scalar-u64 backend n=17/18 相对 e45 快 35.2%/34.1%；n=18 19.799 s / 7.2 mb 在 n!&lt;2^64 可证明成立时删除多 residue arithmetic；溢出/人工限制仍可完整 replay crt。">
+        <td><span class="exp-id">E46</span></td>
+        <td><b>direct-sector scalar-u64 backend</b></td>
+        <td><span class="cat-chip">精确算术与宽键后端</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（生产）</div></td>
+        <td>N=17/18 相对 E45 快 35.2%/34.1%；N=18 19.799 s / 7.2 MB</td>
+        <td>在 N!&lt;2^64 可证明成立时删除多 residue arithmetic；溢出/人工限制仍可完整 replay CRT。</td>
+      </tr>
+      <tr data-status="prod" data-cat="micro" data-search="e47 certified last-5/6 terminal supernode last-6 比 last-4：n=16/17 快 21.5%/18.6%；n=14–18 比仓库 dfs 快约 21–25% 把第五/第六层 c-derived terminal subnetwork 编译成更大的 supernode，减少递归、base-case 和 mask setup。">
+        <td><span class="exp-id">E47</span></td>
+        <td><b>certified last-5/6 terminal supernode</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-prod">生产 KEEP</span><div class="decision-text">KEEP（当前 production）</div></td>
+        <td>last-6 比 last-4：N=16/17 快 21.5%/18.6%；N=14–18 比仓库 DFS 快约 21–25%</td>
+        <td>把第五/第六层 C-derived terminal subnetwork 编译成更大的 supernode，减少递归、base-case 和 mask setup。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e48 fixed-stack iterative tail n=16/17 仅快 0.8%/1.3% last-6 后剩余 recursion 已窄；固定数组初始化、动态索引和 spills 抵消 call-frame 节省。">
+        <td><span class="exp-id">E48</span></td>
+        <td><b>fixed-stack iterative tail</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=16/17 仅快 0.8%/1.3%</td>
+        <td>last-6 后剩余 recursion 已窄；固定数组初始化、动态索引和 spills 抵消 call-frame 节省。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e49 cross-sector avx2 lane occupancy 89–90%，但 n=16/17 慢 1.6%/2.1% simd 只覆盖根层少量 masks；store/extract、lane dispatch 与控制流成本更高。">
+        <td><span class="exp-id">E49</span></td>
+        <td><b>cross-sector AVX2</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>lane occupancy 89–90%，但 N=16/17 慢 1.6%/2.1%</td>
+        <td>SIMD 只覆盖根层少量 masks；store/extract、lane dispatch 与控制流成本更高。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e50 residue-lane avx2 3-lane n=17/18 慢 3.6%/5.1%；4-lane n=18 慢 16.8% 显式 ymm 递归 abi/spills 未胜过 llvm 对固定小数组的标量展开和寄存器分配。">
+        <td><span class="exp-id">E50</span></td>
+        <td><b>residue-lane AVX2</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT AVX2</div></td>
+        <td>3-lane N=17/18 慢 3.6%/5.1%；4-lane N=18 慢 16.8%</td>
+        <td>显式 YMM 递归 ABI/spills 未胜过 LLVM 对固定小数组的标量展开和寄存器分配。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e51 packed task tape task 32→8 b；n=16 快 1.9%，n=17 慢 0.3% 任务带压缩真实，但 fast solve 99.98% 时间不在搬 task，收益落入噪声。">
+        <td><span class="exp-id">E51</span></td>
+        <td><b>packed task tape</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>task 32→8 B；N=16 快 1.9%，N=17 慢 0.3%</td>
+        <td>任务带压缩真实，但 fast solve 99.98% 时间不在搬 task，收益落入噪声。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e52 cache-budget prefix cut rss -22%到-40%，wall 慢 0.7%–3.0% 压低常驻 tasks 会增加每 task tail work、减少并行裕量；内存不是该阶段主瓶颈。">
+        <td><span class="exp-id">E52</span></td>
+        <td><b>cache-budget prefix cut</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>RSS -22%到-40%，wall 慢 0.7%–3.0%</td>
+        <td>压低常驻 tasks 会增加每 task tail work、减少并行裕量；内存不是该阶段主瓶颈。</td>
+      </tr>
+      <tr data-status="reject" data-cat="parallel" data-search="e53 cache-line task ownership cyclic 将 worker imbalance 56%→约 1.7%，但慢 5.9–6.9% 更均衡的分配引入索引/调度与 locality 损失；负载不均衡不是主要 wall 来源。">
+        <td><span class="exp-id">E53</span></td>
+        <td><b>cache-line task ownership</b></td>
+        <td><span class="cat-chip">并行、调度与任务组织</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>cyclic 将 worker imbalance 56%→约 1.7%，但慢 5.9–6.9%</td>
+        <td>更均衡的分配引入索引/调度与 locality 损失；负载不均衡不是主要 wall 来源。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e54 bounded suffix cache n=17 hit rate 0.047–0.277%；formal 慢 11.7% suffix temporal locality 极低，tag/hash/load/branch 成本却作用于几乎每个 node。">
+        <td><span class="exp-id">E54</span></td>
+        <td><b>bounded suffix cache</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=17 hit rate 0.047–0.277%；formal 慢 11.7%</td>
+        <td>suffix temporal locality 极低，tag/hash/load/branch 成本却作用于几乎每个 node。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e55 hot-code / i-cache shaping regular-inline 慢 3.9–6.4%；noinline 慢 16.4–17.9% fully-inline 正在删除 call/return、分支与状态搬运；.text 只缩 &lt;0.4%，无 i-cache capacity 主导证据。">
+        <td><span class="exp-id">E55</span></td>
+        <td><b>hot-code / I-cache shaping</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>regular-inline 慢 3.9–6.4%；noinline 慢 16.4–17.9%</td>
+        <td>fully-inline 正在删除 call/return、分支与状态搬运；.text 只缩 &lt;0.4%，无 I-cache capacity 主导证据。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e56 last-7/8 扩展 last-7 n=16/17 快 1.9%/3.8%；last-8 回退 last-6 已覆盖最宽层；再删除一层递归只剩窄 work，跨 n 不达 5% gate。">
+        <td><span class="exp-id">E56</span></td>
+        <td><b>last-7/8 扩展</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>last-7 N=16/17 快 1.9%/3.8%；last-8 回退</td>
+        <td>last-6 已覆盖最宽层；再删除一层递归只剩窄 work，跨 N 不达 5% gate。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e57 deferred overflow n=16 慢 0.3%，n=17 快 1.3% predicted-cold checked branch 已很便宜；sticky overflow bit 反而制造依赖链。">
+        <td><span class="exp-id">E57</span></td>
+        <td><b>deferred overflow</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=16 慢 0.3%，N=17 快 1.3%</td>
+        <td>predicted-cold checked branch 已很便宜；sticky overflow bit 反而制造依赖链。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e58 source-generated depth kernels n=16/17 快 0.9%/4.0%；.text +11.5% upper-depth 动态检查有小成本，但绝大多数 work 已在 terminal loops，代码增长换不到稳定收益。">
+        <td><span class="exp-id">E58</span></td>
+        <td><b>source-generated depth kernels</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>N=16/17 快 0.9%/4.0%；.text +11.5%</td>
+        <td>upper-depth 动态检查有小成本，但绝大多数 work 已在 terminal loops，代码增长换不到稳定收益。</td>
+      </tr>
+      <tr data-status="reject" data-cat="micro" data-search="e59 scalar ilp batch2/4 batch2 慢 15.9–17.9%；batch4 慢 19.6–24.5% 递归 lane utilization 仅 47–70%；divergence、数组状态和同步成本超过潜在 ilp。">
+        <td><span class="exp-id">E59</span></td>
+        <td><b>scalar ILP batch2/4</b></td>
+        <td><span class="cat-chip">热核、缓存、SIMD 与指令级优化</span></td>
+        <td><span class="badge badge-reject">REJECT</span><div class="decision-text">REJECT</div></td>
+        <td>batch2 慢 15.9–17.9%；batch4 慢 19.6–24.5%</td>
+        <td>递归 lane utilization 仅 47–70%；divergence、数组状态和同步成本超过潜在 ILP。</td>
+      </tr>
+      <tr data-status="mixed" data-cat="sym" data-search="e60 vertical canonical suffix audit even n duplicates 0.02–0.04%；odd n 5.2–5.8% 首行 orbit 已消掉偶数 n vertical symmetry；奇数中心 orbit 复用不足两档 10% gate。">
+        <td><span class="exp-id">E60</span></td>
+        <td><b>vertical canonical suffix audit</b></td>
+        <td><span class="cat-chip">对称性</span></td>
+        <td><span class="badge badge-mixed">混合：生产拒绝但保留机制/诊断</span><div class="decision-text">Online REJECT；diagnostic KEEP</div></td>
+        <td>even N duplicates 0.02–0.04%；odd N 5.2–5.8%</td>
+        <td>首行 orbit 已消掉偶数 N vertical symmetry；奇数中心 orbit 复用不足两档 10% gate。</td>
+      </tr></tbody></table></div>
+ <p class="note" id="visibleCount"></p>
+</section>
+
+<section id="current" class="block">
+ <div class="section-head"><div><h2>当前 production、DFS 对照与仍未解决的问题</h2><p>当前 production 是 E46 direct scalar-u64 + E47 certified last-6；E45 是更宽 N/低内存的可选 CRT 后端。</p></div></div>
+ <div class="two-col">
+  <div class="chart-card"><h3>E47 / 仓库 DFS 时间比</h3><p>低于 1 表示 PEPS 更快。N=14–18 的同批 checkpoint 中快约 21–25%。</p><div class="ratio-row"><span>N=14</span><div class="ratio-track"><i style="width:78.7%"></i><em>PEPS 0.787× DFS</em></div></div><div class="ratio-row"><span>N=15</span><div class="ratio-track"><i style="width:74.6%"></i><em>PEPS 0.746× DFS</em></div></div><div class="ratio-row"><span>N=16</span><div class="ratio-track"><i style="width:78.7%"></i><em>PEPS 0.787× DFS</em></div></div><div class="ratio-row"><span>N=17</span><div class="ratio-track"><i style="width:77.8%"></i><em>PEPS 0.778× DFS</em></div></div><div class="ratio-row"><span>N=18</span><div class="ratio-track"><i style="width:75.1%"></i><em>PEPS 0.751× DFS</em></div></div></div>
+  <div class="chart-card"><h3>当前判断</h3><ul>
+   <li><b>已经证明：</b>合规的 explicit-C 派生 PEPS contraction 可以在有限 N 上超过该仓库 DFS comparator。</li>
+   <li><b>尚未证明：</b>PEPS 的渐近 exponent 更低，或能超过所有优化过的 N-Queens DFS。</li>
+   <li><b>最大完整 exact count：</b>Q(19)，由 E45 wide CRT 后端完成。</li>
+   <li><b>Q(28)：</b>按当前 recursive-tail 增长仍粗略需要 800–1000 年；key width/CRT 已不是主限制，指数 C-transition 数才是。</li>
+   <li><b>后期热点：</b>`contract_certified_tail_last_k_u64::<6>` 占 99.979% leaf samples；E56–E60 表明同类 CPU-local 微调通常只剩 1–4%。</li>
+  </ul></div>
+ </div>
+ <div class="table-wrap" style="margin-top:18px"><table style="min-width:900px"><thead><tr><th>N</th><th>E47 PEPS median (s)</th><th>DFS median (s)</th><th>PEPS/DFS</th><th>PEPS RSS (MB)</th><th>peak sectors</th><th>accepted C entries</th></tr></thead><tbody><tr><td>14</td><td>0.008303</td><td>0.010550</td><td><b>0.787×</b></td><td>6.00</td><td>4,816</td><td>13,679,283</td></tr><tr><td>15</td><td>0.051086</td><td>0.068454</td><td><b>0.746×</b></td><td>6.28</td><td>7,432</td><td>91,883,705</td></tr><tr><td>16</td><td>0.314296</td><td>0.399135</td><td><b>0.787×</b></td><td>12.69</td><td>70,906</td><td>570,595,159</td></tr><tr><td>17</td><td>2.335194</td><td>2.999933</td><td><b>0.778×</b></td><td>16.53</td><td>114,434</td><td>4,276,033,044</td></tr><tr><td>18</td><td>19.027543</td><td>25.342626</td><td><b>0.751×</b></td><td>7.76</td><td>18,132</td><td>29,682,922,254</td></tr></tbody></table></div>
+ <div class="callout"><strong>下一步应改变什么：</strong>若目标是数量级提升，应重新研究能够减少 exact tail nodes 的 actual-sparse path/separator、meet-in-the-middle 或 many-core/GPU traversal；继续围绕当前 scalar last-6 热核调 cache、stack、SIMD、ILP，现有证据不支持获得两位数收益。</div>
+</section>
+</main>
+<footer><div class="wrap">数据与结论均来自用户提供的 REPORT(1).md。图表中的跨阶段 checkpoint 仅用于展示演化；报告已在相应位置区分同 revision paired comparison 与跨阶段趋势。</div></footer>
+<script>
+const q=document.getElementById('q'), sf=document.getElementById('statusFilter'), cf=document.getElementById('catFilter');
+const rows=[...document.querySelectorAll('#expBody tr')];
+function applyFilters(){const query=q.value.trim().toLowerCase();let n=0;rows.forEach(r=>{const okQ=!query||r.dataset.search.includes(query);const okS=sf.value==='all'||r.dataset.status===sf.value;const okC=cf.value==='all'||r.dataset.cat===cf.value;const show=okQ&&okS&&okC;r.classList.toggle('hidden',!show);if(show)n++;});document.getElementById('visibleCount').textContent=`显示 ${n} / ${rows.length} 个方向`;}
+[q,sf,cf].forEach(x=>x.addEventListener('input',applyFilters));
+document.getElementById('resetFilters').onclick=()=>{q.value='';sf.value='all';cf.value='all';applyFilters();};
+document.getElementById('expandAll').onclick=()=>document.querySelectorAll('.accept-card').forEach(d=>d.open=true);
+document.getElementById('collapseAll').onclick=()=>document.querySelectorAll('.accept-card').forEach(d=>d.open=false);
+applyFilters();
+</script>
+</body></html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>N-Queens PEPS 优化实验深度解析报告</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --success-color: #27ae60;
+            --danger-color: #c0392b;
+            --info-color: #2980b9;
+            --bg-color: #f8f9fa;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1, h2, h3 {
+            color: var(--primary-color);
+        }
+        h1 {
+            text-align: center;
+            padding-bottom: 20px;
+            border-bottom: 3px solid var(--primary-color);
+        }
+        .section {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        /* Grid Layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        /* Tags */
+        .tag {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 10px;
+        }
+        .tag-success { background-color: var(--success-color); }
+        .tag-danger { background-color: var(--danger-color); }
+        .tag-info { background-color: var(--info-color); }
+        /* Cards */
+        .card {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 15px;
+            background: #fff;
+            border-left: 4px solid var(--info-color);
+        }
+        .card.success { border-left-color: var(--success-color); }
+        .card.danger { border-left-color: var(--danger-color); }
+        .card h4 {
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f1f5f9;
+        }
+        .highlight {
+            background-color: #eef2ff;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #4f46e5;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Sec. VI N-Queens PEPS 优化实验深度解析报告</h1>
+    <p style="text-align: center; color: #666;">基于 60 轮张量网络收缩与经典算法对比的工程化实录</p>
+
+    <div class="highlight">
+        <strong>核心洞察：</strong>该项目的终极奥义在于展示了：当严格、机械地对 N-Queens 的张量网络（PEPS）进行极限编译、内存压缩和去冗余后，<b>这个高维张量收缩过程最终在底层机器码层面“演化”成了等价于经典位运算 DFS 的执行流</b>。优化的本质是一场“消除通用张量开销，逼近特定约束本原”的过程。
+    </div>
+
+    <!-- Section 1: Accepted Optimizations -->
+    <div class="section">
+        <h2>一、 被采纳（KEEP）的优化机制详解</h2>
+        <p>这些优化成功在不破坏精确张量收缩（Exact Contraction）保真度的前提下，极大地提升了吞吐量或降低了内存消耗。</p>
+        
+        <div class="grid-3">
+            <div class="card success">
+                <h4><span class="tag tag-success">E1/E6</span> 张量算子编译</h4>
+                <p><b>做法：</b>摒弃了运行时的动态 17-entry 局域张量扫描，直接将其机械编译成“行算子”(Compiled Row Operator)。</p>
+                <p><b>效果：</b>消除了横向状态机的动态开销，从根本上减少了无用的局部验证，速度提升显著。</p>
+            </div>
+            
+            <div class="card success">
+                <h4><span class="tag tag-success">E9/E26</span> Sort-Reduce 与前缀分片</h4>
+                <p><b>做法：</b>放弃 HashMap，将输出直接连续写入 Vector，然后通过排序（Sort）和原地规约（Reduce）合并相同状态。E26 进一步按键值高位分出 256 个 Bucket 并行处理。</p>
+                <p><b>效果：</b>极大改善了 CPU 缓存局部性（Cache locality），消除了哈希探测开销，内存流量降低，开启了多核并行扩展能力。</p>
+            </div>
+
+            <div class="card success">
+                <h4><span class="tag tag-success">E3/E28/E32/E36</span> 极致状态压缩 (32B → 8B)</h4>
+                <p><b>做法：</b>逐步将边界状态掩码打包为 <code>u128</code>，再压缩至 <code>u64</code>，最终将 3N-bit 键值与计数值联合打包进一个仅仅 8 字节的 <code>u64</code> 中，溢出时再降级处理。</p>
+                <p><b>效果：</b>将数千万状态的内存占用（RSS）削减超 90%，大幅降低带宽瓶颈，使内存中排序速度狂飙。</p>
+            </div>
+
+            <div class="card success">
+                <h4><span class="tag tag-success">E12</span> 早期对称性裁剪 (D4 Partial)</h4>
+                <p><b>做法：</b>在张量收缩的首行，仅利用 D4 群中的“左右镜像反射”对称性，剔除一半等价状态，在最后再乘倍数。</p>
+                <p><b>效果：</b>在几乎零成本的情况下，硬性将工作量（Support 和 Transitions）砍掉近一半。</p>
+            </div>
+
+            <div class="card success">
+                <h4><span class="tag tag-success">E38/E40</span> C-derived 递归尾部 (Recursive Tail)</h4>
+                <p><b>做法：</b>在收缩的后半段（层数较深时），状态数指数级爆炸。此时停止全局的 Sort-Reduce 物化，转为“深度优先”地直接展开剩余张量的计算（免物化）。</p>
+                <p><b>效果：</b>这是最关键的转折点，避免了内存被撑爆，使其算法形态彻底向 DFS 靠拢，运行时间缩小了一个数量级。</p>
+            </div>
+
+            <div class="card success">
+                <h4><span class="tag tag-success">E42/E47</span> 终端宏节点展开 (Supernode Unrolling)</h4>
+                <p><b>做法：</b>在尾部递归中，将最后 4 到 6 层的递归调用树，由编译器强制内联（Inline）并展开为一个庞大的无分支、少调用的超级计算核心。</p>
+                <p><b>效果：</b>删除了大量的递归调用栈、状态准备代码和函数开销，直接逼平并部分超越了经典的 DFS 对照组。</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 2: Direction Categorization -->
+    <div class="section">
+        <h2>二、 优化方向全景分类</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>优化方向大类</th>
+                    <th>成功的尝试 (KEEP)</th>
+                    <th>失败的尝试 (REJECT)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><b>1. 数据结构与内存布局</b><br><i>(如何表示边界态)</i></td>
+                    <td><b>E9</b> (数组Sort-Reduce取代Hash)<br><b>E3/28/32/36</b> (紧凑 u64/8字节打包)<br><b>E24/E37</b> (Arena 内存池跨层复用)</td>
+                    <td><b>E2</b> (Hash预分配)<br><b>E4a</b> (Hasher调优)<br><b>E27</b> (保留分块运行避免Merge - 引发堆操作爆炸)</td>
+                </tr>
+                <tr>
+                    <td><b>2. 算法执行流与物化</b><br><i>(如何传递张量收缩)</i></td>
+                    <td><b>E1/E6</b> (张量编译为机械算子)<br><b>E38</b> (尾部免物化递归)<br><b>E42/E47</b> (最后6层强制展开超级节点)</td>
+                    <td><b>E29</b> (双行宏展开 - 导致重复评估)<br><b>E11</b> (单位置稀疏迭代 - 排序开销仍占主导)<br><b>E58</b> (生成固定深度代码 - 徒增指令膨胀)</td>
+                </tr>
+                <tr>
+                    <td><b>3. 图/结构压缩与代数分解</b><br><i>(试图降维或共享结构)</i></td>
+                    <td><b>E14/15</b> (证明了低秩和商结构存在，但不做进生产)</td>
+                    <td><b>E7/E21/E22/E23</b> (ADD/ZDD 决策图 - 维护节点的高昂开销远超节省的重复项)<br><b>E16/E17</b> (高斯消元/PLUQ - 引起Fill-in稠密爆炸)</td>
+                </tr>
+                <tr>
+                    <td><b>4. 对称性与高级路由</b><br><i>(试图改变计算路径)</i></td>
+                    <td><b>E12</b> (首行极简垂直镜像对称)</td>
+                    <td><b>E8/13/30</b> (TreeSA/贪心收缩路径 - 对完全行没用)<br><b>E39</b> (完整 D4 对称群 - 检查开销大于剪枝收益)<br><b>E54</b> (后缀缓存 - 命中率不足0.28%)</td>
+                </tr>
+                <tr>
+                    <td><b>5. 硬件与并发极限压榨</b><br><i>(如何吃透 CPU)</i></td>
+                    <td><b>E10/E26/E31</b> (按状态父节点负载均衡，前缀分桶并行)</td>
+                    <td><b>E48/E59</b> (固定栈/标量ILP展开 - 破坏分支预测)<br><b>E50</b> (手动 AVX2 SIMD - 不敌编译器的原生标量优化)<br><b>E51/53/55</b> (纯CPU缓存排布/I-Cache修改)</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 3: Summary & Conclusion -->
+    <div class="section">
+        <h2>三、 成功与失败的深层逻辑总结</h2>
+        
+        <div class="grid-2">
+            <div>
+                <h3 style="color: var(--success-color);">✅ 为什么这些思路能成功？</h3>
+                <ul style="padding-left: 20px;">
+                    <li><b>符合底层硬件胃口（机械同情心）：</b> 成功优化的核心在于把离散的哈希跳跃变成了连续的 <code>Sort-Reduce</code>，把 32 字节的结构体硬生生压进 8 字节的 <code>u64</code>。极小化的内存 Footprint 让数据能够长驻 CPU Cache。</li>
+                    <li><b>编译期“部分求值”替代运行期扫描：</b> N-Queens 物理网络（PEPS）充满死胡同（强约束）。E6 等优化将运行时的张量扫描提前“编译”，只保留了合法的位掩码变换（OR/AND/NOT）。</li>
+                    <li><b>该物化时物化，该递归时递归：</b> 前期层级状态少，用 Sort-Reduce（BFS 广度优先）完美合并去重；后期层级状态呈指数爆炸，直接放弃合并，转入 E38/E40 尾部递归（DFS 深度优先）。这一结合造就了数量级的跨越。</li>
+                    <li><b>极其廉价的剪枝：</b> 只有像 E12（左右对称）这种“在根节点只需一次计算就能砍半”的剪枝才有效，复杂的剪枝统统亏本。</li>
+                </ul>
+            </div>
+            
+            <div>
+                <h3 style="color: var(--danger-color);">❌ 为什么那些看似高大上的理论失败了？</h3>
+                <ul style="padding-left: 20px;">
+                    <li><b>通用张量结构（ZDD/ADD）的过度抽象：</b> 理论上决策图可以极大地压缩状态，但对于 N-Queens 这种高度特定且纠缠的问题，构造和查找 Canonical Node 的 Hash 成本（Hash/Lookup/Apply），是纯位运算的几百倍。省了内存，输了时间。</li>
+                    <li><b>高级代数操作（PLUQ分解 / 矩阵秩）：</b> 虽然能证明边界存在有限域上的低秩特性，但做高斯消元会产生严重的 Fill-in（稀疏变稠密），计算成本直接被放大了成百上千倍。</li>
+                    <li><b>复杂对称群与记忆化搜索：</b> 全量 D4 对称（E39）或后缀缓存（E54）失败，是因为在按“行”推进的过程中，状态再次汇合的概率极低（<1%）。花 100% 的精力去查表，只获得 1% 的复用，得不偿失。</li>
+                    <li><b>自作聪明的底层魔改（SIMD/AVX2）：</b> 编译器（LLVM）对于位运算和掩码循环的优化已经极其强悍（展开/寄存器分配）。强行手写 AVX2 增加了打包解包开销，或者强行用数组做固定栈（破坏了寄存器分配），反而拖慢了速度。</li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+            <h4>结论总结：</h4>
+            <p>这个项目用 60 轮严谨的实验，生动地揭示了一个计算真理：对于具有<b>极强硬约束（Hard Constraints）且无明显子结构复用（Low Overlapping Subproblems）</b>的组合搜索问题，花哨的张量代数分解和图压缩算法，终究敌不过<b>“状态极度压缩 + L1 Cache 友好的内存连续访问 + 深层暴力递归展开”</b>的经典做法。PEPS 理论没有错，但当它被工程化剥去所有冗余外衣后，它的最优解正是经典的位运算 DFS。</p>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
