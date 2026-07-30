@@ -26,6 +26,7 @@ repeats=$4
 warmup=$5
 stage_dir=${SLURM_SUBMIT_DIR:?SLURM_SUBMIT_DIR is not set}
 source_revision=${SOURCE_REVISION:-unknown}
+run_tests=${E51_RUN_TESTS:-1}
 result_stem="e51_truncated_mps_scnet_n${min_n}-${max_n}_job${SLURM_JOB_ID}"
 csv_path="$stage_dir/results/${result_stem}.csv"
 meta_path="$stage_dir/results/${result_stem}.meta.txt"
@@ -60,6 +61,7 @@ trap finish_metadata EXIT
     echo "slurm_memory_request=32G"
     echo "julia_num_threads=1"
     echo "openblas_num_threads=$SLURM_CPUS_PER_TASK"
+    echo "run_tests=$run_tests"
     echo "repetition_policy=one warm process per N/chi; requested warmups followed by requested samples; median internal kernel wall"
     echo "memory_method=per-point GNU time -v Maximum resident set size plus process VmHWM; includes Julia runtime and LAPACK workspaces"
     julia --version
@@ -73,6 +75,13 @@ export JULIA_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export JULIA_DEPOT_PATH="$stage_dir/depot:"
 export JULIA_PKG_PRECOMPILE_AUTO=0
+
+if [[ "$run_tests" == 1 ]]; then
+    srun --nodes=1 --ntasks=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" --cpu-bind=cores \
+        /usr/bin/time -v -o "$stage_dir/results/${result_stem}.tests.time.txt" \
+        julia --startup-file=no --project=. test/runtests.jl \
+        > "$stage_dir/results/${result_stem}.tests.txt"
+fi
 
 IFS=',' read -r -a chi_values <<< "$chi_csv"
 first_point=1
