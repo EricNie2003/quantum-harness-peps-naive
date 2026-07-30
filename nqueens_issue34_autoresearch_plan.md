@@ -2963,3 +2963,215 @@ base 仍不低于 DFS，下一次 review 必须重新寻找改变 contraction ex
     `benchmarks/`；
 11. 完成 E50 后必须执行下一次 five-direction review；复盘前不得启动
     E51。当前检查点严格停在 E45，E46 尚未开始。
+
+## T. E46–E50 强制复盘后的修订（2026-07-29）
+
+完整复盘见 `REPORT.md` §37。E46 direct scalar-u64 和 E47 last-6
+KEEP；E48 fixed stack、E49 cross-sector AVX2、E50 explicit residue
+AVX2 REJECT。当前 production PEPS 在 N=14--18 比仓库 DFS comparator
+快约 21--25%，窗口 geometric wall base 约 6.92 vs DFS 7.00；这不是
+渐近证明，但已经稳定超过同硬件 baseline。
+
+### T.1 新判断
+
+1. 后端/association 仍比手写低层机器优化更重要；
+2. E47 last-6 尚未干净迁移到 E45 的 N>20 scalar CRT path；
+3. last-5/6 收益表明 last-7/8 仍值得一次有 kill gate 的扩展；
+4. E13/E30 只否定 dense/site-level cost model，未否定由 actual sparse
+   macro cost 驱动的离线 treeSA；
+5. treeSA 搜索时间可按用户要求排除，但获胜路径的 contraction execution
+   不能排除任何 setup/materialization/reduction；
+6. 不同 N 的最优路径是否共享 normalized cut/tree motif 必须单独验证，
+   不能从小 N 最优直接假定可迁移到大 N。
+
+### T.2 E51–E55
+
+| ID | 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E51 | **clean scalar-CRT last-6 migration** | E45 1--4 prime backend 的每个 node 使用 E47 certified last-6；prime/N!/CRT 证明不变；不得合入 E50 intrinsics | 高 / 2 | forced 2/3/4 lanes 在 N=16--18 两档相对 last-4 快 10%；residues/work identical；scalar-u64 path 不回退 | 两档收益 <5%、任一 residue mismatch，或代码把 AVX candidate 混入 |
+| E52 | **C-generated last-7/last-8 terminal supernode** | 由 `CertifiedSecViTailPlan` 组合完整 7/8-row subtree；逐 boundary 与 generic recursive C replay；checked promotion 保留 | 中高 / 3 | k=6/7/8 中 N=16--18 两档再快 8%；binary/compile 增幅 <30% | 两档收益 <3%、code-size explosion，或 replay mismatch |
+| E53 | **actual-sparse macro treeSA（离线搜索）** | tree leaves/edges 只允许 explicit-C site、half-row、row、terminal macros；每个候选 tree 覆盖所有 virtual bonds 和 v0/v1/v2；winning tree exact execute | 中低 / 5 | N=10--16 至少两档 winning-path execution 比 E52 baseline 快 15% 或 peak support/materialization 降 25%；search time不计 | 只有 dense proxy 改善、actual execution不降，或 interface 无法 exact materialize |
+| E54 | **跨 N tree motif 提取与冻结迁移** | 从 E53 各 N 最优树提取 normalized cut depth、subtree balance、macro sequence；目标 N=17/18 禁止重新搜索，只加载冻结 motif | 低 / 5 | transferred path 在 N=15--18 距 per-N searched best ≤5%，且两档比 row baseline 快 10%；给出可复查共性规律 | 小 N trees 无稳定 motif、迁移回退 >10%，或 target 必须重新 treeSA |
+| E55 | **treeSA-cut 上的 D4 stabilizer 消融** | 仅当 E53/E54 产生非 row cut 时启动；显式计算该 cut 的 D4 stabilizer/orbit weights；none/vertical/full 与同一 tree 对照 | 低 / 5 | 相对 treeSA+vertical 两档 nodes 降 20% 或 wall 降 15%，所有 orbit counts exact | 新 cut 仍只有 row-cut stabilizer、增量 nodes <10%，或任何 orbit replay mismatch |
+
+### T.3 treeSA 搜索协议
+
+1. 先以 N=10--12 的 explicit-C exact executor校准每种 macro edge 的
+   actual output support、candidate entries、peak live bytes 和 kernel
+   ns/entry；
+2. treeSA state 是合法 contraction tree；move set 仅含 subtree rotation、
+   macro regroup 和合法 separator exchange，不改 tensor values；
+3. objective 同时报告 estimated cost 与 winner 的 actual execution；
+   禁止只凭 treewidth/FLOP proxy KEEP；
+4. 搜索时间、proposal 数和 seed仍记录到 raw CSV，但不计入用户指定的
+   solver wall comparison；
+5. 每个 N 至少使用多个 deterministic seeds，保存 winner tree 的
+   machine-readable serialization、cut widths 和 actual sparse trace；
+6. E54 的 source N 与 target N 预先分离；看到 N=17/18 结果后不得回改
+   motif extraction rule；
+7. treeSA winner仍必须通过 B/C 17-entry、boundary、generic-C replay、
+   independent oracle 和 known Q(N) tests。
+
+### T.4 执行与停止规则
+
+1. 严格按 E51 → E52 → E53 → E54 → E55，每项独立 worktree/branch；
+2. E53 即使 REJECT，也必须保留 searched trees、seeds、estimated/actual
+   cost scatter 和失败机制；不能只留最佳数字；
+3. E54/E55 的 dependency 不成立时按 dependency REJECT 归档，不临时
+   偷换成第六方向；
+4. full D4 的比较基线必须是相同 tree 的 vertical mode，不得引用 vs none
+   制造增益；
+5. checkpoint 继续固定 Ryzen 9 7945HX、rustc 1.94、release/thin-LTO、
+   8 threads；raw CSV 存 `benchmarks/`；
+6. 完成 E55 后执行下一次 five-direction review；复盘前不得启动 E56。
+   当前检查点停在 E50，E51 尚未开始。
+
+## U. 暂缓 treeSA 后的 E51–E55 cache 路线（2026-07-29）
+
+用户在 E51 启动前要求暂缓 treeSA，优先寻找当前 production 的 CPU
+cache-friendly 优化。故本节在不删除历史计划 §T 的前提下，**取代**
+§T.2--T.4 作为 E51--E55 的执行计划；treeSA、跨 N motif 和 treeSA-cut
+D4 均不在本轮启动。
+
+### U.1 hot-path 判断与五个方向
+
+当前 last-6 recursive tail 的子树状态只含三个 `u64` mask，绝大多数
+节点没有 heap 访问；所以不能把任意 arithmetic 微调冒充 cache 优化。
+本轮只接受能明确改变 task working set、cache-line ownership、局部结果
+working set 或 hot code footprint 的方向：
+
+| ID | cache 方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E51 | **packed direct-sector task tape** | 将 `BoundaryState + orbit_weight` 从 32-byte AoS 编码为 N<=20 可逆的单个 `u64`；三个 N-bit virtual boundaries 和 vertical-orbit weight 逐 task round-trip；执行仍调用 certified last-6 | 高 / 2 | task bytes 至少降 2x，且 N=16--18 两档 wall 降 5% 或 RSS 降 15% 且 wall 不退化 >2% | 任一 task/count/work replay mismatch，或 wall 两档退化 >3% |
+| E52 | **cache-capacity-aware prefix cut** | 只改变 C-derived prefix 停止位置；所有 sectors 不重不漏；以 E51 实际 task bytes 和预注册 cache budget 选 cut，不读取 known Q(N) 或 benchmark winner | 高 / 2 | N=16--18 两档 wall 降 5%，或 RSS 降 20% 且 wall 不退化 >2%；规则跨 N 固定 | 与手调 target 相比无稳定收益、并行不足，或只对一个 N 特判 |
+| E53 | **cache-line tiled task ownership** | packed task tape 每个 task 只被一个 worker消费；比较 aligned dynamic tiles 与无 atomic 的 contiguous/block-cyclic ownership；exact partial reduction不变 | 高 / 2 | N=16--18 两档 wall 降 5% 或 p90 降 10%；task visits 精确等于 task count | load imbalance 抵消 locality、两档收益 <2%，或重复/遗漏 task |
+| E54 | **per-worker bounded tagged suffix cache** | 仅缓存相同 explicit-C virtual boundary、remaining rows 和 board size 的 exact u64 completion；tag 完整比较，collision 只 miss；固定容量、无跨线程共享；cache-off replay | 中 / 4 | N=16--18 两档 wall 降 8% 或 recursive node work 降 15%，每 worker cache 不超过 512 KiB | hit rate <3%、wall 退化 >3%、容量超限，或任一 tagged hit/replay mismatch |
+| E55 | **last-6 hot-code / I-cache shaping** | 只改变 certified last-4/5/6 的 inline boundary与代码布局；same-revision 保留现有 fully-inline control；逐 N 与 generic C replay | 中高 / 3 | N=16--18 两档 wall 降 5%，且 executable/hot text 不增；或 executable 降 10% 且 wall 不退化 >2% | call overhead 大于 I-cache 收益、两档收益 <2%，或 code layout 影响 exact replay |
+
+### U.2 预注册 benchmark 与消融
+
+1. 严格按 E51 → E52 → E53 → E54 → E55；每项独立
+   worktree/`codex/exp-*` branch。每个 KEEP 才进入后续 production；
+   REJECT 只合入报告和 raw CSV。
+2. 每项至少跑 N=16/17 的同 revision control/candidate；通过早期 gate
+   才跑 N=18。正式 policy：N=16/17 为 1 warmup + 5 repeats，
+   N=18 为 1 warmup + 3 repeats；系统双峰时增加样本而不挑最快值。
+3. 固定 Ryzen 9 7945HX、rustc 1.94、release/thin-LTO、
+   `codegen-units=1`、8 threads。wall 报 median/min/p10/p90，RSS 继续用
+   Windows `PeakWorkingSet64`，并记录 task count/bytes、split depth、
+   accepted C entries 和 exact count。
+4. E51 必须静态断言 packed task size，并对 N=1--20 生成的每个 prefix
+   task做 pack/unpack；weight 位不得覆盖任何 virtual bond。
+5. E52 预注册 cache budget grid 为每 worker 32/64/128/256 KiB；选择器
+   只看下一完整 C row 的 task bytes 和 `threads*64` 的并行下限。
+6. E53 tile grid 为 1/2/4/8/16 个 64-byte cache lines；static contiguous
+   与 block-cyclic 都必须报告 worker task/node imbalance。
+7. E54 只试 4/16/64/256 KiB per-worker direct-mapped 或 2-way tagged
+   tables；key 必须无损包含三个 masks、N 与 remaining rows；禁止概率性
+   结果、无 tag cache 或已知 suffix 表。
+8. E55 比较 fully-inline、regular-inline 与 noinline boundary；记录
+   release executable bytes、clean build time 和 runtime，禁止用
+   `target-cpu=native` 等额外 compiler flag混淆结果。
+9. 五项都完成后执行强制复盘并 push；本轮按用户要求连续执行，但在
+   E55 复盘完成前不得启动 E56。当前仍停在 E50，尚未启动 E51。
+
+## V. E51–E55 cache 复盘后的修订（2026-07-29）
+
+完整复盘和 Samply hotspot 分析见 `REPORT.md` §38。E51 packed task、
+E52 cache-budget cut、E53 cache-line ownership、E54 suffix cache 和
+E55 I-cache shaping 全部 REJECT；production 仍为 E46 direct scalar-u64
++ E47 certified last-6。treeSA 按用户要求继续暂缓。
+
+### V.1 推翻的假设与新判断
+
+E51--E55 共同否定“剩余时间主要受普通 CPU cache locality 限制”：
+
+1. task bytes 缩小 4x、RSS 缩小 22%--40%、worker node imbalance 从约
+   56% 降到 1.7%，都没有产生稳定 wall 收益；
+2. lossless suffix cache 最大命中率低于 0.28%，不存在足够 temporal
+   reuse 来覆盖 lookup 成本；
+3. hot `.text` 缩小不足 0.4% 时 runtime 反而慢 4%--18%，fully-inline
+   的收益来自减少 call/control/state movement，而非牺牲 I-cache；
+4. Samply 把 production 99.979262% leaf samples 定位到
+   `contract_certified_tail_last_k_u64::<6>`；该函数承载必要的指数
+   C-state expansion，不是一个可整体删除的 wrapper；
+5. 下一轮必须直接降低热点每 node 的动态指令/依赖，或证明一种新的 exact
+   表示能降低 node 数。普通 task/cache 微调不再有优先级。
+
+### V.2 E56–E60 候选方向
+
+| ID | profile 驱动方向 | exact PEPS 义务 | 可行性 / 难度 | keep gate | kill gate |
+|:---|:---|:---|:---:|:---|:---|
+| E56 | **C-certified last-7/last-8 terminal expansion** | 从 `CertifiedSecViTailPlan` 生成完整 7/8-row subtree；每个 boundary 与 generic recursive C replay；column v1、diagonal v2 和 checked promotion不变 | 高 / 3 | k=6/7/8 中 N=16--18 两档快 5%，`.text`/clean build 增幅 <30% | 两档收益 <2%、出现 spill/code explosion，或 replay mismatch |
+| E57 | **factorial-bounded infallible u64 hot kernel** | 启动前证明每个非负 partial completion ≤ `remaining!` 且 N<=20 全局 ≤`N!<2^64`；人工小 limit必须走原 checked/CRT replay；禁止未证明的 wrapping/unchecked arithmetic | 中高 / 4 | N=16--18 两档快 5%，same-node/work；forced fallback exact | 编译器已消除等价 checks使收益 <2%，证明不能覆盖 orbit weight/sector reduction，或任何 overflow gate失效 |
+| E58 | **source-generated depth-specific scalar kernel** | 只重排同一 certified C transitions；为每个 remaining depth生成单出口 nested loop/cold promotion；逐 boundary 对照 E56/reference | 中 / 4 | 相对 E56 两档再快 5%，branch/call 与 code-size 静态证据一致 | `.text` 增 >40%、register spill 抵消收益、两档收益 <2%，或生成器无法审计 |
+| E59 | **2/4-sector scalar ILP interleave** | 每个 lane 是完整不重叠 C boundary；不改变 lane 内 transition；逐 lane count、orbit weight、accepted work 与 serial reference一致 | 中 / 4 | N=16--18 两档快 8%，有效 active lanes >75%，RSS 增 <10% | 重现 E49 divergence，收益 <3%，compiler spills，或 lane replay mismatch |
+| E60 | **先认证复用的 symmetry-canonical suffix** | 在加 cache 前，先构造 remaining subnetwork 的实际 stabilizer与 lossless canonical key；none/vertical/canonical 逐状态 replay；只有测得复用率后才计时 cache | 低 / 5 | N=14--17 至少两档 canonical duplicate rate >10%，随后 wall/nodes 降 8% | stabilizer只剩 identity、duplicate rate <3%、canonicalization成本高于省下 work，或 orbit weight错误 |
+
+### V.3 执行、消融与停止规则
+
+1. E56--E60 若启动，继续严格一项一个 worktree/branch；只有 KEEP 代码进入
+   production，所有 raw CSV/报告进入 main。
+2. 顺序为 E56 → E57 → E58 → E59 → E60；E57/E58 都以最佳保留的
+   terminal depth为 baseline，不得把相互收益重复计算。
+3. E56/E58 必须记录 clean release build time、PE `.text`、hot function
+   layout、N=16/17 formal 和通过 gate 后的 N=18；监控 register spill 时
+   只能陈述实际 assembly，不得在 PMU 不可用时猜 miss rate。
+4. E57 的证明是代码启动条件；普通 release overflow-check disabled 不能
+   代替数学证明或人工 forced fallback test。
+5. E59 先做 scalar ILP，不复活 E49/E50 explicit AVX2；记录 active-lane
+   histogram、task/node count和 per-lane exact replay。
+6. E60 不得先分配大 cache再寻找命中；必须先离线证明 chosen canonical
+   equivalence 与实际 duplicate rate，且 full D4 基线仍须相对 vertical，
+   不能引用 vs none 夸大收益。
+7. formal protocol 继续固定 Ryzen 9 7945HX、rustc 1.94、
+   release/thin-LTO/codegen-units=1、8 threads；N=16/17 为 1+5，
+   N=18 为 1+3；同 revision paired control，报告 median/min/p10/p90、
+   RSS、support、C entries和 exact count。
+8. treeSA 仍不在 E56--E60 内；只有用户重新启用，或上述 profile-driven
+   常数路线全部触发 kill 后，才依据 §T 的 actual-sparse protocol重排优先级。
+9. 完成 E60 后再次执行 five-direction review；当前检查点严格停在 E55，
+   E56 尚未开始。
+
+## W. E56–E60 hotspot 复盘后的暂停与转向（2026-07-29）
+
+完整复盘见 `REPORT.md` §39。E56--E59 全部 REJECT；E60 online
+canonical optimization REJECT、exact diagnostic KEEP。production仍是
+E46 direct scalar-u64 + E47 certified last-6。
+
+### W.1 热点优化判定
+
+1. last-7、deferred overflow、generated fixed depths 的最佳两档收益分别
+   只有约 1.9%/3.8%、-0.3%/1.3%、0.9%/4.0%；
+2. scalar ILP 因 47%--70% lane utilization 退化 16%--25%；
+3. vertical canonical extra duplicates 在 even N 几乎为零，odd N 约5%，
+   没有两档达到 10%；
+4. 99.979% symbol hotspot 的主体是必须执行的 low-reuse explicit-C
+   transitions。现有 scalar last-6 附近仍可能有几个百分点常数，但没有
+   稳定两位数收益证据；
+5. 不再自动注册 E61--E65 同类 CPU 微优化。下一阶段必须选择能减少
+   nodes/support 的 contraction representation，或使用显著不同的
+   exact parallel throughput平台。
+
+### W.2 可选转向及启动条件
+
+| 候选 | 可行性 / 难度 | 启动前证据 | 主要 gate |
+|:---|:---:|:---|:---|
+| actual-sparse greedy/treeSA separator path | 中低 / 5 | 用户重新启用 treeSA；macro edge有 actual support/node cost而非 dense FLOP proxy | frozen winning execution 两档快 15% 或 support降 25% |
+| explicit-C meet-in-the-middle separator join | 低 / 5 | 完整列出 cut bonds、v0/v1/v2 endpoints和exact join key | N=12--16 两档 nodes/time降 20%，RSS有可扩展上界 |
+| odd-N center-orbit vertical merge | 高 / 2 | 仅以 E60 measured 5%复用为上界，不外推 even N | odd N wall快 3%，even N不退化 >1% |
+| finite-field GPU/many-core tail | 中低 / 5 | certified per-prime kernel、设备整数吞吐和transfer budget | N=17/18 execution快 3x，所有 residues/CRT replay exact |
+| new symmetry-canonical representation | 低 / 5 | 在线实现前先证明两档 actual duplicates/node reduction >10% | wall/nodes两档降 8%，canonical cost/RSS受限 |
+
+### W.3 停止规则
+
+1. 当前严格停在 E60 checkpoint；没有用户方向选择前不启动 E61。
+2. 若恢复 treeSA，沿用 §T actual-sparse protocol，搜索时间可排除但
+   winning contraction execution 的全部 setup/materialization必须计入。
+3. meet-in-the-middle 或新 symmetry 路线必须先完成 explicit B/C、
+   boundary与separator fidelity proof；不能把 conventional DFS split
+   改名为 PEPS。
+4. odd-N merge只能作为 parity-specific小优化，不能引用 odd N 5%复用
+   宣称全 N scaling 改善。
+5. 任何 GPU/many-core结果必须用 certified finite-field/CRT，不得使用
+   float、rounding、SVD 或概率性 hash count。
