@@ -38,11 +38,15 @@ down-left output enters `c-1`; each orientation moves its `v0` and `v2`
 endpoints together.
 
 Compression first left-canonicalizes the MPS by QR, then sweeps right-to-left
-with LAPACK SVD. Each factorization retains at most `chi` numerical singular
-directions. `chi=0` means no user cap and exists only for small-N geometry
-checks; numerical null directions below the standard rank tolerance are still
-removed. Reported discarded Frobenius fractions are local diagnostics, not a
-rigorous global error bound.
+with LAPACK SVD. Each diagonal-wire SWAP first places the mixed-canonical
+orthogonality center on that bond, so its two-site SVD truncates actual Schmidt
+directions rather than a gauge-dependent local factor. Splitting one
+physical-dimension-eight site into its three labeled qubits is exact (up to
+floating numerical-rank removal); `chi` is applied only at canonical MPS cuts.
+`chi=0` means no user cap and exists only for small-N geometry checks.
+Reported discarded Frobenius fractions are local diagnostics, not a rigorous
+global error bound. `peak_working_bond` includes the temporary exact site split,
+while `peak_retained_bond` records capped canonical checkpoints.
 
 ## Preregistered validation and sweep
 
@@ -68,4 +72,26 @@ bond dimensions are the applicable representation-size metrics.
 
 ## Results
 
-Pending local validation and SCNet measurement.
+### Rejected non-canonical pilot
+
+Revision `41133e1` applied the bond cap while splitting local physical sites
+and during adjacent SWAP factorizations without first placing the global MPS
+orthogonality center on the affected bond. Its uncapped N=0--7 tests all
+passed, but its capped estimates were gauge dependent. On the local Ryzen,
+N=8 at chi=4/8/16 produced approximately 0.342/0.996/1.182; on SCNet EPYC with
+the same source they were approximately 0.0000099/-0.00882/0.00261. The exact
+reference is 92. These are not ordinary timing fluctuations: truncating a
+non-canonical local factor is not a Schmidt truncation, so different valid SVD
+gauges can retain different global subspaces.
+
+SCNet job `41521702` completed the N=5--7 pilot and job `41521877` was cancelled
+after 1m59s when this flaw was identified. Those rows are retained as rejected
+diagnostic evidence and are not used in the final error--speed curves.
+
+The corrected implementation makes the physical-dimension-eight to three-
+qubit split exactly, canonicalizes both environments around every SWAP bond,
+and only then applies the chi-capped two-site SVD. Local results are invariant
+between one and eight OpenBLAS threads for the tested capped points, while the
+uncapped N=0--7 validation remains within the preregistered tolerance.
+
+Final canonical SCNet measurement is pending.

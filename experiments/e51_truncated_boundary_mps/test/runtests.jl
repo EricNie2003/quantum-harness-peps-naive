@@ -1,4 +1,5 @@
 using Test
+using LinearAlgebra
 using TruncatedBoundaryMPS
 
 @testset "explicit Sec. VI tensors" begin
@@ -66,6 +67,20 @@ end
     @test isfinite(result.estimate)
     @test result.stats.truncated_svd_calls > 0
     @test result.stats.peak_retained_bond <= 2
+    @test result.stats.peak_working_bond >= result.stats.peak_retained_bond
     @test result.stats.max_discarded_fraction >= 0.0
     @test result.stats.sum_discarded_fraction >= result.stats.max_discarded_fraction
+end
+
+@testset "canonical truncation is BLAS-thread invariant" begin
+    previous_threads = BLAS.get_num_threads()
+    try
+        BLAS.set_num_threads(1)
+        serial = contract_truncated(5, 8).estimate
+        BLAS.set_num_threads(min(Sys.CPU_THREADS, 4))
+        threaded = contract_truncated(5, 8).estimate
+        @test isapprox(threaded, serial; rtol = 1e-12, atol = 1e-12)
+    finally
+        BLAS.set_num_threads(previous_threads)
+    end
 end

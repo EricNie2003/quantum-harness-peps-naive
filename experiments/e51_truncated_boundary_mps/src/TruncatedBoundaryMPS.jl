@@ -178,6 +178,7 @@ Base.@kwdef mutable struct TruncationStats
     truncated_svd_calls::Int = 0
     peak_pretruncate_rank::Int = 1
     peak_retained_bond::Int = 1
+    peak_working_bond::Int = 1
     peak_mps_elements::Int = 0
     max_discarded_fraction::Float64 = 0.0
     sum_discarded_fraction::Float64 = 0.0
@@ -212,8 +213,12 @@ function max_bond(mps::MPS)
     return maximum(max(size(site, 1), size(site, 3)) for site in mps)
 end
 
-function observe_mps!(stats::TruncationStats, mps::MPS)
-    stats.peak_retained_bond = max(stats.peak_retained_bond, max_bond(mps))
+function observe_mps!(stats::TruncationStats, mps::MPS; retained_checkpoint::Bool = false)
+    working_bond = max_bond(mps)
+    stats.peak_working_bond = max(stats.peak_working_bond, working_bond)
+    if retained_checkpoint
+        stats.peak_retained_bond = max(stats.peak_retained_bond, working_bond)
+    end
     stats.peak_mps_elements = max(stats.peak_mps_elements, sum(length, mps))
     return nothing
 end
@@ -254,16 +259,15 @@ function truncated_svd(matrix::Matrix{Float64}, chi::Int, stats::TruncationStats
     if retained < numerical_rank
         stats.truncated_svd_calls += 1
     end
-    stats.peak_retained_bond = max(stats.peak_retained_bond, retained)
-
     left = Matrix(@view factors.U[:, 1:retained])
     values = Vector(@view singular_values[1:retained])
     right = Matrix(@view factors.Vt[1:retained, :])
     return left, values, right
 end
 
-function left_canonicalize!(mps::MPS)
-    for index in 1:(length(mps) - 1)
+function left_canonicalize_through!(mps::MPS, final_index::Int)
+    final_index <= 0 && return mps
+    for index in 1:min(final_index, length(mps) - 1)
         site = mps[index]
         left, physical, right = size(site)
         matrix = reshape(site, left * physical, right)
@@ -286,9 +290,43 @@ function left_canonicalize!(mps::MPS)
     return mps
 end
 
+function right_canonicalize_from!(mps::MPS, first_index::Int)
+    first_index > length(mps) && return mps
+    for index in length(mps):-1:max(first_index, 2)
+        site = mps[index]
+        left, physical, right = size(site)
+        matrix = reshape(site, left, physical * right)
+        factors = qr(Matrix(transpose(matrix)))
+        new_left = min(size(matrix)...)
+        q = Matrix(factors.Q[:, 1:new_left])
+        r = Matrix(factors.R[1:new_left, :])
+        mps[index] = reshape(Matrix(transpose(q)), new_left, physical, right)
+
+        previous = mps[index - 1]
+        size(previous, 3) == left || error("MPS bond mismatch during right QR sweep")
+        previous_matrix = reshape(previous, :, left)
+        transfer = Matrix(transpose(r))
+        mps[index - 1] = reshape(
+            previous_matrix * transfer,
+            size(previous, 1),
+            size(previous, 2),
+            new_left,
+        )
+    end
+    return mps
+end
+
+"""Place the mixed-canonical orthogonality center on a two-site bond."""
+function canonicalize_around_bond!(mps::MPS, bond::Int)
+    1 <= bond < length(mps) || throw(BoundsError(mps, bond))
+    left_canonicalize_through!(mps, bond - 1)
+    right_canonicalize_from!(mps, bond + 2)
+    return mps
+end
+
 function compress_mps!(mps::MPS, chi::Int, stats::TruncationStats)
     length(mps) <= 1 && return mps
-    left_canonicalize!(mps)
+    left_canonicalize_through!(mps, length(mps) - 1)
     for index in length(mps):-1:2
         site = mps[index]
         left, physical, right = size(site)
@@ -308,7 +346,7 @@ function compress_mps!(mps::MPS, chi::Int, stats::TruncationStats)
             retained,
         )
     end
-    observe_mps!(stats, mps)
+    observe_mps!(stats, mps; retained_checkpoint = true)
     return mps
 end
 
@@ -359,19 +397,22 @@ function apply_row_mpo(
     return output
 end
 
-function split_site(site::Tensor3, chi::Int, stats::TruncationStats)
+function split_site(site::Tensor3, stats::TruncationStats)
     left, physical, right = size(site)
     physical == 8 || error("split_site expects physical dimension 8")
 
     first_matrix = reshape(site, left * 2, 4 * right)
-    first, first_values, first_right = truncated_svd(first_matrix, chi, stats)
+    # The three qubits are an exact rewriting of one physical-dimension-eight
+    # site. Do not impose chi on these artificial intra-site bonds; truncation
+    # is performed only at globally canonical MPS cuts.
+    first, first_values, first_right = truncated_svd(first_matrix, 0, stats)
     rank_one = length(first_values)
     column_site = reshape(first, left, 2, rank_one)
     remainder = (reshape(first_values, rank_one, 1) .* first_right)
     remainder = reshape(remainder, rank_one, 4, right)
 
     second_matrix = reshape(remainder, rank_one * 2, 2 * right)
-    second, second_values, second_right = truncated_svd(second_matrix, chi, stats)
+    second, second_values, second_right = truncated_svd(second_matrix, 0, stats)
     rank_two = length(second_values)
     diag_right_site = reshape(second, rank_one, 2, rank_two)
     diag_left_site = reshape(
@@ -388,13 +429,13 @@ struct WireLabel
     column::Int
 end
 
-function split_all(mps::MPS, n::Int, chi::Int, stats::TruncationStats)
+function split_all(mps::MPS, n::Int, stats::TruncationStats)
     qubits = MPS()
     labels = WireLabel[]
     sizehint!(qubits, 3 * n)
     sizehint!(labels, 3 * n)
     for column in 1:n
-        append!(qubits, split_site(mps[column], chi, stats))
+        append!(qubits, split_site(mps[column], stats))
         append!(labels, (
             WireLabel(:column, column),
             WireLabel(:diag_right, column),
@@ -406,6 +447,10 @@ function split_all(mps::MPS, n::Int, chi::Int, stats::TruncationStats)
 end
 
 function swap_adjacent!(mps::MPS, left_index::Int, chi::Int, stats::TruncationStats)
+    # A two-site SVD is a Schmidt truncation only when the left and right
+    # environments are orthonormal. This mixed-canonical placement removes the
+    # gauge dependence of the original E51 pilot.
+    canonicalize_around_bond!(mps, left_index)
     left_site = mps[left_index]
     right_site = mps[left_index + 1]
     left_outer, left_physical, middle = size(left_site)
@@ -420,6 +465,7 @@ function swap_adjacent!(mps::MPS, left_index::Int, chi::Int, stats::TruncationSt
     matrix = reshape(swapped, left_outer * 2, 2 * right_outer)
     u, singular_values, vt = truncated_svd(matrix, chi, stats)
     retained = length(singular_values)
+    stats.peak_retained_bond = max(stats.peak_retained_bond, retained)
     mps[left_index] = reshape(u, left_outer, 2, retained)
     mps[left_index + 1] = reshape(
         reshape(singular_values, retained, 1) .* vt,
@@ -475,7 +521,7 @@ function merge_adjacent(first::Tensor3, second::Tensor3)
 end
 
 function shift_diagonals(mps::MPS, n::Int, chi::Int, stats::TruncationStats)
-    qubits, labels = split_all(mps, n, chi, stats)
+    qubits, labels = split_all(mps, n, stats)
     removals = Int[
         something(findfirst(==(WireLabel(:diag_right, n)), labels)),
         something(findfirst(==(WireLabel(:diag_left, 1)), labels)),
@@ -585,7 +631,7 @@ function contract_truncated(n::Integer, chi::Integer)
         site[1, 1, 1] = 1.0 # column/diagonal incoming v0 signals
         push!(boundary, site)
     end
-    observe_mps!(stats, boundary)
+    observe_mps!(stats, boundary; retained_checkpoint = true)
 
     estimate = NaN
     for row in 1:n

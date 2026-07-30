@@ -58,12 +58,12 @@ function run()
         "algorithm_class,N,chi,status,estimate,exact_count,absolute_error,relative_error," *
         "median_elapsed_s,min_elapsed_s,max_elapsed_s,estimate_min,estimate_max,repeats,warmup," *
         "peak_rss_bytes,peak_sparse_support,peak_dense_mps_elements,peak_retained_bond," *
-        "peak_pretruncate_rank,svd_calls,truncated_svd_calls,max_discarded_fraction," *
+        "peak_working_bond,peak_pretruncate_rank,svd_calls,truncated_svd_calls,max_discarded_fraction," *
         "sum_discarded_fraction,svd_elapsed_s,tensor_entries_examined,tensor_entries_accepted," *
         "blas_threads,julia_threads,truncation_occurred",
     )
     @printf(
-        "truncated_boundary_mps_float64,%d,%d,%s,%.17g,%s,%.17g,%.17g,%.9f,%.9f,%.9f,%.17g,%.17g,%d,%d,%d,NA,%d,%d,%d,%d,%d,%.17g,%.17g,%.9f,%s,%s,%d,%d,%s\n",
+        "truncated_boundary_mps_float64,%d,%d,%s,%.17g,%s,%.17g,%.17g,%.9f,%.9f,%.9f,%.17g,%.17g,%d,%d,%d,NA,%d,%d,%d,%d,%d,%d,%.17g,%.17g,%.9f,%s,%s,%d,%d,%s\n",
         n,
         chi,
         status,
@@ -81,6 +81,7 @@ function run()
         maximum(result.peak_rss_bytes for result in results),
         selected.stats.peak_mps_elements,
         selected.stats.peak_retained_bond,
+        selected.stats.peak_working_bond,
         selected.stats.peak_pretruncate_rank,
         selected.stats.svd_calls,
         selected.stats.truncated_svd_calls,
