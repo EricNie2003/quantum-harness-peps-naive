@@ -3175,3 +3175,80 @@ E46 direct scalar-u64 + E47 certified last-6。
    宣称全 N scaling 改善。
 5. 任何 GPU/many-core结果必须用 certified finite-field/CRT，不得使用
    float、rounding、SVD 或概率性 hash count。
+
+## APX1. Truncated boundary-MPS publication diagnostic (2026-07-30)
+
+This diagnostic was created on an isolated branch before that branch had the
+coworker's later E51--E60 history. `origin/main` assigns those IDs to the
+packed-task, cache, generated-kernel, ILP, and suffix-symmetry directions.
+Therefore the canonical identifier here is **APX1**, not E51. The legacy branch,
+directory, job, and CSV names retain `e51` solely so existing hashes and raw
+provenance remain valid. APX1 is not a numbered exact-PEPS optimization and does
+not change or reset the five-direction review gate.
+
+APX1 tests whether the low-rank observation from E15 produces a useful
+accuracy--cost tradeoff in a conventional approximate PEPS contraction.
+
+### APX1.1 Preregistered truncated finite-PEPS boundary MPS
+
+- **Classification:** approximate scientific diagnostic, not an Issue #34
+  exact solver.
+- **Implementation:** generate a row MPO from the explicit 17-entry `C`, apply
+  it to a boundary MPS, use canonical sweeps and SVD with maximum bond
+  dimension `chi`, and translate the two diagonal families with a labeled
+  virtual-qubit SWAP network.
+- **Boundaries:** start every line with `v0`; finish rows and columns with `v1`;
+  finish both diagonal families with `v2`, using the existing row-major
+  orientation.
+- **Validation:** retain all B/C, local truth-table, and boundary tests; an
+  untruncated N<=7 run must match the exact count within a preregistered
+  floating-point tolerance.
+- **Sweep:** `chi=4,8,16,32,64,128`; run local small-N calibration first, then
+  use one fixed SCNet node/BLAS/thread configuration for the N sweep.
+- **Metrics:** unrounded estimate, absolute/relative error, median/min wall,
+  GNU-time and Slurm RSS, peak retained bond, maximum and cumulative discarded
+  Frobenius weight, SVD count, and explicit-C entries examined/accepted.
+- **Kill:** geometry failure without truncation; no overall convergence with
+  increasing `chi`; or the largest `chi` being slower than exact production
+  while still inaccurate.
+- **Decision semantics:** `DIAGNOSTIC_ONLY` or `REJECT` only. Approximate values
+  must never be promoted into the exact production result.
+
+Only a clear and reproducible APX1 singular-spectrum signal could justify a
+later, separately numbered exact low-rank certificate or a new contraction
+path; otherwise the low-rank line stops here.
+
+### APX1.2 Result and research consequence
+
+APX1 is complete and **REJECTED as a counting algorithm; retained only as a
+diagnostic negative result**. The final canonical implementation passed 616
+tests, including explicit 17-entry B/C construction, local truth tables,
+v0/v1/v2 boundaries, uncapped N=0--7 checks, and an independent test-only
+backtracking oracle. All reported capped values remain unrounded Float64
+approximations.
+
+The requested N=14 chi sweep is decisive: chi=4/8/16/32/64/128 gives relative
+errors 1.000000, 0.999996407, 0.999996169, 0.999994254, 0.999984932, and
+0.999963338. Chi=128 takes 198.414 s but estimates only 13.4036 instead of
+365596. On the same EPYC setup the exact three-prime C-derived PEPS control
+takes 0.015146 s median, so the approximate run is about 13,100x slower while
+remaining 99.9963% wrong. At N=13--20 fixed chi=4--16 controls storage and
+runtime growth only by discarding essentially the entire count-carrying
+sector.
+
+The observation overturns the hypothesis that ordinary low floating-point
+Schmidt rank is the next useful mechanism. The N-queens network's exploitable
+structure is instead exact combinatorial sparsity, boundary-sector
+conditioning, and mechanically derived terminal contraction. Optimizing the
+canonical-center bookkeeping might lower APX1's constant but cannot repair its
+measured accuracy collapse.
+
+Therefore:
+
+1. no low-rank or larger-chi direction is authorized by this result;
+2. the current same-node DFS/naive/latest/TreeSA measurement is a reporting and
+   cost-model addendum, not a new optimization direction;
+3. any future numbered PEPS experiment must follow the current `origin/main`
+   post-E60 review and be separately preregistered around a genuinely new
+   exact-support/exponent hypothesis, with the usual explicit-C, boundary,
+   exactness, worktree, benchmark, and kill-gate obligations.

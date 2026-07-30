@@ -1,0 +1,77 @@
+/bin/bash: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+srun: ROUTE: split_hostlist: hl=b10r4n17 tree_width 0
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+srun: ROUTE: split_hostlist: hl=b10r4n17 tree_width 0
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+srun: ROUTE: split_hostlist: hl=b10r4n17 tree_width 0
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+srun: ROUTE: split_hostlist: hl=b10r4n17 tree_width 0
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+srun: ROUTE: split_hostlist: hl=b10r4n17 tree_width 0
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+sh: warning: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+srun: ROUTE: split_hostlist: hl=b10r4n17 tree_width 0
+LAPACKException(1)
+Stacktrace:
+  [1] chklapackerror_positive(::Int64)
+    @ LinearAlgebra.LAPACK ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/lapack.jl:44
+  [2] chklapackerror
+    @ ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/lapack.jl:40 [inlined]
+  [3] gesdd!(job::Char, A::Matrix{Float64})
+    @ LinearAlgebra.LAPACK ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/lapack.jl:1714
+  [4] _svd!
+    @ ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/svd.jl:125 [inlined]
+  [5] svd!(A::Matrix{Float64}; full::Bool, alg::LinearAlgebra.DivideAndConquer)
+    @ LinearAlgebra ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/svd.jl:105
+  [6] svd!
+    @ ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/svd.jl:100 [inlined]
+  [7] svd(A::Matrix{Float64}; full::Bool, alg::LinearAlgebra.DivideAndConquer)
+    @ LinearAlgebra ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/svd.jl:179
+  [8] svd
+    @ ~/.julia/juliaup/julia-1.11.5+0.x64.linux.gnu/share/julia/stdlib/v1.11/LinearAlgebra/src/svd.jl:178 [inlined]
+  [9] truncated_svd(matrix::Matrix{Float64}, chi::Int64, stats::TruncationStats)
+    @ TruncatedBoundaryMPS ~/quantum.harness/tracks/peps/runs/e51-truncated-boundary-mps-48be9f2/src/TruncatedBoundaryMPS.jl:239
+ [10] split_site(site::Array{Float64, 3}, stats::TruncationStats)
+    @ TruncatedBoundaryMPS ~/quantum.harness/tracks/peps/runs/e51-truncated-boundary-mps-48be9f2/src/TruncatedBoundaryMPS.jl:408
+ [11] split_all(mps::Vector{Array{Float64, 3}}, n::Int64, stats::TruncationStats)
+    @ TruncatedBoundaryMPS ~/quantum.harness/tracks/peps/runs/e51-truncated-boundary-mps-48be9f2/src/TruncatedBoundaryMPS.jl:438
+ [12] shift_diagonals(mps::Vector{Array{Float64, 3}}, n::Int64, chi::Int64, stats::TruncationStats)
+    @ TruncatedBoundaryMPS ~/quantum.harness/tracks/peps/runs/e51-truncated-boundary-mps-48be9f2/src/TruncatedBoundaryMPS.jl:524
+ [13] contract_truncated(n::Int64, chi::Int64)
+    @ TruncatedBoundaryMPS ~/quantum.harness/tracks/peps/runs/e51-truncated-boundary-mps-48be9f2/src/TruncatedBoundaryMPS.jl:650
+ [14] run()
+    @ Main ~/quantum.harness/tracks/peps/runs/e51-truncated-boundary-mps-48be9f2/scripts/benchmark_point.jl:40
+ [15] top-level scope
+    @ ~/quantum.harness/tracks/peps/runs/e51-truncated-boundary-mps-48be9f2/scripts/benchmark_point.jl:116
+ [16] include(mod::Module, _path::String)
+    @ Base ./Base.jl:557
+ [17] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:323
+ [18] _start()
+    @ Base ./client.jl:531
+srun: error: b10r4n17: task 0: Exited with exit code 1
+srun: launch/slurm: _step_signal: Terminating StepId=41522520.5

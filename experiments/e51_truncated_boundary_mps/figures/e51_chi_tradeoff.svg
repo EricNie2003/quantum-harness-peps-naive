@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="800" viewBox="0 0 1120 800">
+<rect width="100%" height="100%" fill="#fbfaf7"/>
+<text x="92.00" y="34.00" fill="#17212b" font-size="22" font-weight="700">APX1 boundary-MPS truncation: accuracy and cost versus bond cap</text>
+<text x="92.00" y="86.00" fill="#17212b" font-size="17" font-weight="700">Approximation error</text>
+<rect x="92" y="102" width="1000" height="270" fill="#ffffff" stroke="#bac2c9"/>
+<line x1="92" x2="1092" y1="372.00" y2="372.00" stroke="#e4e7e9"/>
+<text x="82.00" y="377.00" fill="#52606b" font-size="12" text-anchor="end">1e-14</text>
+<line x1="92" x2="1092" y1="352.71" y2="352.71" stroke="#e4e7e9"/>
+<text x="82.00" y="357.71" fill="#52606b" font-size="12" text-anchor="end">1e-13</text>
+<line x1="92" x2="1092" y1="333.43" y2="333.43" stroke="#e4e7e9"/>
+<text x="82.00" y="338.43" fill="#52606b" font-size="12" text-anchor="end">1e-12</text>
+<line x1="92" x2="1092" y1="314.14" y2="314.14" stroke="#e4e7e9"/>
+<text x="82.00" y="319.14" fill="#52606b" font-size="12" text-anchor="end">1e-11</text>
+<line x1="92" x2="1092" y1="294.86" y2="294.86" stroke="#e4e7e9"/>
+<text x="82.00" y="299.86" fill="#52606b" font-size="12" text-anchor="end">1e-10</text>
+<line x1="92" x2="1092" y1="275.57" y2="275.57" stroke="#e4e7e9"/>
+<text x="82.00" y="280.57" fill="#52606b" font-size="12" text-anchor="end">1e-9</text>
+<line x1="92" x2="1092" y1="256.29" y2="256.29" stroke="#e4e7e9"/>
+<text x="82.00" y="261.29" fill="#52606b" font-size="12" text-anchor="end">1e-8</text>
+<line x1="92" x2="1092" y1="237.00" y2="237.00" stroke="#e4e7e9"/>
+<text x="82.00" y="242.00" fill="#52606b" font-size="12" text-anchor="end">1e-7</text>
+<line x1="92" x2="1092" y1="217.71" y2="217.71" stroke="#e4e7e9"/>
+<text x="82.00" y="222.71" fill="#52606b" font-size="12" text-anchor="end">1e-6</text>
+<line x1="92" x2="1092" y1="198.43" y2="198.43" stroke="#e4e7e9"/>
+<text x="82.00" y="203.43" fill="#52606b" font-size="12" text-anchor="end">1e-5</text>
+<line x1="92" x2="1092" y1="179.14" y2="179.14" stroke="#e4e7e9"/>
+<text x="82.00" y="184.14" fill="#52606b" font-size="12" text-anchor="end">1e-4</text>
+<line x1="92" x2="1092" y1="159.86" y2="159.86" stroke="#e4e7e9"/>
+<text x="82.00" y="164.86" fill="#52606b" font-size="12" text-anchor="end">1e-3</text>
+<line x1="92" x2="1092" y1="140.57" y2="140.57" stroke="#e4e7e9"/>
+<text x="82.00" y="145.57" fill="#52606b" font-size="12" text-anchor="end">1e-2</text>
+<line x1="92" x2="1092" y1="121.29" y2="121.29" stroke="#e4e7e9"/>
+<text x="82.00" y="126.29" fill="#52606b" font-size="12" text-anchor="end">1e-1</text>
+<line x1="92" x2="1092" y1="102.00" y2="102.00" stroke="#e4e7e9"/>
+<text x="82.00" y="107.00" fill="#52606b" font-size="12" text-anchor="end">1e0</text>
+<path d="M 92.00 102.09 L 258.67 102.05 L 425.33 102.18 L 592.00 102.37 L 758.67 103.43 L 925.33 109.50 L 1092.00 353.87" fill="none" stroke="#0b6e99" stroke-width="2"/>
+<circle cx="92.00" cy="102.09" r="4" fill="#0b6e99"/>
+<circle cx="258.67" cy="102.05" r="4" fill="#0b6e99"/>
+<circle cx="425.33" cy="102.18" r="4" fill="#0b6e99"/>
+<circle cx="592.00" cy="102.37" r="4" fill="#0b6e99"/>
+<circle cx="758.67" cy="103.43" r="4" fill="#0b6e99"/>
+<circle cx="925.33" cy="109.50" r="4" fill="#0b6e99"/>
+<circle cx="1092.00" cy="353.87" r="4" fill="#0b6e99"/>
+<path d="M 92.00 102.00 L 258.67 102.00 L 425.33 102.00 L 592.00 102.00 L 758.67 102.00 L 925.33 102.00" fill="none" stroke="#c24b35" stroke-width="2"/>
+<circle cx="92.00" cy="102.00" r="4" fill="#c24b35"/>
+<circle cx="258.67" cy="102.00" r="4" fill="#c24b35"/>
+<circle cx="425.33" cy="102.00" r="4" fill="#c24b35"/>
+<circle cx="592.00" cy="102.00" r="4" fill="#c24b35"/>
+<circle cx="758.67" cy="102.00" r="4" fill="#c24b35"/>
+<circle cx="925.33" cy="102.00" r="4" fill="#c24b35"/>
+<text x="92.00" y="448.00" fill="#17212b" font-size="17" font-weight="700">Median contraction time (s)</text>
+<rect x="92" y="464" width="1000" height="270" fill="#ffffff" stroke="#bac2c9"/>
+<line x1="92" x2="1092" y1="734.00" y2="734.00" stroke="#e4e7e9"/>
+<text x="82.00" y="739.00" fill="#52606b" font-size="12" text-anchor="end">1e-2</text>
+<line x1="92" x2="1092" y1="680.00" y2="680.00" stroke="#e4e7e9"/>
+<text x="82.00" y="685.00" fill="#52606b" font-size="12" text-anchor="end">1e-1</text>
+<line x1="92" x2="1092" y1="626.00" y2="626.00" stroke="#e4e7e9"/>
+<text x="82.00" y="631.00" fill="#52606b" font-size="12" text-anchor="end">1e0</text>
+<line x1="92" x2="1092" y1="572.00" y2="572.00" stroke="#e4e7e9"/>
+<text x="82.00" y="577.00" fill="#52606b" font-size="12" text-anchor="end">1e1</text>
+<line x1="92" x2="1092" y1="518.00" y2="518.00" stroke="#e4e7e9"/>
+<text x="82.00" y="523.00" fill="#52606b" font-size="12" text-anchor="end">1e2</text>
+<line x1="92" x2="1092" y1="464.00" y2="464.00" stroke="#e4e7e9"/>
+<text x="82.00" y="469.00" fill="#52606b" font-size="12" text-anchor="end">1e3</text>
+<path d="M 92.00 687.31 L 258.67 670.14 L 425.33 655.60 L 592.00 626.03 L 758.67 589.44 L 925.33 564.35 L 1092.00 567.67" fill="none" stroke="#0b6e99" stroke-width="2"/>
+<circle cx="92.00" cy="687.31" r="4" fill="#0b6e99"/>
+<circle cx="258.67" cy="670.14" r="4" fill="#0b6e99"/>
+<circle cx="425.33" cy="655.60" r="4" fill="#0b6e99"/>
+<circle cx="592.00" cy="626.03" r="4" fill="#0b6e99"/>
+<circle cx="758.67" cy="589.44" r="4" fill="#0b6e99"/>
+<circle cx="925.33" cy="564.35" r="4" fill="#0b6e99"/>
+<circle cx="1092.00" cy="567.67" r="4" fill="#0b6e99"/>
+<path d="M 92.00 643.23 L 258.67 625.96 L 425.33 608.26 L 592.00 573.36 L 758.67 534.71 L 925.33 501.93" fill="none" stroke="#c24b35" stroke-width="2"/>
+<circle cx="92.00" cy="643.23" r="4" fill="#c24b35"/>
+<circle cx="258.67" cy="625.96" r="4" fill="#c24b35"/>
+<circle cx="425.33" cy="608.26" r="4" fill="#c24b35"/>
+<circle cx="592.00" cy="573.36" r="4" fill="#c24b35"/>
+<circle cx="758.67" cy="534.71" r="4" fill="#c24b35"/>
+<circle cx="925.33" cy="501.93" r="4" fill="#c24b35"/>
+<text x="92.00" y="762.00" fill="#34424e" font-size="13" text-anchor="middle">4</text>
+<text x="258.67" y="762.00" fill="#34424e" font-size="13" text-anchor="middle">8</text>
+<text x="425.33" y="762.00" fill="#34424e" font-size="13" text-anchor="middle">16</text>
+<text x="592.00" y="762.00" fill="#34424e" font-size="13" text-anchor="middle">32</text>
+<text x="758.67" y="762.00" fill="#34424e" font-size="13" text-anchor="middle">64</text>
+<text x="925.33" y="762.00" fill="#34424e" font-size="13" text-anchor="middle">128</text>
+<text x="1092.00" y="762.00" fill="#34424e" font-size="13" text-anchor="middle">no cap</text>
+<text x="592.00" y="790.00" fill="#17212b" font-size="15" text-anchor="middle">Maximum MPS bond dimension chi</text>
+<circle cx="92.00" cy="70.00" r="4" fill="#0b6e99"/>
+<text x="102.00" y="74.00" fill="#34424e" font-size="12">N=8</text>
+<circle cx="164.00" cy="70.00" r="4" fill="#c24b35"/>
+<text x="174.00" y="74.00" fill="#34424e" font-size="12">N=14</text>
+</svg>

@@ -1922,3 +1922,33 @@ hot-kernel微调可能继续产生 1%--4%，但已不值得连续占用五方向
 - `benchmarks/e59_scalar_ilp_formal.csv`
 - `experiments/e60_symmetry_suffix/REPORT.md`
 - `benchmarks/e60_vertical_suffix_audit.csv`
+
+## APX1. Conventional finite boundary-MPS truncation diagnostic
+
+APX1 is a separate approximate publication diagnostic, not a numbered exact
+PEPS optimization. Its legacy branch, directory, job, and CSV names contain
+`e51` only because the isolated study began before `origin/main` assigned
+E51--E60 to the packed-task, cache, generated-kernel, ILP, and suffix-symmetry
+directions. It does not alter the five-direction review sequence above.
+
+The implementation explicitly constructs the 17-entry rank-9 `B`, contracts
+its physical index to the 17-entry rank-8 `C`, builds the row MPO from
+`C.entries()`, and applies the documented v0/v1/v2 boundaries. It is still
+only approximate: finite-`chi` contraction uses Float64 SVD truncation and
+therefore cannot satisfy Issue #34 or provide an exact count.
+
+The completed test suite contains 616 checks, including local tensor truth
+tables, boundaries, uncapped N=0--7 contraction, and an independent test-only
+oracle. The decisive N=14 run at chi=128 took 198.414 s and estimated 13.4036
+instead of the exact 365596 (relative error 0.999963338). The same-node exact
+C-derived PEPS control took 0.015146 s, so this approximation was about
+13,100x slower while still 99.9963% wrong.
+
+Decision: **REJECT as a counting algorithm; retain as a diagnostic negative
+result**. Conventional low floating-point Schmidt rank does not preserve the
+count-carrying sector here. The useful structure remains exact combinatorial
+sparsity, boundary-sector conditioning, and mechanically derived terminal
+contraction. See `experiments/e51_truncated_boundary_mps/REPORT.md` and its
+machine-readable CSVs for the full method, chi sweep, provenance, and limits.
+The same-node DFS/naive/latest/TreeSA comparison is a reporting addendum, not a
+new exact optimization direction.

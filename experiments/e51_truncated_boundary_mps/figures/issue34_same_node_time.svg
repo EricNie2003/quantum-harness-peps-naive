@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+<rect width="100%" height="100%" fill="#fbfaf7"/>
+<text x="105.00" y="38.00" fill="#17212b" font-size="23" font-weight="700">PROVISIONAL — Exact N-Queens algorithms on one SCNet node: execution-time scaling</text>
+<text x="105.00" y="67.00" fill="#52606b" font-size="13">Incomplete: DFS N=22; latest PEPS N=22. Regenerate with --require-complete before use.</text>
+<rect x="105" y="138" width="1060" height="534" fill="#ffffff" stroke="#aeb8c0"/>
+<line x1="105" x2="1165" y1="672.00" y2="672.00" stroke="#e1e5e8"/>
+<text x="93.00" y="677.00" fill="#52606b" font-size="12" text-anchor="end">1e-7</text>
+<line x1="105" x2="1165" y1="623.45" y2="623.45" stroke="#e1e5e8"/>
+<text x="93.00" y="628.45" fill="#52606b" font-size="12" text-anchor="end">1e-6</text>
+<line x1="105" x2="1165" y1="574.91" y2="574.91" stroke="#e1e5e8"/>
+<text x="93.00" y="579.91" fill="#52606b" font-size="12" text-anchor="end">1e-5</text>
+<line x1="105" x2="1165" y1="526.36" y2="526.36" stroke="#e1e5e8"/>
+<text x="93.00" y="531.36" fill="#52606b" font-size="12" text-anchor="end">1e-4</text>
+<line x1="105" x2="1165" y1="477.82" y2="477.82" stroke="#e1e5e8"/>
+<text x="93.00" y="482.82" fill="#52606b" font-size="12" text-anchor="end">1e-3</text>
+<line x1="105" x2="1165" y1="429.27" y2="429.27" stroke="#e1e5e8"/>
+<text x="93.00" y="434.27" fill="#52606b" font-size="12" text-anchor="end">1e-2</text>
+<line x1="105" x2="1165" y1="380.73" y2="380.73" stroke="#e1e5e8"/>
+<text x="93.00" y="385.73" fill="#52606b" font-size="12" text-anchor="end">1e-1</text>
+<line x1="105" x2="1165" y1="332.18" y2="332.18" stroke="#e1e5e8"/>
+<text x="93.00" y="337.18" fill="#52606b" font-size="12" text-anchor="end">1e0</text>
+<line x1="105" x2="1165" y1="283.64" y2="283.64" stroke="#e1e5e8"/>
+<text x="93.00" y="288.64" fill="#52606b" font-size="12" text-anchor="end">1e1</text>
+<line x1="105" x2="1165" y1="235.09" y2="235.09" stroke="#e1e5e8"/>
+<text x="93.00" y="240.09" fill="#52606b" font-size="12" text-anchor="end">1e2</text>
+<line x1="105" x2="1165" y1="186.55" y2="186.55" stroke="#e1e5e8"/>
+<text x="93.00" y="191.55" fill="#52606b" font-size="12" text-anchor="end">1e3</text>
+<line x1="105" x2="1165" y1="138.00" y2="138.00" stroke="#e1e5e8"/>
+<text x="93.00" y="143.00" fill="#52606b" font-size="12" text-anchor="end">1e4</text>
+<text x="105.00" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">1</text>
+<text x="155.48" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">2</text>
+<text x="256.43" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">4</text>
+<text x="357.38" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">6</text>
+<text x="458.33" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">8</text>
+<text x="559.29" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">10</text>
+<text x="660.24" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">12</text>
+<text x="761.19" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">14</text>
+<text x="862.14" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">16</text>
+<text x="963.10" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">18</text>
+<text x="1064.05" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">20</text>
+<text x="1165.00" y="698.00" fill="#34424e" font-size="12" text-anchor="middle">22</text>
+<path d="M 105.00 659.61 L 155.48 647.48 L 205.95 630.68 L 256.43 526.78 L 306.90 497.21 L 357.38 479.26 L 407.86 457.07 L 458.33 439.66 L 508.81 436.43 L 559.29 434.51 L 609.76 435.57 L 660.24 437.02 L 710.71 434.54 L 761.19 427.45 L 811.67 409.37 L 862.14 386.63 L 912.62 350.75 L 963.10 313.99 L 1013.57 270.39 L 1064.05 227.83 L 1114.52 181.50" fill="none" stroke="#52606b" stroke-width="2.4"/>
+<circle cx="105.00" cy="659.61" r="3.6" fill="#52606b"/>
+<circle cx="155.48" cy="647.48" r="3.6" fill="#52606b"/>
+<circle cx="205.95" cy="630.68" r="3.6" fill="#52606b"/>
+<circle cx="256.43" cy="526.78" r="3.6" fill="#52606b"/>
+<circle cx="306.90" cy="497.21" r="3.6" fill="#52606b"/>
+<circle cx="357.38" cy="479.26" r="3.6" fill="#52606b"/>
+<circle cx="407.86" cy="457.07" r="3.6" fill="#52606b"/>
+<circle cx="458.33" cy="439.66" r="3.6" fill="#52606b"/>
+<circle cx="508.81" cy="436.43" r="3.6" fill="#52606b"/>
+<circle cx="559.29" cy="434.51" r="3.6" fill="#52606b"/>
+<circle cx="609.76" cy="435.57" r="3.6" fill="#52606b"/>
+<circle cx="660.24" cy="437.02" r="3.6" fill="#52606b"/>
+<circle cx="710.71" cy="434.54" r="3.6" fill="#52606b"/>
+<circle cx="761.19" cy="427.45" r="3.6" fill="#52606b"/>
+<circle cx="811.67" cy="409.37" r="3.6" fill="#52606b"/>
+<circle cx="862.14" cy="386.63" r="3.6" fill="#52606b"/>
+<circle cx="912.62" cy="350.75" r="3.6" fill="#52606b"/>
+<circle cx="963.10" cy="313.99" r="3.6" fill="#52606b"/>
+<circle cx="1013.57" cy="270.39" r="3.6" fill="#52606b"/>
+<circle cx="1064.05" cy="227.83" r="3.6" fill="#52606b"/>
+<circle cx="1114.52" cy="181.50" r="3.6" fill="#52606b"/>
+<path d="M 105.00 628.42 L 155.48 562.76 L 205.95 579.75 L 256.43 558.05 L 306.90 534.78 L 357.38 514.21 L 407.86 480.25 L 458.33 451.78 L 508.81 434.55 L 559.29 406.84 L 609.76 373.50 L 660.24 338.19 L 710.71 301.48 L 761.19 263.42 L 811.67 223.14 L 862.14 182.75" fill="none" stroke="#c24b35" stroke-width="2.4"/>
+<circle cx="105.00" cy="628.42" r="3.6" fill="#c24b35"/>
+<circle cx="155.48" cy="562.76" r="3.6" fill="#c24b35"/>
+<circle cx="205.95" cy="579.75" r="3.6" fill="#c24b35"/>
+<circle cx="256.43" cy="558.05" r="3.6" fill="#c24b35"/>
+<circle cx="306.90" cy="534.78" r="3.6" fill="#c24b35"/>
+<circle cx="357.38" cy="514.21" r="3.6" fill="#c24b35"/>
+<circle cx="407.86" cy="480.25" r="3.6" fill="#c24b35"/>
+<circle cx="458.33" cy="451.78" r="3.6" fill="#c24b35"/>
+<circle cx="508.81" cy="434.55" r="3.6" fill="#c24b35"/>
+<circle cx="559.29" cy="406.84" r="3.6" fill="#c24b35"/>
+<circle cx="609.76" cy="373.50" r="3.6" fill="#c24b35"/>
+<circle cx="660.24" cy="338.19" r="3.6" fill="#c24b35"/>
+<circle cx="710.71" cy="301.48" r="3.6" fill="#c24b35"/>
+<circle cx="761.19" cy="263.42" r="3.6" fill="#c24b35"/>
+<circle cx="811.67" cy="223.14" r="3.6" fill="#c24b35"/>
+<circle cx="862.14" cy="182.75" r="3.6" fill="#c24b35"/>
+<path d="M 105.00 462.56 L 155.48 462.28 L 205.95 467.21 L 256.43 461.59 L 306.90 464.80 L 357.38 462.00 L 407.86 451.79 L 458.33 445.01 L 508.81 434.12 L 559.29 431.90 L 609.76 427.02 L 660.24 420.95 L 710.71 420.68 L 761.19 420.14 L 811.67 404.83 L 862.14 388.54 L 912.62 353.40 L 963.10 315.36 L 1013.57 272.40 L 1064.05 229.33 L 1114.52 182.91" fill="none" stroke="#0b6e99" stroke-width="2.4"/>
+<circle cx="105.00" cy="462.56" r="3.6" fill="#0b6e99"/>
+<circle cx="155.48" cy="462.28" r="3.6" fill="#0b6e99"/>
+<circle cx="205.95" cy="467.21" r="3.6" fill="#0b6e99"/>
+<circle cx="256.43" cy="461.59" r="3.6" fill="#0b6e99"/>
+<circle cx="306.90" cy="464.80" r="3.6" fill="#0b6e99"/>
+<circle cx="357.38" cy="462.00" r="3.6" fill="#0b6e99"/>
+<circle cx="407.86" cy="451.79" r="3.6" fill="#0b6e99"/>
+<circle cx="458.33" cy="445.01" r="3.6" fill="#0b6e99"/>
+<circle cx="508.81" cy="434.12" r="3.6" fill="#0b6e99"/>
+<circle cx="559.29" cy="431.90" r="3.6" fill="#0b6e99"/>
+<circle cx="609.76" cy="427.02" r="3.6" fill="#0b6e99"/>
+<circle cx="660.24" cy="420.95" r="3.6" fill="#0b6e99"/>
+<circle cx="710.71" cy="420.68" r="3.6" fill="#0b6e99"/>
+<circle cx="761.19" cy="420.14" r="3.6" fill="#0b6e99"/>
+<circle cx="811.67" cy="404.83" r="3.6" fill="#0b6e99"/>
+<circle cx="862.14" cy="388.54" r="3.6" fill="#0b6e99"/>
+<circle cx="912.62" cy="353.40" r="3.6" fill="#0b6e99"/>
+<circle cx="963.10" cy="315.36" r="3.6" fill="#0b6e99"/>
+<circle cx="1013.57" cy="272.40" r="3.6" fill="#0b6e99"/>
+<circle cx="1064.05" cy="229.33" r="3.6" fill="#0b6e99"/>
+<circle cx="1114.52" cy="182.91" r="3.6" fill="#0b6e99"/>
+<path d="M 155.48 522.19 L 205.95 489.87 L 256.43 477.01 L 306.90 439.25 L 357.38 421.37 L 407.86 443.64 L 458.33 384.36 L 508.81 376.98 L 559.29 301.87 L 609.76 319.30" fill="none" stroke="#7654a8" stroke-width="2.4"/>
+<circle cx="155.48" cy="522.19" r="3.6" fill="#7654a8"/>
+<circle cx="205.95" cy="489.87" r="3.6" fill="#7654a8"/>
+<circle cx="256.43" cy="477.01" r="3.6" fill="#7654a8"/>
+<circle cx="306.90" cy="439.25" r="3.6" fill="#7654a8"/>
+<circle cx="357.38" cy="421.37" r="3.6" fill="#7654a8"/>
+<circle cx="407.86" cy="443.64" r="3.6" fill="#7654a8"/>
+<circle cx="458.33" cy="384.36" r="3.6" fill="#7654a8"/>
+<circle cx="508.81" cy="376.98" r="3.6" fill="#7654a8"/>
+<circle cx="559.29" cy="301.87" r="3.6" fill="#7654a8"/>
+<circle cx="609.76" cy="319.30" r="3.6" fill="#7654a8"/>
+<path d="M 155.48 307.80 L 205.95 305.53 L 256.43 301.91 L 306.90 295.24 L 357.38 287.72 L 407.86 280.80 L 458.33 274.80 L 508.81 269.34 L 559.29 260.44 L 609.76 257.11" fill="none" stroke="#b67b18" stroke-width="2.4" stroke-dasharray="6 4"/>
+<circle cx="155.48" cy="307.80" r="3.6" fill="#b67b18"/>
+<circle cx="205.95" cy="305.53" r="3.6" fill="#b67b18"/>
+<circle cx="256.43" cy="301.91" r="3.6" fill="#b67b18"/>
+<circle cx="306.90" cy="295.24" r="3.6" fill="#b67b18"/>
+<circle cx="357.38" cy="287.72" r="3.6" fill="#b67b18"/>
+<circle cx="407.86" cy="280.80" r="3.6" fill="#b67b18"/>
+<circle cx="458.33" cy="274.80" r="3.6" fill="#b67b18"/>
+<circle cx="508.81" cy="269.34" r="3.6" fill="#b67b18"/>
+<circle cx="559.29" cy="260.44" r="3.6" fill="#b67b18"/>
+<circle cx="609.76" cy="257.11" r="3.6" fill="#b67b18"/>
+<line x1="105" x2="133" y1="92" y2="92" stroke="#52606b" stroke-width="2.5"/>
+<text x="140.00" y="96.00" fill="#34424e" font-size="12">DFS bitmask comparator</text>
+<line x1="335" x2="363" y1="92" y2="92" stroke="#c24b35" stroke-width="2.5"/>
+<text x="370.00" y="96.00" fill="#34424e" font-size="12">Naive exact PEPS (20b5334)</text>
+<line x1="565" x2="593" y1="92" y2="92" stroke="#0b6e99" stroke-width="2.5"/>
+<text x="600.00" y="96.00" fill="#34424e" font-size="12">Latest exact PEPS, no TreeSA</text>
+<line x1="807" x2="835" y1="92" y2="92" stroke="#7654a8" stroke-width="2.5"/>
+<text x="842.00" y="96.00" fill="#34424e" font-size="12">TreeSA PEPS: executor only</text>
+<line x1="105" x2="133" y1="112" y2="112" stroke="#b67b18" stroke-width="2.5" stroke-dasharray="6 4"/>
+<text x="140.00" y="116.00" fill="#34424e" font-size="12">TreeSA PEPS: plan + executor</text>
+<text x="635.00" y="732.00" fill="#17212b" font-size="15" text-anchor="middle">Board size N</text>
+<text x="25" y="405.00" fill="#17212b" font-size="15" text-anchor="middle" transform="rotate(-90 25 405.00)">Execution / planning time (seconds, log scale)</text>
+</svg>

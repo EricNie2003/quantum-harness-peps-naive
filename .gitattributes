@@ -1,0 +1,4 @@
+# Raw benchmark CSVs preserve the exact CRLF records emitted on SCNet.  Treat
+# CR as part of the line ending for whitespace checks; derived publication CSVs
+# are normalized to LF by their analyzers.
+experiments/e51_truncated_boundary_mps/raw/**/*.csv whitespace=cr-at-eol

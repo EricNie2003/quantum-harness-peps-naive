@@ -1,0 +1,213 @@
+TREESA_PLAN_V1
+n	10
+leaves	100
+seed	20260729
+ntrials	10
+niters	50
+optimizer	TreeSA-space-only
+package_version	1.3.0
+optimization_seconds	25.835744775
+dense_time_log2	42.0037314756349
+dense_space_log2	28.0
+dense_readwrite_log2	31.121075335299587
+tree_begin
+leaf	1
+leaf	10
+leaf	11
+leaf	12
+leaf	13
+leaf	4
+leaf	3
+contract
+contract
+leaf	14
+contract
+leaf	30
+leaf	40
+contract
+leaf	31
+contract
+leaf	41
+contract
+leaf	32
+contract
+leaf	24
+leaf	33
+contract
+leaf	64
+leaf	84
+leaf	94
+leaf	63
+leaf	73
+leaf	60
+leaf	83
+leaf	93
+leaf	82
+leaf	71
+leaf	81
+leaf	80
+leaf	90
+contract
+leaf	91
+contract
+contract
+leaf	70
+contract
+contract
+leaf	92
+contract
+contract
+leaf	72
+contract
+contract
+contract
+contract
+leaf	61
+contract
+contract
+leaf	62
+contract
+leaf	50
+contract
+leaf	51
+contract
+contract
+leaf	52
+contract
+contract
+contract
+leaf	74
+contract
+contract
+leaf	53
+contract
+leaf	54
+contract
+leaf	46
+leaf	36
+leaf	5
+leaf	29
+leaf	8
+leaf	9
+leaf	19
+contract
+contract
+leaf	18
+contract
+leaf	7
+contract
+leaf	17
+contract
+contract
+leaf	28
+contract
+leaf	6
+contract
+leaf	27
+contract
+leaf	16
+contract
+leaf	39
+contract
+leaf	38
+contract
+leaf	26
+contract
+leaf	37
+contract
+contract
+leaf	15
+contract
+contract
+leaf	25
+contract
+leaf	49
+contract
+leaf	48
+contract
+leaf	47
+contract
+leaf	35
+contract
+contract
+leaf	45
+contract
+leaf	55
+leaf	65
+leaf	57
+leaf	85
+leaf	95
+leaf	67
+leaf	76
+leaf	96
+leaf	69
+leaf	87
+leaf	97
+leaf	99
+leaf	89
+contract
+leaf	98
+contract
+leaf	88
+contract
+leaf	79
+contract
+leaf	78
+contract
+contract
+contract
+leaf	77
+contract
+contract
+leaf	68
+contract
+contract
+leaf	86
+contract
+contract
+contract
+contract
+contract
+leaf	59
+contract
+leaf	58
+contract
+leaf	66
+contract
+leaf	75
+contract
+contract
+leaf	56
+contract
+contract
+contract
+contract
+contract
+leaf	44
+contract
+leaf	34
+leaf	43
+contract
+contract
+leaf	42
+contract
+contract
+contract
+leaf	23
+contract
+contract
+leaf	22
+contract
+contract
+leaf	21
+contract
+leaf	20
+contract
+leaf	2
+contract
+contract
+contract
+contract
+leaf	0
+contract
+tree_end
