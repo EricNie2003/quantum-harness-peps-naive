@@ -92,6 +92,7 @@ def normalized_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
                     "peak_retained_bond": row["peak_retained_bond"],
                     "peak_working_bond": row.get("peak_working_bond", row["peak_retained_bond"]),
                     "peak_pretruncate_rank": row["peak_pretruncate_rank"],
+                    "svd_qr_fallbacks": row.get("svd_qr_fallbacks", "0"),
                     "truncated_svd_calls": row["truncated_svd_calls"],
                     "max_discarded_fraction": row["max_discarded_fraction"],
                     "sum_discarded_fraction": row["sum_discarded_fraction"],

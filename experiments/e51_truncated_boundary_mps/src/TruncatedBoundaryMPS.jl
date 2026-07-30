@@ -175,6 +175,7 @@ known_count(n::Integer) = 0 <= n < length(KNOWN_COUNTS) ? KNOWN_COUNTS[n + 1] : 
 
 Base.@kwdef mutable struct TruncationStats
     svd_calls::Int = 0
+    svd_qr_fallbacks::Int = 0
     truncated_svd_calls::Int = 0
     peak_pretruncate_rank::Int = 1
     peak_retained_bond::Int = 1
@@ -235,8 +236,18 @@ LAPACK rank tolerance are still removed. The discarded fractions are local
 Frobenius diagnostics and are not rigorous global error bounds.
 """
 function truncated_svd(matrix::Matrix{Float64}, chi::Int, stats::TruncationStats)
+    all(isfinite, matrix) || error("SVD input contains a non-finite value")
     started = time_ns()
-    factors = svd(matrix; full = false)
+    factors = try
+        svd(matrix; full = false, alg = LinearAlgebra.DivideAndConquer())
+    catch exception
+        if exception isa LinearAlgebra.LAPACKException
+            stats.svd_qr_fallbacks += 1
+            svd(matrix; full = false, alg = LinearAlgebra.QRIteration())
+        else
+            rethrow()
+        end
+    end
     stats.svd_elapsed_s += (time_ns() - started) / 1.0e9
     stats.svd_calls += 1
 

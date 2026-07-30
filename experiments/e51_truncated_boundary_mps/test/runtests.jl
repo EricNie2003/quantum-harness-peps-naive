@@ -70,6 +70,7 @@ end
     @test result.stats.peak_working_bond >= result.stats.peak_retained_bond
     @test result.stats.max_discarded_fraction >= 0.0
     @test result.stats.sum_discarded_fraction >= result.stats.max_discarded_fraction
+    @test result.stats.svd_qr_fallbacks == 0
 end
 
 @testset "canonical truncation is BLAS-thread invariant" begin

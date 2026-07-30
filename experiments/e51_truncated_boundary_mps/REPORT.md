@@ -95,3 +95,14 @@ between one and eight OpenBLAS threads for the tested capped points, while the
 uncapped N=0--7 validation remains within the preregistered tolerance.
 
 Final canonical SCNet measurement is pending.
+
+### LAPACK robustness correction
+
+On canonical revision `48be9f2`, SCNet job `41522520` completed N=8 through
+chi=64, then LAPACK divide-and-conquer SVD (`gesdd`) returned `info=1` at
+chi=128 during an exact site split. The failed process used only about 437 MiB,
+so this was numerical non-convergence rather than memory exhaustion. The code
+now rejects non-finite inputs explicitly and retries only `LAPACKException`
+with LAPACK QR-iteration SVD (`gesvd`). `svd_qr_fallbacks` is reported for every
+point; other exceptions still fail closed. The successful chi<=64 rows remain
+valid because each point ran in a separate process.
