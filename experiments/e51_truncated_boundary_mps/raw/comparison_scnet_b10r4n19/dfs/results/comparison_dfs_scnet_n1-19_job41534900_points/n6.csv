@@ -1,0 +1,2 @@
+N,count,known_count,verified,median_elapsed_s,min_elapsed_s,p10_elapsed_s,p90_elapsed_s,peak_rss_bytes,threads,split_depth,tasks,recursive_nodes,candidate_placements,metrics_elapsed_s,repeats,warmup,algorithm_class,peak_sparse_support,local_tensor_entries_examined,local_tensor_entries_accepted
+6,4,4,true,0.000933691,0.000894911,0.000894911,0.000961722,0,20,5,20,75,76,0.000905700,7,2,conventional_dfs_comparator,NA,NA,NA

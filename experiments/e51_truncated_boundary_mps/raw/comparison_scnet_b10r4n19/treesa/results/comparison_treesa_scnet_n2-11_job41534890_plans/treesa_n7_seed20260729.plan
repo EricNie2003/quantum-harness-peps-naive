@@ -1,0 +1,111 @@
+TREESA_PLAN_V1
+n	7
+leaves	49
+seed	20260729
+ntrials	10
+niters	50
+optimizer	TreeSA-space-only
+package_version	1.3.0
+optimization_seconds	11.436009965
+dense_time_log2	28.36385459518349
+dense_space_log2	20.0
+dense_readwrite_log2	23.100074704053995
+tree_begin
+leaf	48
+leaf	41
+leaf	46
+leaf	27
+leaf	26
+leaf	32
+contract
+leaf	38
+leaf	45
+contract
+leaf	31
+leaf	25
+contract
+leaf	30
+leaf	44
+leaf	36
+leaf	35
+leaf	42
+contract
+leaf	43
+contract
+contract
+contract
+leaf	37
+contract
+leaf	28
+contract
+leaf	29
+contract
+contract
+leaf	19
+leaf	4
+leaf	13
+leaf	5
+leaf	6
+contract
+contract
+leaf	12
+contract
+contract
+leaf	20
+contract
+contract
+leaf	11
+contract
+leaf	18
+contract
+leaf	23
+leaf	21
+leaf	16
+leaf	14
+leaf	2
+leaf	8
+leaf	7
+leaf	0
+leaf	1
+contract
+contract
+contract
+contract
+contract
+leaf	15
+contract
+leaf	9
+contract
+contract
+leaf	3
+contract
+leaf	10
+contract
+contract
+leaf	22
+contract
+leaf	17
+contract
+contract
+contract
+leaf	24
+contract
+contract
+contract
+contract
+contract
+contract
+leaf	39
+contract
+leaf	33
+contract
+contract
+leaf	34
+contract
+leaf	40
+contract
+leaf	47
+contract
+contract
+contract
+tree_end

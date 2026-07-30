@@ -1,0 +1,55 @@
+status=started
+started_at=2026-07-30T11:10:54+0800
+source_revision=b89f4f1
+source_branch=codex/exp-truncated-boundary-mps
+algorithm_class=approximate_float64_boundary_mps_svd
+classification=diagnostic_only_not_issue34_exact
+command=sbatch scnet_e51_truncation.sbatch 9 12 4,8,16,32 3 1
+slurm_job_id=41524175
+slurm_job_name=qpeps-e51-mps
+slurm_partition=wzacnormal03
+slurm_node_list=b10r4n17
+slurm_cpus_per_task=128
+slurm_threads_per_core=1
+slurm_memory_request=32G
+julia_num_threads=1
+openblas_num_threads=128
+run_tests=0
+repetition_policy=one warm process per N/chi; requested warmups followed by requested samples; median internal kernel wall
+memory_method=per-point GNU time -v Maximum resident set size plus process VmHWM; includes Julia runtime and LAPACK workspaces
+julia version 1.11.5
+Linux b10r4n17 3.10.0-957.el7.x86_64 #1 SMP Thu Nov 8 23:39:32 UTC 2018 x86_64 x86_64 x86_64 GNU/Linux
+Architecture:          x86_64
+CPU op-mode(s):        32-bit, 64-bit
+Byte Order:            Little Endian
+CPU(s):                128
+On-line CPU(s) list:   0-127
+Thread(s) per core:    1
+Core(s) per socket:    64
+Socket(s):             2
+NUMA node(s):          8
+Vendor ID:             AuthenticAMD
+CPU family:            23
+Model:                 49
+Model name:            AMD EPYC 7742 64-Core Processor
+Stepping:              0
+CPU MHz:               1500.000
+CPU max MHz:           2250.0000
+CPU min MHz:           1500.0000
+BogoMIPS:              4499.69
+Virtualization:        AMD-V
+L1d cache:             32K
+L1i cache:             32K
+L2 cache:              512K
+L3 cache:              16384K
+NUMA node0 CPU(s):     0-15
+NUMA node1 CPU(s):     16-31
+NUMA node2 CPU(s):     32-47
+NUMA node3 CPU(s):     48-63
+NUMA node4 CPU(s):     64-79
+NUMA node5 CPU(s):     80-95
+NUMA node6 CPU(s):     96-111
+NUMA node7 CPU(s):     112-127
+Flags:                 fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc art rep_good nopl xtopology nonstop_tsc extd_apicid aperfmperf eagerfpu pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_l2 cpb cat_l3 cdp_l3 hw_pstate sme retpoline_amd ssbd ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif umip overflow_recov succor smca
+finished_at=2026-07-30T11:15:04+0800
+exit_status=0

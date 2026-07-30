@@ -2,6 +2,38 @@ using Test
 using LinearAlgebra
 using TruncatedBoundaryMPS
 
+# Conventional row-by-row backtracking is deliberately confined to the test
+# suite. It is an implementation-independent oracle, never the PEPS method.
+function backtracking_oracle(n::Int)
+    n == 0 && return Int128(1)
+    occupied_columns = falses(n)
+    occupied_diag_dr = falses(2 * n - 1)
+    occupied_diag_dl = falses(2 * n - 1)
+
+    function visit(row::Int)::Int128
+        row > n && return Int128(1)
+        count = Int128(0)
+        for column in 1:n
+            diag_dr = row - column + n
+            diag_dl = row + column - 1
+            if !occupied_columns[column] &&
+               !occupied_diag_dr[diag_dr] &&
+               !occupied_diag_dl[diag_dl]
+                occupied_columns[column] = true
+                occupied_diag_dr[diag_dr] = true
+                occupied_diag_dl[diag_dl] = true
+                count += visit(row + 1)
+                occupied_columns[column] = false
+                occupied_diag_dr[diag_dr] = false
+                occupied_diag_dl[diag_dl] = false
+            end
+        end
+        return count
+    end
+
+    return visit(1)
+end
+
 @testset "explicit Sec. VI tensors" begin
     tensor_b = site_tensor_b()
     tensor_c = site_tensor_c(tensor_b)
@@ -55,7 +87,9 @@ end
 @testset "uncapped floating boundary MPS geometry" begin
     for n in 0:7
         result = contract_truncated(n, 0)
-        expected = Float64(known_count(n))
+        oracle = backtracking_oracle(n)
+        @test oracle == known_count(n)
+        expected = Float64(oracle)
         @test isapprox(result.estimate, expected; rtol = 5e-10, atol = 5e-9)
         @test result.stats.truncated_svd_calls == 0
         @test result.stats.tensor_entries_examined == Int128(17 * n * n)

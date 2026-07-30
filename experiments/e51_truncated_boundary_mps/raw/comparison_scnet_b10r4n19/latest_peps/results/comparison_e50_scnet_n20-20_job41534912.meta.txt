@@ -1,0 +1,51 @@
+status=started
+started_at=2026-07-30T13:49:32+0800
+source_revision=fc0921b00f1b700b3f6a3930a43cb48806afd3b8
+algorithm_revision=ea5b985
+algorithm_class=certified_explicit_C_forced_CRT_last6_PEPS
+build_command=cargo build --release --target x86_64-unknown-linux-musl --bin e50_crt_avx2
+build_compiler=rustc 1.97.1 (8bab26f4f 2026-07-14); LLVM 22.1.6
+build_target=x86_64-unknown-linux-musl
+command=e50_crt_avx2 scalar 3 N N 3 1 512 0
+slurm_job_id=41534912
+slurm_node_list=b10r4n19
+slurm_cpus_per_task=128
+slurm_memory_per_node_mb=8192
+repetition_policy=fresh process per N; requested warmups and samples; no metrics replay
+memory_method=per-N GNU time -v Maximum resident set size
+./bin/e50_crt_avx2: ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, BuildID[sha1]=d3f6ca127524234816d75c98cdc1b53facaf33e0, not stripped
+Linux b10r4n19 3.10.0-957.el7.x86_64 #1 SMP Thu Nov 8 23:39:32 UTC 2018 x86_64 x86_64 x86_64 GNU/Linux
+Architecture:          x86_64
+CPU op-mode(s):        32-bit, 64-bit
+Byte Order:            Little Endian
+CPU(s):                128
+On-line CPU(s) list:   0-127
+Thread(s) per core:    1
+Core(s) per socket:    64
+Socket(s):             2
+NUMA node(s):          8
+Vendor ID:             AuthenticAMD
+CPU family:            23
+Model:                 49
+Model name:            AMD EPYC 7742 64-Core Processor
+Stepping:              0
+CPU MHz:               2250.000
+CPU max MHz:           2250.0000
+CPU min MHz:           1500.0000
+BogoMIPS:              4500.10
+Virtualization:        AMD-V
+L1d cache:             32K
+L1i cache:             32K
+L2 cache:              512K
+L3 cache:              16384K
+NUMA node0 CPU(s):     0-15
+NUMA node1 CPU(s):     16-31
+NUMA node2 CPU(s):     32-47
+NUMA node3 CPU(s):     48-63
+NUMA node4 CPU(s):     64-79
+NUMA node5 CPU(s):     80-95
+NUMA node6 CPU(s):     96-111
+NUMA node7 CPU(s):     112-127
+Flags:                 fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc art rep_good nopl xtopology nonstop_tsc extd_apicid aperfmperf eagerfpu pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_l2 cpb cat_l3 cdp_l3 hw_pstate sme retpoline_amd ssbd ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif umip overflow_recov succor smca
+finished_at=2026-07-30T13:58:20+0800
+exit_status=0

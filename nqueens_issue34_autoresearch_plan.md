@@ -2964,7 +2964,7 @@ base 仍不低于 DFS，下一次 review 必须重新寻找改变 contraction ex
 11. 完成 E50 后必须执行下一次 five-direction review；复盘前不得启动
     E51。当前检查点严格停在 E45，E46 尚未开始。
 
-## T. Revision after the mandatory E46--E50 review (2026-07-30)
+## APX1. Truncated boundary-MPS publication diagnostic (2026-07-30)
 
 E46--E50 are complete and the mandatory review is recorded in `REPORT.md`
 section 37. E46 direct scalar-u64 and E47 last-6 are `KEEP`; E48 iterative
@@ -2973,12 +2973,18 @@ The successful mechanism removed residue/call constants without reducing
 C-derived nodes. The failures were caused by array traffic, SIMD coverage of
 only the root, and YMM ABI/spill overhead.
 
-This review clears the E51 gate, but does not authorize an indefinite sequence
-of exact-tail micro-optimizations. The new priority is to test whether the
-low-rank observation from E15 produces a useful accuracy--cost tradeoff in a
-conventional approximate PEPS contraction.
+This diagnostic was created on an isolated branch before that branch had the
+coworker's later E51--E60 history. `origin/main` now assigns those IDs to the
+packed-task, cache, generated-kernel, ILP, and suffix-symmetry directions.
+Therefore the canonical identifier here is **APX1**, not E51. The legacy branch,
+directory, job, and CSV names retain `e51` solely so existing hashes and raw
+provenance remain valid. APX1 is not a numbered exact-PEPS optimization and does
+not change or reset the five-direction review gate.
 
-### T.1 E51: truncated finite-PEPS boundary MPS
+APX1 tests whether the low-rank observation from E15 produces a useful
+accuracy--cost tradeoff in a conventional approximate PEPS contraction.
+
+### APX1.1 Preregistered truncated finite-PEPS boundary MPS
 
 - **Classification:** approximate scientific diagnostic, not an Issue #34
   exact solver.
@@ -3003,6 +3009,41 @@ conventional approximate PEPS contraction.
 - **Decision semantics:** `DIAGNOSTIC_ONLY` or `REJECT` only. Approximate values
   must never be promoted into the exact production result.
 
-No E52 implementation is preregistered. Only a clear and reproducible E51
-singular-spectrum signal may justify a later exact low-rank certificate or a
-new contraction path; otherwise the low-rank line stops here.
+Only a clear and reproducible APX1 singular-spectrum signal could justify a
+later, separately numbered exact low-rank certificate or a new contraction
+path; otherwise the low-rank line stops here.
+
+### APX1.2 Result and research consequence
+
+APX1 is complete and **REJECTED as a counting algorithm; retained only as a
+diagnostic negative result**. The final canonical implementation passed 616
+tests, including explicit 17-entry B/C construction, local truth tables,
+v0/v1/v2 boundaries, uncapped N=0--7 checks, and an independent test-only
+backtracking oracle. All reported capped values remain unrounded Float64
+approximations.
+
+The requested N=14 chi sweep is decisive: chi=4/8/16/32/64/128 gives relative
+errors 1.000000, 0.999996407, 0.999996169, 0.999994254, 0.999984932, and
+0.999963338. Chi=128 takes 198.414 s but estimates only 13.4036 instead of
+365596. On the same EPYC setup the exact three-prime C-derived PEPS control
+takes 0.015146 s median, so the approximate run is about 13,100x slower while
+remaining 99.9963% wrong. At N=13--20 fixed chi=4--16 controls storage and
+runtime growth only by discarding essentially the entire count-carrying
+sector.
+
+The observation overturns the hypothesis that ordinary low floating-point
+Schmidt rank is the next useful mechanism. The N-queens network's exploitable
+structure is instead exact combinatorial sparsity, boundary-sector
+conditioning, and mechanically derived terminal contraction. Optimizing the
+canonical-center bookkeeping might lower APX1's constant but cannot repair its
+measured accuracy collapse.
+
+Therefore:
+
+1. no low-rank or larger-chi direction is authorized by this result;
+2. the current same-node DFS/naive/latest/TreeSA measurement is a reporting and
+   cost-model addendum, not a new optimization direction;
+3. any future numbered PEPS experiment must follow the current `origin/main`
+   post-E60 review and be separately preregistered around a genuinely new
+   exact-support/exponent hypothesis, with the usual explicit-C, boundary,
+   exactness, worktree, benchmark, and kill-gate obligations.

@@ -1,0 +1,8 @@
+Test Summary:            | Pass  Total  Time
+explicit Sec. VI tensors |   72     72  0.8s
+Test Summary:                  | Pass  Total  Time
+v0, v1, and v2 line boundaries |  504    504  0.2s
+Test Summary:                           | Pass  Total  Time
+uncapped floating boundary MPS geometry |   24     24  3.6s
+Test Summary:                              | Pass  Total  Time
+finite bond cap is explicit and diagnostic |    5      5  0.0s

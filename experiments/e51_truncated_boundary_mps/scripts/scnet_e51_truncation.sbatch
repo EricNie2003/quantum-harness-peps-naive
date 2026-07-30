@@ -47,6 +47,8 @@ trap finish_metadata EXIT
 {
     echo "status=started"
     echo "started_at=$(date --iso-8601=seconds)"
+    echo "experiment_id=APX1"
+    echo "legacy_provenance_id=E51"
     echo "source_revision=$source_revision"
     echo "source_branch=codex/exp-truncated-boundary-mps"
     echo "algorithm_class=approximate_float64_boundary_mps_svd"
@@ -58,7 +60,8 @@ trap finish_metadata EXIT
     echo "slurm_node_list=$SLURM_JOB_NODELIST"
     echo "slurm_cpus_per_task=$SLURM_CPUS_PER_TASK"
     echo "slurm_threads_per_core=1"
-    echo "slurm_memory_request=32G"
+    echo "slurm_memory_per_node_mb=${SLURM_MEM_PER_NODE:-NA}"
+    echo "slurm_memory_per_cpu_mb=${SLURM_MEM_PER_CPU:-NA}"
     echo "julia_num_threads=1"
     echo "openblas_num_threads=$SLURM_CPUS_PER_TASK"
     echo "run_tests=$run_tests"

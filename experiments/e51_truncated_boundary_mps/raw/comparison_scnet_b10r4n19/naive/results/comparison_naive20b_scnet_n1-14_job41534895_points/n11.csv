@@ -1,0 +1,2 @@
+N,count,known_count,verified,median_elapsed_s,min_elapsed_s,peak_rss_bytes,peak_states,tensor_entries_examined,tensor_entries_matched,repeats
+11,2680,2680,true,0.140868053,0.140795141,0,39307,2506357,2506357,3
