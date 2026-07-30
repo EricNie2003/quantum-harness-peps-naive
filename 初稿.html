@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>从组合计数到物理系统：强约束 PEPS 精确收缩的机制演化</title>
+    <!-- 引入 MathJax 渲染 LaTeX 公式 -->
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                macros: {
+                    ket: ['|#1\\rangle', 1]
+                }
+            },
+            svg: { fontCache: 'global' }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" async
+            src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js">
+    </script>
+
+    <style>
+        :root {
+            --primary: #1e3a8a;
+            --secondary: #2563eb;
+            --accent: #e11d48;
+            --bg-body: #f8fafc;
+            --bg-card: #ffffff;
+            --text-main: #334155;
+            --text-muted: #64748b;
+            --border-light: #e2e8f0;
+            --success: #059669;
+            --success-bg: #d1fae5;
+            --danger: #dc2626;
+            --danger-bg: #fee2e2;
+            --warning: #d97706;
+            --warning-bg: #fef3c7;
+            --info: #0284c7;
+            --info-bg: #e0f2fe;
+            --radius: 12px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.75;
+            color: var(--text-main);
+            background-color: var(--bg-body);
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 1040px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        /* 排版与标题 */
+        h1 {
+            color: var(--primary);
+            font-size: 2.5rem;
+            text-align: center;
+            line-height: 1.3;
+            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+        }
+        
+        .subtitle {
+            text-align: center;
+            font-size: 1.15rem;
+            color: var(--text-muted);
+            margin-bottom: 50px;
+            font-weight: 400;
+        }
+
+        h2 {
+            color: var(--primary);
+            font-size: 1.6rem;
+            margin-top: 60px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid var(--border-light);
+            display: flex;
+            align-items: center;
+        }
+
+        h2::before {
+            content: "";
+            display: inline-block;
+            width: 6px;
+            height: 22px;
+            background-color: var(--secondary);
+            margin-right: 12px;
+            border-radius: 3px;
+        }
+
+        h3 {
+            color: var(--secondary);
+            font-size: 1.25rem;
+            margin-top: 35px;
+        }
+
+        p {
+            margin-bottom: 1.5rem;
+            font-size: 1.05rem;
+            text-align: justify;
+        }
+
+        /* 核心高亮区块 */
+        .hero-conclusion {
+            background: linear-gradient(135deg, #f0f4f8, #e2e8f0);
+            color: var(--text-main);
+            padding: 35px 40px;
+            border-radius: 16px;
+            margin: 40px 0;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+            border-left: 8px solid var(--secondary);
+        }
+
+        .hero-conclusion h3 {
+            color: var(--primary);
+            margin-top: 0;
+            font-size: 1.4rem;
+            border-bottom: none;
+        }
+
+        .hero-conclusion p {
+            font-size: 1.1rem;
+            line-height: 1.8;
+            margin-bottom: 0;
+        }
+
+        /* 提示框 */
+        .alert {
+            padding: 20px 25px;
+            border-radius: var(--radius);
+            margin: 25px 0;
+            border-left: 5px solid;
+        }
+        .alert-danger {
+            background-color: var(--danger-bg);
+            border-color: var(--danger);
+            color: #7f1d1d;
+        }
+        .alert-info {
+            background-color: var(--info-bg);
+            border-color: var(--info);
+            color: #0c4a6e;
+        }
+        
+        .alert h4 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            font-size: 1.15rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* 网格布局 */
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 30px 0; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin: 30px 0; }
+
+        /* 卡片设计 */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius);
+            padding: 25px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .card h4 {
+            color: var(--primary);
+            margin-top: 0;
+            font-size: 1.1rem;
+            border-bottom: 2px solid var(--border-light);
+            padding-bottom: 10px;
+        }
+        .card p {
+            font-size: 1rem;
+            margin-bottom: 0;
+        }
+
+        /* 数据看板 */
+        .stats-panel {
+            display: flex;
+            justify-content: space-between;
+            background: #ffffff;
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            padding: 30px;
+            margin: 30px 0;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+        }
+        .stat-item {
+            text-align: center;
+            flex: 1;
+            border-right: 1px solid var(--border-light);
+        }
+        .stat-item:last-child { border-right: none; }
+        .stat-value {
+            display: block;
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--secondary);
+            line-height: 1.1;
+            margin-bottom: 8px;
+        }
+        .stat-label {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        /* 表格样式 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 30px 0;
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        th, td {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-light);
+            text-align: left;
+        }
+        th {
+            background-color: #f1f5f9;
+            color: var(--primary);
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        tr:last-child td { border-bottom: none; }
+        
+        .highlight-text {
+            background: linear-gradient(120deg, rgba(253, 224, 71, 0.3) 0%, rgba(253, 224, 71, 0.3) 100%);
+            background-repeat: no-repeat;
+            background-size: 100% 40%;
+            background-position: 0 80%;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>从组合计数到物理系统：<br>强约束 PEPS 精确收缩的机制演化</h1>
+    <div class="subtitle">基于 60 轮张量网络工程优化的底层剖析与理论反思</div>
+
+    <!-- 核心突破（看板） -->
+    <div class="stats-panel">
+        <div class="stat-item">
+            <span class="stat-value">17</span>
+            <span class="stat-label">局域张量非零元个数</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-value">99.99%</span>
+            <span class="stat-label">传统 SVD 截断误差 (N=14)</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-value">131.6 s</span>
+            <span class="stat-label">PEPS 精确收缩耗时 (N=20)</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label" style="font-size: 0.9rem; color: #16a34a; font-weight: bold; margin-bottom: 4px; display: block;">相对基准 DFS</span>
+            <span class="stat-value" style="font-size: 1.8rem;">快 24.9%</span>
+            <span class="stat-label">(N=18 测评窗口)</span>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- 1. 问题背景与张量映射 -->
+    <!-- ========================================== -->
+    <h2>1. 问题背景：将硬约束编码为张量网络</h2>
+    <p>
+        $N$ 皇后问题不仅是组合计数的经典课题，也是测试算法在“强局部约束体系”下表现的基准问题。传统求解通常依赖基于位运算的深度优先搜索（Bitboard DFS）。从统计物理的视角来看，该问题可以通过投影纠缠对态（PEPS）严格表述（参考 Liu, Liao, Wang, arXiv:2605.10326v2）。
+    </p>
+    <p>
+        我们可以构造一个编码了皇后排斥规则的秩为 9 的局域张量 $B$（仅含 17 个非零元）。将其铺设为 $N \times N$ 的 PEPS 网络，并与代表所有可能构型的直积态 $\ket{\Psi_0} = (\ket{0} + \ket{1})^{\otimes N^2}$ 求内积，即可将计数问题转化为张量收缩：
+    </p>
+    <p style="text-align: center; font-size: 1.15rem; margin: 25px 0;">
+        $$ Q(N) = \langle \Psi_{\text{PEPS}} | (\ket{0} + \ket{1})^{\otimes N^2} \rangle $$
+    </p>
+    <p>
+        这种“局部规则 $\to$ 稀疏张量 $\to$ 全局构型”的模型，与许多强关联物理系统具有同构性。例如<b>自旋冰（Spin Ice）</b>的 Ice-rule 顶点约束，以及<b>里德堡原子阵列（Rydberg Blockade）</b>中的相邻激发阻塞。计算此类 PEPS 的收缩，在物理上对应着评估体系的基态简并度、残余熵或受约束 Hilbert 空间的维数。
+    </p>
+
+
+    <!-- ========================================== -->
+    <!-- 2. 核心结论 -->
+    <!-- ========================================== -->
+    <h2>2. 核心机制：张量收缩与经典搜索的同源性</h2>
+    
+    <div class="hero-conclusion">
+        <h3>💡 表示层的剥离与底层执行流趋同</h3>
+        <p>
+            通过 60 轮严格隔离的优化实验，本研究揭示了一个重要的底层机制：<br><br>
+            对于此类极度稀疏且带有强约束的 PEPS，在严格保持张量收缩等价性的前提下，经过局域张量编译、无效解释消除、边界状态压缩以及收缩结合顺序的调整，<b>该网络的精确收缩过程，在底层的机器码执行流上会自然趋近于经典的位掩码 DFS（Depth-First Search）。</b><br><br>
+            这表明，<span class="highlight-text">在极度稀疏且强约束的极限下，多维张量网络收缩的计算本质与状态空间的遍历搜索高度同源。</span>
+        </p>
+    </div>
+
+    <p>
+        在系统性测试中，常规的张量网络优化手段在面对这种特殊结构的张量时，往往难以发挥预期优势：
+    </p>
+    <div class="grid-3">
+        <div class="card">
+            <h4>拓扑路径搜索 (TreeSA) 局限性</h4>
+            <p>基于“稠密键维”的图论路径算法不能有效识别稀疏支持度。在 $N=10$ 时，TreeSA 规划的路径在中间阶段产生了 <b>491,832</b> 个状态，远超朴素逐行收缩的 4,510 个，导致内存与耗时急剧增加。</p>
+        </div>
+        <div class="card">
+            <h4>决策图与等价类 (ZDD/ADD) 的开销</h4>
+            <p>使用 ZDD 寻找边界态结构并尝试图压缩时，由于强约束下子结构重合度低，维护规范节点（Canonical Node）和哈希查找的额外开销远超图压缩带来的收益，造成了明显的性能回退。</p>
+        </div>
+        <div class="card">
+            <h4>全局对称群 (Full D4) 的簿记成本</h4>
+            <p>尝试施加完整的 $D_4$ 对称群裁剪张量网络时，状态规范化过程中的簿记（Bookkeeping）开销抵消了搜索空间的剪枝收益。实验最终仅保留了成本极低的首行镜像对称。</p>
+        </div>
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- 3. 近似截断的误差分析 -->
+    <!-- ========================================== -->
+    <h2>3. 截断诊断：传统 PEPS 近似在此类问题中的误差分析</h2>
+    <p>
+        在处理大型张量网络时，通常采用 <b>边界 MPS（Boundary MPS）配合 SVD 截断</b> 来控制环境键维 $\chi$。我们评估了该方法在强约束 PEPS 中的表现。
+    </p>
+
+    <div class="alert alert-danger">
+        <h4>⚠️ 约束流形的权重丢失</h4>
+        <p>在 $N=14$（真实精确解 $Q(14) = 365,596$）的网络收缩中，施加常规 SVD 截断：</p>
+        <ul style="margin-bottom: 0;">
+            <li>当 $\chi=16$ 时，浮点收缩估计值为 <b>1.40069</b>。</li>
+            <li>即使将键维提升至 $\chi=128$（耗时 198.4 秒），估计值仅回升至 <b>13.40356</b>。</li>
+            <li><b>相对误差仍高达 99.9963%</b>。</li>
+        </ul>
+    </div>
+
+    <p>
+        <b>机制反思：</b> 这种系统性偏差源于强约束状态空间中存在大量的“局部死胡同”。常规的 SVD 截断仅依据当前的局部奇异值（Schmidt 权重）进行筛选，容易无差别地丢弃处于低局部纠缠、但在全局层面可延续至合法构型的关键分支。这提示我们，在处理受挫磁体或约束晶格模型时，若缺乏针对性的“保约束（Constraint-preserving）”截断策略，传统 PEPS 可能会<b>严重低估基态简并度</b>。
+    </p>
+
+
+    <!-- ========================================== -->
+    <!-- 4. 对强关联物理与 iPEPS 领域的启示 -->
+    <!-- ========================================== -->
+    <h2>4. 对强关联与 iPEPS 领域的六大方法论启示</h2>
+    <p>
+        尽管 N-Queens 是一个确切计数问题，但本研究通过对张量边界和算子的剖析，为处理具有“强局部约束”的物理 iPEPS（如角转移矩阵 CTMRG 的收缩）提供了可借鉴的工程与算法视角：
+    </p>
+
+    <div class="grid-2">
+        <div class="card">
+            <h4>1. 关注“支持度感知”，而非纯拓扑宽度</h4>
+            <p>在收缩含有强约束（如 Rydberg Blockade）的网络时，基于稠密复杂度的评估工具难以预测实际开销。最优收缩路径不应仅取决于“割线的拓扑连接数”，更应取决于<span class="highlight-text">割线上实际存活的非零状态支持度（Actual Sparse Support）</span>。</p>
+        </div>
+        <div class="card">
+            <h4>2. 局域张量的机械编译</h4>
+            <p>对于如 Toric Code 顶点或量子二聚体约束的局域张量，框架不应再将其视为常规稠密数组进行矩阵乘法。引入 <b>JIT 编译</b>将其降级为按位运算掩码或稀疏自动机，可有效消除环境张量吸收过程中的冗余浮点开销。</p>
+        </div>
+        <div class="card">
+            <h4>3. 权衡对称性规范化的成本</h4>
+            <p>利用非阿贝尔对称群进行张量分块在理论上可降低维度，但在实际内存访存中，判定状态轨道与查表的哈希开销不可忽视。若缓存局部性遭到破坏，这部分的簿记成本可能会反超降维带来的理论收益。</p>
+        </div>
+        <div class="card">
+            <h4>4. 扁平连续布局优于复杂图结构</h4>
+            <p>在精确收缩验证中，内存带宽与指针跳转（Pointer Chasing）往往是性能瓶颈。相比于精巧的决策图结构，将边界的非零元特征紧凑压缩（例如采用 SoA 布局或整型位打包），利用连续内存的排序与规约（Sort-Reduce）通常能获得更高的实际吞吐率。</p>
+        </div>
+        <div class="card">
+            <h4>5. 警惕代数分解的“填充效应” (Fill-in)</h4>
+            <p>实验证明边界态在有限域上具有低秩特性。但若直接尝试使用非结构化的 PLUQ 或高斯消元进行基底抽取，往往会引发显著的“填充效应”，破坏物理基（Physical Basis）原有的稀疏性，导致中间状态内存暴增。</p>
+        </div>
+        <div class="card">
+            <h4>6. BFS 与 DFS 的混合收缩策略</h4>
+            <p>当 CTMRG 或环境张量向内推进、边界规模急剧膨胀时，继续维持完整的广度优先（BFS）前沿会导致内存溢出。此时应考虑采用 <b>Slicing（切片）技术</b>，不再物化宏大环境，而是转为独立的深度优先（DFS）收缩流，以时间换空间。</p>
+        </div>
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- 5. 性能评估 -->
+    <!-- ========================================== -->
+    <h2>5. 性能评估：优化后 PEPS 的实测表现</h2>
+    <p>
+        在实验的演进中（E38 - E47），我们将极简表示、位运算自动机和递归尾部（Recursive Tail）结合，并对最后若干层进行了终端超节点展开（Supernode Unrolling）。这使得张量网络在保持等价性的同时，获得了显著的性能提升。
+    </p>
+
+    <div class="alert alert-info">
+        <h4>📊 冻结硬件环境下的计算对照 (AMD Ryzen 9, 8 线程)</h4>
+        <p style="margin-bottom: 10px; font-size: 0.95rem;"><i>注：DFS 基准采用仓库内已有实现。此对比用于展示特定优化基准下的相对运行效率，并非绝对的渐近复杂度比较。</i></p>
+        <table>
+            <thead>
+                <tr>
+                    <th>问题规模 $N$</th>
+                    <th>DFS 基准中位耗时 (s)</th>
+                    <th>优化 PEPS (E47) 中位耗时 (s)</th>
+                    <th>相对耗时比 (PEPS/DFS)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>$N = 14$</td>
+                    <td>0.010550</td>
+                    <td><b>0.008303</b></td>
+                    <td>0.787×</td>
+                </tr>
+                <tr>
+                    <td>$N = 15$</td>
+                    <td>0.068454</td>
+                    <td><b>0.051086</b></td>
+                    <td>0.746×</td>
+                </tr>
+                <tr>
+                    <td>$N = 16$</td>
+                    <td>0.399135</td>
+                    <td><b>0.314296</b></td>
+                    <td>0.787×</td>
+                </tr>
+                <tr>
+                    <td>$N = 17$</td>
+                    <td>2.999933</td>
+                    <td><b>2.335194</b></td>
+                    <td>0.778×</td>
+                </tr>
+                <tr>
+                    <td>$N = 18$</td>
+                    <td>25.342626</td>
+                    <td><b>19.027543</b></td>
+                    <td>0.751×</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <p>
+        通过引入宽键（Wide Key）与基于中国剩余定理（CRT）的精确算术后端（E45），我们进一步计算了更大规模的网络。$N=20$ 的精确收缩耗时 <b>131.64 秒</b>（精确结果为 $39,029,188,884$）；在 $N=22$ 时，耗时约 2.81 小时完成验证。
+    </p>
+
+    <h3 style="border-top: 1px solid var(--border-light); padding-top: 30px; margin-top: 40px;">结语</h3>
+    <p style="font-size: 1.05rem; color: var(--text-muted); font-weight: 400; line-height: 1.8;">
+        本研究并非单纯为了刷新组合计数的计算记录。其学术价值在于：通过系统性的工程消融实验，清晰地展示了 PEPS 理论模型向底层计算架构映射时的客观规律。它表明，脱离实际支持度（Support）的抽象图论与代数技巧在强约束网络中往往难以发挥优势；相反，顺应数据流、极致压缩边界表示并合理切分计算任务，是通向可扩展张量网络计算更为务实的演进方向。
+    </p>
+
+</div>
+
+</body>
+</html>
