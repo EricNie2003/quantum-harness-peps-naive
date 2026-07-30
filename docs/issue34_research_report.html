@@ -1,0 +1,1341 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Detailed research report for Quantum Harness Issue #34: exact contraction of the Sec. VI N-Queens tensor network.">
+  <title>From 17 Local Entries to the N-Queens Frontier — Issue #34 Research Report</title>
+  <style>
+    :root {
+      --ink: #17202b;
+      --muted: #5c6b7a;
+      --paper: #ffffff;
+      --canvas: #edf1f4;
+      --navy: #0b1f33;
+      --navy-2: #123858;
+      --blue: #1565c0;
+      --cyan: #00a6a6;
+      --green: #16794a;
+      --amber: #b86400;
+      --red: #b52b33;
+      --line: #d8e0e7;
+      --soft-blue: #eaf3fb;
+      --soft-green: #e9f6ef;
+      --soft-amber: #fff5e5;
+      --soft-red: #fdecee;
+      --shadow: 0 16px 40px rgba(13, 31, 49, 0.08);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+    a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: #0b4d98; }
+    code, pre, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-variant-ligatures: none;
+    }
+    code {
+      padding: 0.08rem 0.32rem;
+      border-radius: 5px;
+      background: #eff3f6;
+      color: #243b53;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 1rem 0;
+      padding: 1rem 1.15rem;
+      border: 1px solid #243e56;
+      border-radius: 11px;
+      background: #0d2134;
+      color: #e6f1fa;
+      font-size: 0.86rem;
+      line-height: 1.55;
+    }
+    h1, h2, h3, h4 { line-height: 1.18; letter-spacing: -0.02em; }
+    h2 { margin: 0 0 1rem; font-size: clamp(1.65rem, 3vw, 2.25rem); }
+    h3 { margin: 1.8rem 0 0.75rem; font-size: 1.25rem; }
+    h4 { margin: 1.25rem 0 0.5rem; font-size: 1rem; }
+    p { margin: 0.72rem 0; }
+    ul, ol { padding-left: 1.35rem; }
+    li + li { margin-top: 0.35rem; }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 4.7rem max(5vw, 1.25rem) 4rem;
+      color: #f7fbff;
+      background:
+        radial-gradient(circle at 84% 16%, rgba(0, 191, 191, 0.25), transparent 28%),
+        radial-gradient(circle at 12% 92%, rgba(58, 132, 208, 0.25), transparent 34%),
+        linear-gradient(135deg, #081827 0%, #0c2a43 55%, #113f5d 100%);
+    }
+    .hero::after {
+      position: absolute;
+      inset: 0;
+      content: "";
+      opacity: 0.16;
+      background-image:
+        linear-gradient(rgba(255,255,255,.13) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.13) 1px, transparent 1px);
+      background-size: 34px 34px;
+      mask-image: linear-gradient(to bottom, black, transparent 90%);
+      pointer-events: none;
+    }
+    .hero-inner { position: relative; z-index: 1; max-width: 1160px; margin: 0 auto; }
+    .eyebrow {
+      display: inline-flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 1.2rem;
+      color: #9de7e7;
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { width: 28px; height: 2px; content: ""; background: #45d3d3; }
+    .hero h1 {
+      max-width: 960px;
+      margin: 0;
+      font-size: clamp(2.35rem, 6vw, 5rem);
+      font-weight: 760;
+      letter-spacing: -0.052em;
+    }
+    .hero .dek {
+      max-width: 870px;
+      margin: 1.35rem 0 1.55rem;
+      color: #d4e3ee;
+      font-size: clamp(1.04rem, 2vw, 1.28rem);
+    }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.42rem;
+      padding: 0.44rem 0.72rem;
+      border: 1px solid rgba(255,255,255,.24);
+      border-radius: 999px;
+      color: #eaf5fc;
+      background: rgba(255,255,255,.08);
+      font-size: 0.8rem;
+      font-weight: 700;
+      backdrop-filter: blur(8px);
+    }
+    .pill.status { border-color: rgba(255,193,107,.55); color: #ffd69d; }
+
+    .toc {
+      position: sticky;
+      z-index: 10;
+      top: 0;
+      overflow-x: auto;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 5px 16px rgba(12,31,48,.04);
+      backdrop-filter: blur(14px);
+    }
+    .toc-inner {
+      display: flex;
+      gap: 1.15rem;
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 0.76rem 1.2rem;
+      white-space: nowrap;
+    }
+    .toc a { color: #334e68; font-size: 0.79rem; font-weight: 730; text-decoration: none; }
+    .toc a:hover { color: var(--blue); }
+
+    main { max-width: 1160px; margin: 0 auto; padding: 2rem 1.2rem 5rem; }
+    section {
+      margin: 1.35rem 0;
+      padding: clamp(1.35rem, 3vw, 2.5rem);
+      border: 1px solid rgba(186,198,209,.7);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+    .section-kicker {
+      margin-bottom: 0.42rem;
+      color: var(--blue);
+      font-size: 0.74rem;
+      font-weight: 850;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .lede { max-width: 930px; color: #3e5061; font-size: 1.08rem; }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.84rem; }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.85rem;
+      margin: 1.45rem 0;
+    }
+    .kpi {
+      min-height: 138px;
+      padding: 1.1rem;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: linear-gradient(150deg, #fff, #f7fafc);
+    }
+    .kpi .value { display: block; color: var(--navy-2); font-size: 2rem; font-weight: 800; line-height: 1.12; }
+    .kpi .label { display: block; margin-top: 0.35rem; color: #405466; font-size: 0.88rem; font-weight: 700; }
+    .kpi .note { display: block; margin-top: 0.45rem; color: var(--muted); font-size: 0.74rem; }
+
+    .callout {
+      margin: 1.25rem 0;
+      padding: 1rem 1.15rem;
+      border-left: 4px solid var(--blue);
+      border-radius: 8px;
+      background: var(--soft-blue);
+    }
+    .callout.good { border-color: var(--green); background: var(--soft-green); }
+    .callout.warn { border-color: var(--amber); background: var(--soft-amber); }
+    .callout.danger { border-color: var(--red); background: var(--soft-red); }
+    .callout strong { color: #173a59; }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1rem; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 1rem; }
+    .card {
+      padding: 1.15rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfcfd;
+    }
+    .card h3, .card h4 { margin-top: 0; }
+
+    .formula {
+      margin: 1rem 0;
+      padding: 1rem;
+      border: 1px solid #c7d5e2;
+      border-radius: 10px;
+      background: #f7fafc;
+      color: #183b56;
+      text-align: center;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+    }
+
+    .tensor-layout {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      grid-template-rows: auto auto auto;
+      gap: 0.55rem 1rem;
+      align-items: center;
+      max-width: 640px;
+      margin: 1.4rem auto;
+      text-align: center;
+    }
+    .tensor-node {
+      grid-column: 2;
+      grid-row: 2;
+      display: grid;
+      place-items: center;
+      width: 116px;
+      height: 116px;
+      border: 6px solid #d4e8f8;
+      border-radius: 26px;
+      color: #fff;
+      background: linear-gradient(145deg, #0c5ea8, #0b9a9a);
+      box-shadow: 0 12px 28px rgba(17, 83, 126, .22);
+      font-size: 2.1rem;
+      font-weight: 800;
+    }
+    .leg { color: #334e68; font-size: 0.83rem; font-weight: 750; }
+    .leg.top { grid-column: 2; grid-row: 1; }
+    .leg.bottom { grid-column: 2; grid-row: 3; }
+    .leg.left { grid-column: 1; grid-row: 2; text-align: right; }
+    .leg.right { grid-column: 3; grid-row: 2; text-align: left; }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(110px, 1fr));
+      gap: 0.58rem;
+      margin: 1.3rem 0;
+    }
+    .pipe-step {
+      position: relative;
+      min-height: 112px;
+      padding: 0.8rem;
+      border: 1px solid #bdd0df;
+      border-radius: 11px;
+      background: #f8fbfd;
+    }
+    .pipe-step:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: 43%;
+      right: -0.58rem;
+      content: "→";
+      color: var(--cyan);
+      font-weight: 900;
+    }
+    .pipe-step b { display: block; margin-bottom: 0.3rem; color: #163f5f; font-size: 0.86rem; }
+    .pipe-step span { color: #5b6f80; font-size: 0.73rem; line-height: 1.35; }
+
+    .table-wrap { overflow-x: auto; margin: 1rem 0; border: 1px solid var(--line); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.84rem; font-variant-numeric: tabular-nums; }
+    th, td { padding: 0.62rem 0.68rem; border-bottom: 1px solid #e6ecf1; vertical-align: top; text-align: left; }
+    th { color: #294861; background: #f2f6f9; font-size: 0.74rem; letter-spacing: 0.025em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #f8fbfd; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    .tag {
+      display: inline-block;
+      padding: 0.15rem 0.46rem;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 820;
+      letter-spacing: .02em;
+      white-space: nowrap;
+    }
+    .pass { color: #0f653d; background: var(--soft-green); }
+    .partial { color: #915000; background: var(--soft-amber); }
+    .gap { color: #99222a; background: var(--soft-red); }
+    .info { color: #1a5791; background: var(--soft-blue); }
+
+    figure { margin: 1.4rem 0; }
+    figcaption { margin-top: 0.55rem; color: var(--muted); font-size: 0.78rem; }
+    .chart-shell { padding: 0.8rem; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+    svg.chart { display: block; width: 100%; height: auto; min-height: 260px; }
+    .chart text { font-family: Inter, ui-sans-serif, system-ui, sans-serif; fill: #516476; font-size: 11px; }
+    .chart .title { fill: #213b50; font-size: 14px; font-weight: 750; }
+    .chart .axis { stroke: #8fa2b2; stroke-width: 1; }
+    .chart .grid { stroke: #e4eaef; stroke-width: 1; }
+
+    details {
+      margin: 0.8rem 0;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #fbfcfd;
+    }
+    summary {
+      cursor: pointer;
+      padding: 0.85rem 1rem;
+      color: #1f4059;
+      font-weight: 780;
+    }
+    details[open] summary { border-bottom: 1px solid var(--line); background: #f3f7fa; }
+    .details-body { padding: 0.85rem 1rem 1rem; }
+
+    .story-line {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 1rem;
+      margin: 1rem 0;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .story-line:last-child { border-bottom: 0; }
+    .story-line .phase { color: var(--blue); font-size: 0.78rem; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
+
+    .footnotes { color: #455a6c; font-size: 0.83rem; }
+    footer { max-width: 1160px; margin: 0 auto 3rem; padding: 0 1.2rem; color: #5b6d7e; font-size: 0.8rem; }
+
+    @media (max-width: 940px) {
+      .kpis, .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipeline { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .pipe-step:nth-child(3)::after { display: none; }
+    }
+    @media (max-width: 640px) {
+      .hero { padding-top: 3rem; }
+      main { padding-inline: 0.7rem; }
+      section { border-radius: 12px; }
+      .kpis, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      .pipeline { grid-template-columns: 1fr; }
+      .pipe-step::after { display: none; }
+      .story-line { grid-template-columns: 1fr; gap: 0.25rem; }
+      .tensor-layout { grid-template-columns: minmax(80px, 1fr) auto minmax(80px, 1fr); }
+    }
+    @media print {
+      :root { --canvas: #fff; }
+      body { background: #fff; font-size: 10.5pt; }
+      .toc { display: none; }
+      .hero { padding: 1.5cm; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      main { max-width: none; padding: 0; }
+      section { break-inside: avoid-page; margin: 0; border: 0; border-bottom: 1px solid #bbb; border-radius: 0; box-shadow: none; }
+      details { break-inside: auto; }
+      details:not([open]) .details-body { display: block; }
+      a { color: inherit; text-decoration: none; }
+      .chart-shell { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">Quantum Harness · Issue #34 · Research report</div>
+      <h1>From 17 local entries to the N-Queens frontier</h1>
+      <p class="dek">
+        A fidelity-first account of an exact Sec. VI tensor-network contraction: what was built,
+        which algorithmic ideas survived fifty isolated experiments, why the optimized hot loop
+        resembles backtracking without ceasing to be a certified PEPS contraction, and what the
+        measured scaling says about the still-open target <strong>Q(28)</strong>.
+      </p>
+      <div class="hero-meta">
+        <span class="pill status">Working status: research milestone, not Issue acceptance</span>
+        <span class="pill">Data cut: 2026-07-30 09:45 Asia/Shanghai</span>
+        <span class="pill">Primary method: exact optimized PEPS contraction</span>
+        <span class="pill">Largest completed result: Q(22)</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Report navigation">
+    <div class="toc-inner">
+      <a href="#executive">Executive finding</a>
+      <a href="#requirements">Issue requirements</a>
+      <a href="#network">Tensor network</a>
+      <a href="#algorithm">Algorithm</a>
+      <a href="#exactness">Exactness</a>
+      <a href="#research">Research program</a>
+      <a href="#performance">Performance</a>
+      <a href="#treesa">TreeSA</a>
+      <a href="#projection">Q(28)</a>
+      <a href="#value">Scientific value</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#reproducibility">Reproducibility</a>
+    </div>
+  </nav>
+
+  <main>
+    <section id="executive">
+      <div class="section-kicker">Executive finding</div>
+      <h2>A successful method study, but not yet a frontier count</h2>
+      <p class="lede">
+        The project has produced a documented, strictly exact contraction of the Liu–Liao–Wang
+        Sec. VI network and evolved it from a literal sparse site-by-site implementation into a
+        low-memory, parallel, certified contraction. It has verified every count through
+        <strong>N=22</strong> on the current production path. It has <strong>not</strong> reproduced
+        Q(27), computed Q(28), or submitted the final harness PR; therefore it must not be described
+        as satisfying Issue #34.
+      </p>
+
+      <div class="kpis">
+        <div class="kpi">
+          <span class="value">22</span>
+          <span class="label">Largest completed exact PEPS count</span>
+          <span class="note">Q(22)=2,691,008,701,644; verified on scnet</span>
+        </div>
+        <div class="kpi">
+          <span class="value">17 + 17</span>
+          <span class="label">Explicit nonzeros in B and C</span>
+          <span class="note">Rank-9 B; rank-8 C after physical contraction</span>
+        </div>
+        <div class="kpi">
+          <span class="value">2.81 h</span>
+          <span class="label">Q(22) count time on 128 EPYC cores</span>
+          <span class="note">Then 5.54 h for an independent checked-u128 replay</span>
+        </div>
+        <div class="kpi">
+          <span class="value">105–214 y</span>
+          <span class="label">Provisional one-node Q(28) band</span>
+          <span class="note">Count only; refit over N=18–22; not a completion estimate</span>
+        </div>
+      </div>
+
+      <div class="callout good">
+        <strong>Completed overnight result.</strong> scnet job <code>41497149</code> exited cleanly at
+        06:29:52. It computed Q(22)=2,691,008,701,644 in 10,112.287 s, then reproduced the answer with
+        a separate checked-u128 relation replay in 19,948.064 s. Total Slurm elapsed time was 8:21:02.
+        This is now a measurement, not a projection.
+      </div>
+
+      <div class="grid-3">
+        <div class="card">
+          <h3>What is established</h3>
+          <p>Tensor construction, boundaries, exact arithmetic, C-derived specialization, symmetry
+            weights, and small-N equivalence all have explicit tests. Q(8), Q(16), Q(20), and Q(22) pass.</p>
+        </div>
+        <div class="card">
+          <h3>What improved</h3>
+          <p>The contraction moved from large hash-materialized frontiers to compact sharded vectors,
+            then to sparse prefix sectors and a streamed recursive tail. Memory stopped being the
+            immediate limiter; exponential work did not.</p>
+        </div>
+        <div class="card">
+          <h3>What remains open</h3>
+          <p>There is no measured lower growth exponent than the optimized DFS comparator. Q(27), a
+            robust Q(28) task manifest, distributed recovery, and the harness PR remain outstanding.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="requirements">
+      <div class="section-kicker">Challenge contract</div>
+      <h2>What Issue #34 actually requires</h2>
+      <p>
+        <a href="https://github.com/QuantumBFS/quantum.harness/issues/34">QuantumBFS/quantum.harness
+        Issue #34</a> asks for exact contraction of the Sec. VI N-Queens tensor network, with no
+        count-changing truncation, measured runtime/memory scaling, comparison against classical
+        FPGA/GPU search, and an attempt to reach Q(28). Its minimum benchmark set is Q(8), Q(16),
+        Q(20), and <strong>Q(27)</strong>.
+      </p>
+      <p>
+        A later issue comment says that frontier-pushing work need not literally follow the tensor
+        formulation. That broadens the challenge conversation, but the issue body still labels the
+        method “PEPS Based Algorithm.” More importantly, this repository's explicit research contract
+        is stricter: DFS may be an oracle/comparator, while the primary method must remain an actual
+        Sec. VI contraction or a proved-equivalent optimization mechanically derived from C.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Acceptance item</th><th>Evidence in this project</th><th>Status at data cut</th></tr></thead>
+          <tbody>
+            <tr><td>Explicit Sec. VI B/C and v<sub>0</sub>, v<sub>1</sub>, v<sub>2</sub></td><td>Constructors, truth-table tests, direct sitewise reference, fail-closed compiler</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>Strict exactness</td><td>Checked integers or certified finite-field/CRT; no float, SVD, threshold, or rounding</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>Q(8)=92</td><td>Literal, optimized, scalar, CRT, TreeSA diagnostic, and independent oracle paths</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>Q(16)=14,772,512</td><td>Local production benchmarks and cluster series</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>Q(20)=39,029,188,884</td><td>scnet job 41497022, exact three-prime CRT</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>Largest project result: Q(22)=2,691,008,701,644</td><td>scnet job 41497149, exact CRT count plus checked-u128 replay</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>Q(27)=234,907,967,154,122,528</td><td>No completed project run</td><td><span class="tag gap">NOT MET</span></td></tr>
+            <tr><td>Q(28) or defensible no-go analysis</td><td>N=22 held-out forecast check, N=18–22 refit, and measured bottleneck; no full task-distribution study yet</td><td><span class="tag partial">PARTIAL</span></td></tr>
+            <tr><td>Runtime/memory/support reporting</td><td>Machine-readable CSVs, per-experiment reports, hardware/compiler/repetition metadata</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>Comparison with FPGA/GPU backtracking</td><td>Algorithmic comparison and same-hardware Rust DFS; cross-hardware speedups deliberately avoided</td><td><span class="tag pass">PASS</span></td></tr>
+            <tr><td>PR against quantum.harness</td><td>Not yet submitted</td><td><span class="tag gap">NOT MET</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout danger">
+        <strong>Source-data correction.</strong> The issue body contains an incorrect Q(25). OEIS
+        A000170 gives Q(25)=227,514,171,973,736. This project uses an audited constant table rather
+        than copying that typo. The four minimum acceptance values in the issue are correct.
+      </div>
+    </section>
+
+    <section id="network">
+      <div class="section-kicker">Mathematical object</div>
+      <h2>The network being contracted</h2>
+      <p class="lede">
+        Each board site is not a Boolean clause pasted into a search program. It is a local tensor
+        where four directed, dimension-two constraint channels meet. A channel bit records whether
+        its row, column, or diagonal has already emitted a queen signal.
+      </p>
+
+      <div class="tensor-layout" aria-label="Schematic of the local C tensor and four constraint channels">
+        <div class="leg top">column: top → bottom<br>in/out ∈ {0,1}</div>
+        <div class="leg left">row: left → right<br>in/out ∈ {0,1}</div>
+        <div class="tensor-node">C</div>
+        <div class="leg right">two diagonal channels<br>↘ and ↙</div>
+        <div class="leg bottom">rank 8 · bond dimension 2<br>17 nonzero entries</div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Rank-9 site tensor B</h3>
+          <p>B has one physical occupation index α∈{0,1} and eight virtual indices, paired as
+            incoming/outgoing legs on four constraint lines.</p>
+          <ul>
+            <li><strong>α=0:</strong> each channel independently passes 0→0 or 1→1, giving 2<sup>4</sup>=16 entries.</li>
+            <li><strong>α=1:</strong> every incoming signal is 0 and every outgoing signal is 1, giving one occupied entry.</li>
+            <li>All 17 coefficients are exactly one.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Rank-8 counting tensor C</h3>
+          <p>The physical index is contracted with (1,1)<sup>T</sup>:</p>
+          <div class="formula">C = Σ<sub>α=0,1</sub> B<sup>α</sup></div>
+          <p>The empty and occupied virtual tuples do not collide, so C also has exactly 17 nonzeros.
+            The complete board contraction sums one unit weight for every legal placement.</p>
+        </div>
+      </div>
+
+      <h3>Boundary vectors are part of the mathematics</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Vector</th><th>Where applied</th><th>Constraint encoded</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">v0=(1,0)</td><td>Start of every row, column, and diagonal line</td><td>No queen signal has yet appeared</td></tr>
+            <tr><td class="mono">v1=(0,1)</td><td>End of every row and column</td><td>Exactly one queen signal must have appeared</td></tr>
+            <tr><td class="mono">v2=(1,1)</td><td>End of both diagonal families</td><td>Zero or one queen signal is accepted</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="formula">Q(N) = ⟨v<sub>f</sub> | T<sup>N</sup> | v<sub>0</sub>⟩</div>
+      <p>
+        The transfer operator is nilpotent in the finite problem: T<sup>N+1</sup>=0. Consequently,
+        dominant-eigenvector methods aimed at an infinite fixed point target the wrong quantity.
+        The answer lives in a finite exact power, where intermediate support—not a leading
+        eigenvalue—is the central computational object.
+      </p>
+    </section>
+
+    <section id="algorithm">
+      <div class="section-kicker">Algorithmic transformation</div>
+      <h2>From literal contraction to a certified streaming contraction</h2>
+      <p class="lede">
+        The core research achievement is not a single micro-optimization. It is a chain of
+        equivalence-preserving changes in representation and contraction association, each tested
+        against the explicit tensor before it was trusted at larger N.
+      </p>
+
+      <div class="pipeline" aria-label="Production algorithm pipeline">
+        <div class="pipe-step"><b>1 · Construct B</b><span>Generate the 16 pass-through entries and one occupied entry from Eq. (16).</span></div>
+        <div class="pipe-step"><b>2 · Form C</b><span>Sum the physical α leg; retain and test all 17 virtual entries.</span></div>
+        <div class="pipe-step"><b>3 · Compile row relation</b><span>Fail closed unless C is exactly 16 identities plus one four-channel 0→1 entry.</span></div>
+        <div class="pipe-step"><b>4 · Slice symmetry</b><span>Project first-row vertical-reflection orbits with weights 2, or 1 at an odd center.</span></div>
+        <div class="pipe-step"><b>5 · Split sectors</b><span>Build enough exact C-derived prefix tasks to occupy the node without a giant frontier.</span></div>
+        <div class="pipe-step"><b>6 · Contract tail</b><span>Stream a checked recursive tail; inline the final six rows; sum residues and reconstruct by CRT.</span></div>
+      </div>
+
+      <h3>1. Literal sparse row transfer</h3>
+      <p>
+        The original solver contracted C site by site, carried the open column and two diagonal
+        virtual signals as a sparse boundary tensor, and merged equal outgoing boundaries with exact
+        integer addition. The frontier has at most 3N binary signals, hence a dense representation
+        bound of 2<sup>3N</sup>. Actual support is much smaller, but initially grew by roughly five to
+        six per added row size and reached millions of materialized states.
+      </p>
+
+      <h3>2. Mechanical partial evaluation of C</h3>
+      <p>
+        The compiled row operator scans the real C entries and accepts specialization only if it finds
+        all sixteen identity pass-through signatures, one occupied transition, unit coefficients, and
+        nothing else. This proof obligation matters. Once established, legal occupied positions are
+        the zeros of the three incoming masks and the outgoing virtual signals are deterministic.
+      </p>
+      <pre><code>positions = !(columns | diag_dr | diag_dl) &amp; board_mask
+columns' = columns | selected
+diag_dr' = ((diag_dr | selected) &lt;&lt; 1) &amp; board_mask
+diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
+      <p>
+        These instructions resemble a classic bitboard solver because the Sec. VI tensor compiles to
+        the same local automaton under row-v1 boundary conditions. The classification rests on the
+        derivation and replay chain, not variable names or visual similarity.
+      </p>
+
+      <h3>3. Change the contraction association, not the contracted network</h3>
+      <p>
+        Breadth-first row contraction materializes and sorts entire boundary layers. E38 introduced a
+        hybrid: merge a small exact prefix, then recursively consume the remaining C-derived relation.
+        E40 made the cut adaptive; E42 and E47 grouped the last four and then last six rows into
+        certified terminal supernodes. The mathematical summation is identical, but the memory
+        schedule changes from “store every middle tensor entry” to “stream independent exact sectors.”
+      </p>
+
+      <h3>4. Exact arithmetic chosen by a proved bound</h3>
+      <p>
+        All coefficients are nonnegative and Q(N)≤N!. For N≤20, N! fits in u64 and every arithmetic
+        operation is still checked; an overflow or artificial test limit causes a complete replay.
+        At larger N, fixed-width residues are accumulated modulo deterministic primes and reconstructed
+        only when the checked product M=∏p<sub>i</sub> exceeds N!. Three near-2<sup>32</sup> primes cover
+        N≤27; N=28 requires four. No floating-point decision enters the result.
+      </p>
+
+      <div class="callout good">
+        <strong>Report-safe classification:</strong> the production path is a
+        <em>proved-equivalent optimized contraction of the Sec. VI PEPS</em>. It is not the literal
+        sitewise baseline, and it is not the independent DFS comparator.
+      </div>
+    </section>
+
+    <section id="exactness">
+      <div class="section-kicker">Trust chain</div>
+      <h2>Why agreement with OEIS is not the proof</h2>
+      <p class="lede">
+        A wrong algorithm can return a known number. Fidelity and final-count validation are therefore
+        separate gates. The project builds an evidence chain from local truth tables to optimized
+        successors, arithmetic uniqueness, and only then external known values.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Layer of evidence</th><th>What is checked</th><th>Failure prevented</th></tr></thead>
+          <tbody>
+            <tr><td>Local tensor construction</td><td>B has 16 empty + 1 occupied entry; C has 17 entries after summing α</td><td>Replacing the paper tensor with a handwritten rule</td></tr>
+            <tr><td>Truth tables</td><td>All empty channels pass independently; occupied is four-channel 0→1</td><td>Wrong leg order, direction, or emission semantics</td></tr>
+            <tr><td>Boundary tests</td><td>v0…v1 accepts exactly one occupation; v0…v2 accepts at most one</td><td>Confusing row/column “exactly one” with diagonal “at most one”</td></tr>
+            <tr><td>Compiler certificate</td><td>Every C entry is classified, coefficients are one, missing/extra entries reject specialization</td><td>Silent drift from explicit C to a conventional recurrence</td></tr>
+            <tr><td>Reachable-parent replay</td><td>Compiled successors equal sitewise-C successor multisets for every reachable parent through small N</td><td>A locally plausible but globally different row operator</td></tr>
+            <tr><td>Symmetry audit</td><td>All D4 actions preserve B/C; only the vertical reflection stabilizes the interior horizontal cut</td><td>Blind 8× multiplication or lost fixed points</td></tr>
+            <tr><td>Arithmetic certification</td><td>Checked u64/u128; deterministic primes; ∏p&gt;N!; CRT result≤N!</td><td>Overflow, modular ambiguity, rounding</td></tr>
+            <tr><td>Independent oracle</td><td>Small-N brute force and a separately implemented DFS comparator</td><td>Shared implementation defects</td></tr>
+            <tr><td>Known counts</td><td>Post-computation comparison with an audited A000170 table</td><td>Regression at benchmark sizes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Current E50 validation</h3>
+          <ul>
+            <li>52 release library tests passed in the cluster worktree.</li>
+            <li>Forced three- and four-lane scalar/AVX2 residues agree.</li>
+            <li>Small-N CRT reconstruction agrees with checked-u128 C replay.</li>
+            <li>Known-count lookup is used after computation, not as a solver shortcut.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Honest limitations</h3>
+          <ul>
+            <li>The optimized replay no longer scans 17 entries at every hot-loop site; it replays the certified relation.</li>
+            <li>N=20/21 calibration omitted the expensive profile replay, so full node counts are not available for those rows.</li>
+            <li>Q(27) has not been reproduced; formal Issue acceptance remains open.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="research">
+      <div class="section-kicker">Auto-research record</div>
+      <h2>Fifty directions, organized around falsifiable mechanisms</h2>
+      <p class="lede">
+        Each optimization direction was isolated in its own worktree, preregistered with keep/kill
+        gates, and followed by a mandatory review every five directions. Negative results were kept
+        because they constrain the next hypothesis—and because generic tensor-network intuition was
+        often misleading for this unusually sparse, nilpotent network.
+      </p>
+
+      <div class="story-line"><div class="phase">Phase I · E1–E10</div><div><strong>Make the literal frontier implementation competent.</strong> Index C, pack keys, reuse buffers, compile the row MPO, adopt sort-reduce, and parallelize. Result: large constant-factor gains, but unchanged support growth.</div></div>
+      <div class="story-line"><div class="phase">Phase II · E11–E20</div><div><strong>Search for structural compression.</strong> D4 slicing worked; generic site trees, post-hoc future quotients, finite-field low rank, exact MPS, PLUQ, and separators exposed structure but could not exploit it before materializing the frontier.</div></div>
+      <div class="story-line"><div class="phase">Phase III · E21–E30</div><div><strong>Test symbolic representations and memory organization.</strong> Weighted DDs and macro paths failed their production gates. Sharding and compact records succeeded because they improved locality without pretending to alter the exponent.</div></div>
+      <div class="story-line"><div class="phase">Phase IV · E31–E40</div><div><strong>Attack record traffic, then stop producing records.</strong> Parallel generation and u64 packing helped; the decisive turn was the C-derived recursive tail, which reduced memory by orders of magnitude and brought the PEPS path close to DFS.</div></div>
+      <div class="story-line"><div class="phase">Phase V · E41–E50</div><div><strong>Optimize the streamed tail and widen exact arithmetic.</strong> Last-k supernodes and wide CRT survived. Scheduling, memoization, explicit stacks, and two SIMD strategies did not. The scalar control—not AVX2—is the current cluster production configuration.</div></div>
+
+      <details>
+        <summary>E1–E10 · Literal contraction, layout, compilation, sorting, parallelism</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>E1</td><td>Index C by incoming signature</td><td>Removed repeated 17-entry scans; N=14 25.19→19.31 s</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E2</td><td>Reserve HashMap from input support</td><td>Resize timing and memory traffic dominated; only ~3.4% at N=13</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E3</td><td>Pack three virtual masks into u128</td><td>Reduced bytes/state; N=14 RSS 987→666 MiB</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E4</td><td>Cheaper deterministic hasher</td><td>No support/locality change; slightly slower</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E5</td><td>Reuse partial-row buffers</td><td>Removed repeated allocation; N=14 17.61→11.09 s</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E6</td><td>Compile full row operator from C</td><td>Mechanical partial evaluation; N=14 11.09→5.85 s</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E7</td><td>Weighted ADD/ZDD compresses boundary</td><td>Node count exceeded sparse support; ~15× slower at N=11</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E8</td><td>Snake/diagonal site order lowers width</td><td>Diagonal cuts crossed more constraint lines; support +74% at N=6</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E9</td><td>Sort-reduce beats hash materialization</td><td>Sequential memory access mattered more than merge ratio; near 2× at N=14</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E10</td><td>Slice parents and parallel-sort candidates</td><td>5.22× over serial at N=14; saturated after 16 threads</td><td><span class="tag pass">KEEP</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>E11–E20 · Sparse transitions, symmetry, path search, rank, quotients, separators</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>E11</td><td>Enumerate only C-legal positions</td><td>12.46× fewer predicate checks, but sort/materialization dominated</td><td><span class="tag partial">DIAGNOSTIC</span></td></tr>
+              <tr><td>E12</td><td>Cut-preserving D4 orbits</td><td>Vertical reflection nearly halved support/work; full D4 does not stabilize the cut</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E13</td><td>Generic support-aware site trees</td><td>Best tree still 21–27× row-macro support at N=9–11</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E14</td><td>Exact future-equivalence quotient</td><td>Classes only 10–16% of support, but required full graph first</td><td><span class="tag partial">EVIDENCE</span></td></tr>
+              <tr><td>E15</td><td>Exact finite-field low rank</td><td>Rank/support fell to 3.77% at N=13; post-hoc elimination far too costly</td><td><span class="tag partial">EVIDENCE</span></td></tr>
+              <tr><td>E16</td><td>Streaming exact finite-field MPS</td><td>Correct rank, but dense elimination and SWAP cost were catastrophic</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E17</td><td>PLUQ factors preserve sparsity</td><td>Factor fill-in reached 261× support</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E18</td><td>Online future quotient avoids second pass</td><td>Still had to visit every concrete state before canonicalization</td><td><span class="tag partial">ORACLE ONLY</span></td></tr>
+              <tr><td>E19</td><td>D4 plus row/half-row macro tree</td><td>Full-row C partial evaluation dominated association changes</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E20</td><td>Bidirectional separator join</td><td>Join was cheap; the bottom-v2 interface exploded to 158× baseline support</td><td><span class="tag gap">REJECT</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>E21–E30 · Decision diagrams, kernels, sharding, compact data, macro association</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>E21</td><td>C-derived canonical weighted DD</td><td>Nodes were 3.7–4.5× concrete support; 59–71× slower</td><td><span class="tag gap">REJECT PROD.</span></td></tr>
+              <tr><td>E22</td><td>Search variable order using actual DD nodes</td><td>Real 21–22% node reduction, but representation remained noncompetitive</td><td><span class="tag partial">KEEP METHOD</span></td></tr>
+              <tr><td>E23</td><td>Projectively normalize weighted edges</td><td>Only 5–15% node reduction; extra arithmetic made it slower</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E24</td><td>Arena, fused batches, sparse iterator, radix</td><td>Arena/fusion/sparsity won; custom radix and deferred layout lost</td><td><span class="tag pass">MIXED KEEP</span></td></tr>
+              <tr><td>E25</td><td>Symbolic tilted separator</td><td>Prerequisite symbolic representation had failed</td><td><span class="tag gap">DEPENDENCY STOP</span></td></tr>
+              <tr><td>E26</td><td>Prefix-sharded sort/reduce</td><td>Smaller local sorts and parallel reduction; N=15 32.5% faster, RSS −26.6%</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E27</td><td>Chunked runs and k-way merge cut RSS</td><td>Retained runs plus output stayed live; 55–75% slower for 3–5% RSS gain</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E28</td><td>24-byte compact exact entries</td><td>Avoided u128 alignment waste; RSS −24%, time −13–15%</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E29</td><td>Two-row macro avoids one materialization</td><td>Delayed canonical merge duplicated C apply; N=13 2.06× slower</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E30</td><td>Actual-cost macro tree finds a better mix</td><td>All-single-row remained optimal; search itself grew Fibonacci-fast</td><td><span class="tag gap">REJECT</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>E31–E40 · Parallel generation, compact coefficients, structural audit, recursive tail</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>E31</td><td>Balanced bounded parallel generation</td><td>N=15 1.91× faster with only 0.9% RSS growth</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E32</td><td>Checked u64 coefficient fast path</td><td>16-byte records; N=15 RSS −33%, time −20%</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E33</td><td>Compact LSD radix beats pdqsort</td><td>Multiple full data passes; N=15 34% slower</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E34</td><td>Top-left diamond cut exploits geometry</td><td>Crossed more of all four line families; 10–13× production support</td><td><span class="tag gap">REJECT ORDER</span></td></tr>
+              <tr><td>E35</td><td>Certify frontier distinguishability</td><td>Future classes grew with fitted base 4.44; useful lower bound for row bisimulation only</td><td><span class="tag partial">CERTIFICATE</span></td></tr>
+              <tr><td>E36</td><td>Pack key and coefficient jointly in u64</td><td>Entry 16→8 bytes; N=15 time −33%, RSS roughly halved</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E37</td><td>Reuse arenas across rows</td><td>Reduced growth/reallocation; N=15 −12.6% in paired rerun</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E38</td><td>Switch late layers to recursive C tail</td><td>Stopped materializing the widest layers; N=15 0.466→0.141 s, RSS 333→31 MB</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E39</td><td>Full D4 canonical pruning</td><td>Only 1.3–1.8% fewer nodes beyond vertical symmetry; checks cost more</td><td><span class="tag gap">REJECT PROD.</span></td></tr>
+              <tr><td>E40</td><td>Adaptive C-certified fast tail</td><td>N=14/15 reached 0.01197/0.07122 s and ~9/11 MB</td><td><span class="tag pass">KEEP</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details open>
+        <summary>E41–E50 · Tail microkernels, wide CRT, scalar sectors, SIMD falsification</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>E41</td><td>Remove merged prefix entirely</td><td>Prefix seed was already negligible; tail still processed 13.7M–570.6M transitions</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E42</td><td>Inline certified last four rows</td><td>Removed hot recursive dispatch; first stable local PEPS win over DFS at N=15</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E43</td><td>Order/chunk sectors by cheap scores</td><td>Scores did not predict subtree work; probing cost approached a count</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E44</td><td>Exact suffix transposition table</td><td>Only 0.43–0.58% hits; hashing made it 1.36–1.55× slower</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E45</td><td>Wide masks plus certified CRT</td><td>Removed key/arithmetic width limit and cut RSS to MB; modular lanes cost time</td><td><span class="tag pass">KEEP BACKEND</span></td></tr>
+              <tr><td>E46</td><td>Direct-sector checked scalar u64</td><td>N=17/18 35/34% faster than E45; N=18 22% faster than DFS</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E47</td><td>Extend terminal supernode to six rows</td><td>N=16/17 another 21.5/18.6% faster; all N=14–18 beat local DFS checkpoint</td><td><span class="tag pass">KEEP</span></td></tr>
+              <tr><td>E48</td><td>Replace recursion with fixed explicit stack</td><td>Array traffic canceled call-frame savings; only 0.8–1.3%</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E49</td><td>AVX2 across independent root sectors</td><td>Only one layer vectorized; load/store/dispatch overhead made it 1.6–2.1% slower</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E50</td><td>AVX2 across 3/4 CRT residue lanes</td><td>LLVM scalar arrays were already efficient; explicit AVX2 was up to 16.8% slower</td><td><span class="tag gap">REJECT AVX2</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <div class="callout">
+        <strong>Mandatory E46–E50 review conclusion.</strong> The winning mechanism was contraction
+        association and native scalar arithmetic, not explicit SIMD. E46/E47 are retained; E48–E50
+        candidates are rejected. The cluster run uses E50's scalar control (E45 CRT + E47 last-six),
+        with the rejected AVX2 mode forced off. No E51 direction should begin until this review and a
+        revised direction list are recorded alongside the experiment artifacts.
+      </div>
+    </section>
+
+    <section id="performance">
+      <div class="section-kicker">Measured performance</div>
+      <h2>The bottleneck moved from memory capacity to streamed exponential work</h2>
+
+      <h3>Local same-hardware checkpoint: E47 versus independent DFS</h3>
+      <p>
+        On the Ryzen 9 7945HX with eight threads, release/thin-LTO, E47's checked scalar-u64
+        last-six contraction beat the separately implemented DFS comparator at every measured
+        N=14–18 point. This is a real finite-size result, not evidence of a better asymptotic exponent.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">N</th><th class="num">E47 PEPS</th><th class="num">DFS comparator</th><th class="num">PEPS / DFS</th><th>Interpretation</th></tr></thead>
+          <tbody>
+            <tr><td class="num">14</td><td class="num">0.008303 s</td><td class="num">0.010550 s</td><td class="num">0.787×</td><td>PEPS 21.3% faster</td></tr>
+            <tr><td class="num">15</td><td class="num">0.051086 s</td><td class="num">0.068454 s</td><td class="num">0.746×</td><td>PEPS 25.4% faster</td></tr>
+            <tr><td class="num">16</td><td class="num">0.314296 s</td><td class="num">0.399135 s</td><td class="num">0.788×</td><td>PEPS 21.2% faster</td></tr>
+            <tr><td class="num">17</td><td class="num">2.335194 s</td><td class="num">2.999933 s</td><td class="num">0.778×</td><td>PEPS 22.2% faster</td></tr>
+            <tr><td class="num">18</td><td class="num">19.027543 s</td><td class="num">25.342626 s</td><td class="num">0.751×</td><td>PEPS 24.9% faster; only three measured samples</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure>
+        <div class="chart-shell"><svg id="localCompareChart" class="chart" viewBox="0 0 900 330" role="img" aria-label="E47 PEPS time divided by DFS time from N14 through N18"></svg></div>
+        <figcaption>Ratio below one favors the PEPS contraction. Same CPU, thread count, revision checkpoint, and benchmark period; methods remain algorithmically distinct.</figcaption>
+      </figure>
+
+      <h3>Matched-node scnet series</h3>
+      <p>
+        The production cluster configuration uses one node with 128 physical cores (2× AMD EPYC
+        7742), core binding, 32 GiB requested memory, a static-musl release binary, and scalar
+        three-prime CRT. N=1–19 are seven-sample medians after two warmups; N=20–22 are single exact
+        samples, with N=22 followed by a separate checked-u128 replay. N≤16 are dominated by launch,
+        splitting, and synchronization overhead and are excluded from late-N fits.
+      </p>
+
+      <figure>
+        <div class="chart-shell"><svg id="scalingChart" class="chart" viewBox="0 0 900 430" role="img" aria-label="Log-scale E50 exact PEPS count time for N1 through N22"></svg></div>
+        <figcaption>Measured count time only. Blue circles are repeated medians; orange squares are single samples. The shaded region is overhead-dominated.</figcaption>
+      </figure>
+
+      <figure>
+        <div class="chart-shell"><svg id="ratioChart" class="chart" viewBox="0 0 900 310" role="img" aria-label="Adjacent count-time ratios for late N"></svg></div>
+        <figcaption>Late-N adjacent ratios range from roughly 5.3× to 9.0×; N=22 is 8.51×. Five points are still insufficient to identify an asymptotic law.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">N</th><th class="num">Exact Q(N)</th><th class="num">Count time</th><th class="num">T(N)/T(N−1)</th><th>Sampling policy</th></tr></thead>
+          <tbody>
+            <tr><td class="num">16</td><td class="num">14,772,512</td><td class="num">0.074719 s</td><td class="num">2.11×</td><td>7 repeats + 2 warmups; still overhead-sensitive</td></tr>
+            <tr><td class="num">17</td><td class="num">95,815,104</td><td class="num">0.398020 s</td><td class="num">5.33×</td><td>7-repeat median</td></tr>
+            <tr><td class="num">18</td><td class="num">666,090,624</td><td class="num">2.174198 s</td><td class="num">5.46×</td><td>7-repeat median</td></tr>
+            <tr><td class="num">19</td><td class="num">4,968,057,848</td><td class="num">17.068042 s</td><td class="num">7.85×</td><td>7-repeat median</td></tr>
+            <tr><td class="num">20</td><td class="num">39,029,188,884</td><td class="num">131.643368 s</td><td class="num">7.71×</td><td>One exact sample</td></tr>
+            <tr><td class="num">21</td><td class="num">314,666,222,712</td><td class="num">1,187.868090 s</td><td class="num">9.02×</td><td>One exact sample</td></tr>
+            <tr><td class="num">22</td><td class="num">2,691,008,701,644</td><td class="num">10,112.287308 s</td><td class="num">8.51×</td><td>One exact count + separate checked-u128 replay</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Memory is now low, but low memory is not low complexity</h3>
+      <p>
+        The N=20/21 calibration process peaked at 18,408 KiB by GNU <code>time -v</code> (Slurm:
+        18,124 K). The combined N=22 count-and-replay task reached 58,260 K by Slurm MaxRSS; that
+        scheduler sample cannot attribute memory to either phase, and the run's internal RSS field
+        was disabled. The dramatic reduction from early multi-gigabyte frontiers comes from streaming
+        independent sectors rather than materializing a middle tensor. It does not mean the tail is
+        small: the N=22 checked replay measured 143,257,397,145,757 recursive nodes and
+        143,257,397,198,927 accepted entries in total. The count is compute-bound by branch/node work
+        after the memory problem has been reorganized away.
+      </p>
+
+      <div class="grid-3">
+        <div class="card"><h3>Initial N=14</h3><p><strong>25.19 s</strong><br>986 MiB<br>5.48M materialized states</p></div>
+        <div class="card"><h3>E40 local N=15</h3><p><strong>0.071 s</strong><br>10.7 MB<br>7,426 prefix tasks</p></div>
+        <div class="card"><h3>E50 cluster N=22</h3><p><strong>2.81 h count</strong><br>~57 MiB Slurm task HWM<br>612,106 tail tasks</p></div>
+      </div>
+      <p class="small muted">
+        These three cards are milestones on different hardware/thread/arithmetic configurations and
+        must not be read as a controlled speedup ratio. They show the qualitative change in memory
+        schedule and accessible N.
+      </p>
+    </section>
+
+    <section id="treesa">
+      <div class="section-kicker">Contraction-order study</div>
+      <h2>Why generic TreeSA did not improve E50</h2>
+      <p class="lede">
+        TreeSA is valuable as a hypothesis test, but it optimizes topology and dense bond dimensions.
+        E50's advantage comes from tensor values, exact sparsity, row-level partial evaluation, and a
+        streamed tail. A site-level dense objective cannot see those mechanisms.
+      </p>
+
+      <p>
+        A separate isolated diagnostic branch generated actual OMEinsumContractionOrders.jl TreeSA
+        plans and executed them with a Rust sparse tensor engine built directly from the explicit C,
+        with exact D4 first-row conditioning and checked u128 arithmetic. All N=8–11 counts were
+        correct, but the preregistered support gate failed at every size.
+      </p>
+
+      <figure>
+        <div class="chart-shell"><svg id="treeSaChart" class="chart" viewBox="0 0 900 330" role="img" aria-label="TreeSA peak support divided by row-sweep support from N8 through N11"></svg></div>
+        <figcaption>Actual sparse support ratio; lower than 0.8× was required. Every measured ratio is above one, often dramatically.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">N</th><th class="num">TreeSA support</th><th class="num">Row support</th><th class="num">Ratio</th><th class="num">Dense space log2</th><th>Count</th></tr></thead>
+          <tbody>
+            <tr><td class="num">8</td><td class="num">15,904</td><td class="num">272</td><td class="num">58.47×</td><td class="num">22</td><td>92 · verified</td></tr>
+            <tr><td class="num">9</td><td class="num">10,139</td><td class="num">1,210</td><td class="num">8.38×</td><td class="num">26</td><td>352 · verified</td></tr>
+            <tr><td class="num">10</td><td class="num">491,832</td><td class="num">4,510</td><td class="num">109.05×</td><td class="num">28</td><td>724 · verified</td></tr>
+            <tr><td class="num">11</td><td class="num">367,284</td><td class="num">22,253</td><td class="num">16.50×</td><td class="num">32</td><td>2,680 · verified</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout danger">
+        The N=20 plan-only search reported <code>dense_space_log2=60</code>. A dense intermediate of
+        2<sup>60</sup> entries would require 16 EiB for one bare 128-bit value per entry, before keys or
+        container overhead. This is not a sparse-memory prediction, but the small-N sparse evidence is
+        already unfavorable. The exact N=20 TreeSA contraction was correctly not submitted to scnet.
+      </div>
+
+      <p>
+        A future path-search experiment would need different atoms and a different cost model: derived
+        row-macro tensors, candidate materialization, actual nonzero support, cache traffic, or SIMD
+        utilization. Re-running site-level TreeSA with more trials or more cluster cores does not
+        address the measured failure mechanism.
+      </p>
+    </section>
+
+    <section id="projection">
+      <div class="section-kicker">Scaling and feasibility</div>
+      <h2>What the current data imply for Q(28)</h2>
+      <p>
+        The projection is deliberately a sensitivity analysis, not a complexity theorem. Before N=22
+        finished, three models predicted 2.68 h, 2.83 h, and 2.98 h; the measured 2.809 h result gave
+        errors of −4.53%, +0.58%, and +6.00%. That held-out check supports using the models as a rough
+        bracket, while remaining far too weak to establish an asymptotic law. The table refits
+        count-only wall time over N=18–22 and anchors at measured N=22. A measured four-lane/three-lane
+        geometric overhead factor of 1.02497 is applied at N=28, where the CRT uniqueness bound
+        requires the fourth prime.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Model</th><th>N=22 held-out forecast error</th><th class="num">Refit N=23</th><th class="num">Refit N=27</th><th class="num">Refit N=28</th><th>Use</th></tr></thead>
+          <tbody>
+            <tr><td>log T = a + bN</td><td>2.68 h · −4.53%</td><td class="num">0.97 d</td><td class="num">12.43 y</td><td class="num">105.5 y</td><td>Lower end of refit band</td></tr>
+            <tr><td>log T = a + bN log N</td><td>2.83 h · +0.58%</td><td class="num">1.03 d</td><td class="num">21.26 y</td><td class="num">213.6 y</td><td>Rising adjacent-ratio sensitivity</td></tr>
+            <tr><td>Hold latest adjacent ratio</td><td>2.98 h · +6.00%</td><td class="num">1.00 d</td><td class="num">14.33 y</td><td class="num">125.0 y</td><td>Local-ratio stress test</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>What this supports</h3>
+          <ul>
+            <li>One current EPYC node is not a credible Q(28) route.</li>
+            <li>N=23 is about one day; N=24 is 8–9 days; N=25 is 66–86 days on one current node.</li>
+            <li>The precise limiter is recursive accepted C transitions, not key width or CRT uniqueness.</li>
+            <li>A successful next direction must reduce work growth, not only memory or ns/node.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>What this does not support</h3>
+          <ul>
+            <li>It does not prove an asymptotic law from five late-N points.</li>
+            <li>It does not include the additional checked replay cost.</li>
+            <li>It is not a distributed resource estimate or confidence interval.</li>
+            <li>It does not satisfy the planned Q(28) task-manifest sampling protocol.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <strong>Go/no-go verdict:</strong> no-go for a full Q(28) run with the current kernel. The
+        prerequisite Q(27 verification is absent, and the projected one-node cost exceeds a practical
+        budget by orders of magnitude—roughly 13,500–27,300 core-years for count-only work at 128
+        continuously utilized cores. The scientifically correct deliverable is the measured scaling,
+        the limiting mechanism, and the algorithmic breakthrough required—not an unbounded job.
+      </div>
+    </section>
+
+    <section id="value">
+      <div class="section-kicker">Research contribution</div>
+      <h2>What value this tensor-network algorithm has</h2>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>1 · An independent exact formulation</h3>
+          <p>
+            The solver begins from a local statistical-mechanics object rather than a bespoke queen
+            search. That provides an independent correctness route and a reusable model-counting
+            architecture: local tensors, open-boundary states, contraction order, arithmetic backend,
+            and symmetry slicing are separately auditable.
+          </p>
+        </div>
+        <div class="card">
+          <h3>2 · A case study in compiling tensor networks</h3>
+          <p>
+            The work demonstrates how a sparse local tensor can be partially evaluated into a compact
+            automaton without losing tensor fidelity. The important contribution is the certificate:
+            specialization fails if C changes, and optimized successors are replayed against the
+            explicit contraction.
+          </p>
+        </div>
+        <div class="card">
+          <h3>3 · A warning about generic path costs</h3>
+          <p>
+            Dense width, generic FLOP estimates, post-hoc rank, and geometric cuts repeatedly failed
+            to predict actual sparse performance. TreeSA's N=20 width-60 plan and the E13/E34 failures
+            make this benchmark a useful adversarial example for contraction-order research.
+          </p>
+        </div>
+        <div class="card">
+          <h3>4 · Evidence about memory/time separation</h3>
+          <p>
+            The project reduced peak memory from nearly a gigabyte at N=14 to megabyte-scale streamed
+            sectors at larger N, while exponential time remained. This cleanly separates state-storage
+            complexity from total contraction work and prevents the false conclusion that low RSS
+            means scalability has been solved.
+          </p>
+        </div>
+        <div class="card">
+          <h3>5 · A bridge between PEPS and combinatorial search</h3>
+          <p>
+            After exact compilation, the hot loop converges toward bitmask operations. This is not an
+            embarrassment; it is the mathematical connection. Variable elimination, dynamic
+            programming, tensor contraction, and search can execute the same sum with different
+            associations and intermediate representations.
+          </p>
+        </div>
+        <div class="card">
+          <h3>6 · High-quality negative results</h3>
+          <p>
+            Exact MPS, PLUQ, DDs, generic TreeSA, full D4, memoization, iterative stacks, radix, and
+            explicit AVX2 were not silently discarded. Their measured failure mechanisms narrow the
+            research space and are independently valuable for future exact-TN work.
+          </p>
+        </div>
+      </div>
+
+      <h3>Relationship to classical frontier solvers</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Method family</th><th>Core representation</th><th>Strength</th><th>Limitation / comparison rule</th></tr></thead>
+          <tbody>
+            <tr><td>This work: optimized Sec. VI PEPS</td><td>C-certified virtual-boundary sectors + exact scalar/CRT tail</td><td>Independent tensor derivation, exactness certificate, low memory, rich instrumentation</td><td>Current measured growth does not beat DFS; Q(27) absent</td></tr>
+            <tr><td>Local Rust DFS comparator</td><td>Columns and diagonals on a recursive bitmask stack</td><td>Minimal per-node overhead; same-hardware control</td><td>Not the repository's primary PEPS method</td></tr>
+            <tr><td>Q27 FPGA carry chains</td><td>Massively distributed prefix search, D4, custom bit logic</td><td>Purpose-built throughput and demonstrated frontier result</td><td>Different hardware and run scale; wall time is not a fair speedup denominator</td></tr>
+            <tr><td>Recent GPU iterative DFS</td><td>Shared-memory stacks, bank-conflict avoidance, many prefixes</td><td>Independent Q27 verification and much stronger aggregate compute</td><td>Algorithm and hardware differ; compare method and resource scale, not raw seconds</td></tr>
+            <tr><td>General multi-GPU exact TN</td><td>Distributed dense intermediates and communication-aware schedules</td><td>Excellent when GEMM-rich tensor arithmetic dominates</td><td>This N-Queens path is sparse, branch-heavy, and not presently compute-dense</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout good">
+        The strongest defensible claim is not “PEPS has solved N-Queens.” It is:
+        <strong>an exact, paper-faithful PEPS contraction can be compiled and associated well enough
+        to match or beat a tuned local DFS at finite N, while revealing that the remaining frontier
+        barrier is exponential accepted-transition work.</strong>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <div class="section-kicker">Next decisions</div>
+      <h2>What must happen before a credible Issue #34 submission</h2>
+      <ol>
+        <li><strong>Archive the completed N=22 run locally.</strong> Mirror the remote raw CSV and logs,
+          and preserve Slurm MaxRSS, scheduler state, compiler, binary hash, and exact command beside
+          the experiment report before submission.</li>
+        <li><strong>Complete the formal E46–E50 review artifact.</strong> Preserve the conclusion that
+          scalar last-six won and explicit AVX2 failed; do not start E51 before revising priorities.</li>
+        <li><strong>Target work reduction.</strong> A next representation must reduce actual accepted
+          C transitions or give a provable cross-sector quotient before enumeration. More lane tuning,
+          root ordering, or site-level TreeSA does not meet this criterion.</li>
+        <li><strong>Add recoverable distributed execution.</strong> Freeze task manifests, detect
+          duplicates/missing tasks, checkpoint, retry, and independently verify selected heavy sectors.</li>
+        <li><strong>Reach Q(27) before claiming acceptance.</strong> Use at least two exactness paths,
+          a modulus product above 27!, complete manifests, and preserved provenance.</li>
+        <li><strong>Only then perform a Q(28) sample-distribution study.</strong> Measure median, P90,
+          P99, and worst predicted tasks; report core-hours, tail risk, memory, storage, and verification
+          overhead before any full submission.</li>
+        <li><strong>Prepare the harness PR.</strong> Include a concise method report, exactness proof,
+          scaling and negative-results documents, raw CSVs, reproducible commands, and an explicit
+          link to Issue #34.</li>
+      </ol>
+
+      <h3>Recommended research hypothesis after the review</h3>
+      <div class="formula">
+        The next material gain must reduce the number of distinct exact C-derived continuations
+        <em>before</em> they are traversed—not merely store or execute the same continuations faster.
+      </div>
+      <p>
+        Candidate mechanisms include an online canonical quotient derived at apply time, a separator
+        whose bottom-v2 interface is proved small, or a new macro relation that reduces measured
+        accepted transitions rather than only dense width. Every candidate must keep the explicit-C
+        replay gate and be killed early if two consecutive small N values do not improve actual work.
+      </p>
+    </section>
+
+    <section id="reproducibility">
+      <div class="section-kicker">Provenance</div>
+      <h2>Reproducibility record</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Artifact / run</th><th>Revision or job</th><th>Configuration</th><th>Location</th></tr></thead>
+          <tbody>
+            <tr><td>Main research history through E50 reports</td><td><code>bd928cd</code></td><td>Accepted code + negative reports through explicit AVX2 rejection</td><td><code>REPORT.md</code>, <code>experiments/e*/</code>, <code>benchmarks/</code></td></tr>
+            <tr><td>E50 cluster branch</td><td><code>e34ed67</code>; algorithm <code>ea5b985</code></td><td>rustc 1.97.1; static musl; scalar 3-prime CRT; last-six; AVX2 off</td><td><code>.worktrees/scnet-e50-overnight/</code></td></tr>
+            <tr><td>N=20/21 calibration</td><td>Slurm <code>41497022</code></td><td>128 physical cores; dual EPYC 7742; 32 GiB request; one sample each</td><td><code>benchmarks/scnet_e50_calibration_release.csv</code> in cluster worktree</td></tr>
+            <tr><td>N=1–19 matched-node series</td><td>Slurm <code>41498587</code></td><td>Same production binary; seven samples + two warmups</td><td><code>benchmarks/scnet_e50_scaling_n1_n19_release.csv</code></td></tr>
+            <tr><td>Three/four-lane overhead pair</td><td>Slurm <code>41498812</code></td><td>N=18/19, same EPYC node, paired sequential lanes</td><td><code>benchmarks/scnet_e50_crt_lane_pair_release.csv</code></td></tr>
+            <tr><td>N=22 profiled job</td><td>Slurm <code>41497149</code></td><td>Completed, exit 0; 10,112.287 s count + 19,948.064 s replay; 8:21:02 total</td><td><code>results/e50_scalar3_profile_once_scnet_n22_job41497149.csv</code> on scnet</td></tr>
+            <tr><td>TreeSA diagnostic</td><td><code>c715e36</code></td><td>OMEinsumContractionOrders 1.3.0; exact Rust sparse C; seed 20260729</td><td><code>.worktrees/e37-treesa-d4/</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Representative commands</h3>
+      <pre><code># Correctness and linting
+cargo test --release
+cargo clippy --release --all-targets -- -D warnings
+
+# Local E47 last-six checkpoint
+cargo run --release --bin e47_last_k -- 14 15 21 3 512 6
+cargo run --release --bin e47_last_k -- 16 17 21 3 2048 6
+
+# Matched-node E50 scalar CRT series
+RAYON_NUM_THREADS=128 ./bin/e50_crt_avx2 scalar 3 1 19 7 2 512 0
+
+# N=20/21 calibration submission
+sbatch --job-name=qpeps-e50-cal --time=01:00:00 \
+  scripts/scnet_e50_scalar_crt.sbatch 20 21 1 0 512 0</code></pre>
+
+      <h3>Measurement caveats</h3>
+      <ul>
+        <li>Windows local RSS is process <code>PeakWorkingSet64</code>; Linux cluster RSS is GNU
+          <code>time -v</code> maximum RSS with Slurm MaxRSS as a sampling cross-check. Neither is
+          allocator live heap.</li>
+        <li>Per-process high-water marks can include runtime, stacks, retained allocator pages, and
+          a metrics replay. The report does not interpret them as exact tensor payload bytes.</li>
+        <li>Repeated medians and single exact samples are visibly distinguished. Data from one
+          algorithm revision are not silently reused after changing the contraction.</li>
+        <li>Cross-hardware literature results are compared qualitatively. No FPGA/GPU speedup is
+          claimed against the local CPU implementation.</li>
+      </ul>
+    </section>
+
+    <section id="sources">
+      <div class="section-kicker">Sources</div>
+      <h2>Primary references and internal evidence</h2>
+      <div class="footnotes">
+        <ol>
+          <li><a href="https://github.com/QuantumBFS/quantum.harness/issues/34">Quantum Harness Issue #34</a>, “Exact contraction of the tensor network representation of the N-queens problem.”</li>
+          <li>Z.-Y. Liu, H.-J. Liao, L. Wang, <a href="https://arxiv.org/abs/2605.10326">Statistical mechanics of the N-queens problem</a>, Sec. VI.</li>
+          <li><a href="https://oeis.org/A000170">OEIS A000170</a>, audited known counts through N=27.</li>
+          <li>T. B. Preußer and M. R. Engelhardt, <a href="https://doi.org/10.1007/s11265-016-1176-8">Putting Queens in Carry Chains, No. 27</a>.</li>
+          <li>G. Yao and Y. Li, <a href="https://arxiv.org/abs/2511.12009">High-Performance N-Queens Solver on GPU</a>.</li>
+          <li>F. Pan et al., <a href="https://arxiv.org/abs/2606.01852">Parallelizing Large-Scale Tensor Network Contraction on Multiple GPUs</a>.</li>
+          <li>Internal method/evidence: <code>REPORT.md</code>, <code>nqueens_issue34_autoresearch_plan.md</code>, the isolated <code>experiments/</code> reports, and raw <code>benchmarks/*.csv</code>.</li>
+        </ol>
+      </div>
+      <div class="callout">
+        This document is a working research report at a fixed data cutoff. It intentionally uses
+        “verified,” “projected,” “production,” and “rejected” as distinct states. The pre-N22 forecast
+        is retained as a held-out test rather than rewritten after seeing the answer. Future N=23 or
+        N=24 measurements must likewise update every dependent table and conclusion.
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Generated from repository and raw benchmark artifacts. Report path:
+    <code>docs/issue34_research_report.html</code>. Data cutoff: 2026-07-30 09:45 +08:00.
+  </footer>
+
+  <noscript><p style="max-width:1160px;margin:1rem auto;padding:1rem;background:#fff5e5">Charts require JavaScript; all numerical values are also preserved in tables.</p></noscript>
+  <script>
+    "use strict";
+    const NS = "http://www.w3.org/2000/svg";
+    function add(svg, name, attrs = {}, text = "") {
+      const node = document.createElementNS(NS, name);
+      Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+      if (text) node.textContent = text;
+      svg.appendChild(node);
+      return node;
+    }
+    function scale(value, d0, d1, r0, r1) {
+      return r0 + (value - d0) * (r1 - r0) / (d1 - d0);
+    }
+    function humanSeconds(v) {
+      if (v < 0.001) return `${(v * 1e6).toFixed(0)} µs`;
+      if (v < 1) return `${(v * 1e3).toFixed(v < 0.01 ? 1 : 0)} ms`;
+      if (v < 60) return `${v.toFixed(v < 10 ? 1 : 0)} s`;
+      if (v < 3600) return `${(v / 60).toFixed(0)} min`;
+      return `${(v / 3600).toFixed(1)} h`;
+    }
+
+    const scalingData = [
+      [1,0.002289923,7],[2,0.002302624,7],[3,0.002300393,7],[4,0.002394534,7],
+      [5,0.001825904,7],[6,0.001605950,7],[7,0.001914136,7],[8,0.002712071,7],
+      [9,0.005582685,7],[10,0.005894331,7],[11,0.008642883,7],[12,0.014672705,7],
+      [13,0.018244173,7],[14,0.015082853,7],[15,0.035414626,7],[16,0.074719095,7],
+      [17,0.398019513,7],[18,2.174198081,7],[19,17.068042229,7],
+      [20,131.643367792,1],[21,1187.868090185,1],[22,10112.287307712,1]
+    ];
+
+    function renderScaling() {
+      const svg = document.getElementById("scalingChart");
+      const W=900,H=430,m={l:84,r:26,t:38,b:58};
+      const x=n=>scale(n,1,22,m.l,W-m.r);
+      const minLog=-3,maxLog=5;
+      const y=v=>scale(Math.log10(v),minLog,maxLog,H-m.b,m.t);
+      add(svg,"text",{x:m.l,y:20,class:"title"},"Exact C-compiled PEPS count time · scalar 3-prime CRT · 128 cores");
+      add(svg,"rect",{x:x(1)-10,y:m.t,width:x(16)-x(1)+20,height:H-m.t-m.b,fill:"#dfe7ed",opacity:.55});
+      add(svg,"text",{x:(x(1)+x(16))/2,y:m.t+18,"text-anchor":"middle"},"overhead-dominated");
+      for(let p=minLog;p<=maxLog;p++){
+        const yy=y(10**p);
+        add(svg,"line",{x1:m.l,x2:W-m.r,y1:yy,y2:yy,class:"grid"});
+        add(svg,"text",{x:m.l-10,y:yy+4,"text-anchor":"end"},humanSeconds(10**p));
+      }
+      for(let n=1;n<=22;n+=3){
+        const xx=x(n); add(svg,"line",{x1:xx,x2:xx,y1:H-m.b,y2:H-m.b+5,class:"axis"});
+        add(svg,"text",{x:xx,y:H-m.b+22,"text-anchor":"middle"},String(n));
+      }
+      add(svg,"line",{x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,class:"axis"});
+      add(svg,"line",{x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,class:"axis"});
+      add(svg,"text",{x:(m.l+W-m.r)/2,y:H-12,"text-anchor":"middle"},"Board size N");
+      const points=scalingData.map(d=>`${x(d[0])},${y(d[1])}`).join(" ");
+      add(svg,"polyline",{points,fill:"none",stroke:"#607d8b","stroke-width":2});
+      scalingData.forEach(([n,t,repeats])=>{
+        if(repeats>1) add(svg,"circle",{cx:x(n),cy:y(t),r:4.5,fill:"#1565c0",stroke:"#fff","stroke-width":1.5});
+        else add(svg,"rect",{x:x(n)-5,y:y(t)-5,width:10,height:10,rx:1,fill:"#d95f02",stroke:"#fff","stroke-width":1.5});
+        if(n>=18) add(svg,"text",{x:x(n)-6,y:y(t)-10,"text-anchor":"end"},humanSeconds(t));
+      });
+    }
+
+    function renderRatios() {
+      const svg=document.getElementById("ratioChart");
+      const W=900,H=310,m={l:76,r:28,t:42,b:55};
+      const ratios=[];
+      for(let i=1;i<scalingData.length;i++) if(scalingData[i][0]>=17)
+        ratios.push([scalingData[i][0],scalingData[i][1]/scalingData[i-1][1]]);
+      const x=n=>scale(n,17,22,m.l,W-m.r), y=v=>scale(v,0,10,H-m.b,m.t);
+      add(svg,"text",{x:m.l,y:20,class:"title"},"Adjacent late-N wall-time ratio");
+      [0,2,4,6,8,10].forEach(v=>{
+        add(svg,"line",{x1:m.l,x2:W-m.r,y1:y(v),y2:y(v),class:"grid"});
+        add(svg,"text",{x:m.l-10,y:y(v)+4,"text-anchor":"end"},`${v}×`);
+      });
+      for(let n=17;n<=22;n++) add(svg,"text",{x:x(n),y:H-m.b+22,"text-anchor":"middle"},String(n));
+      add(svg,"line",{x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,class:"axis"});
+      add(svg,"line",{x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,class:"axis"});
+      add(svg,"polyline",{points:ratios.map(d=>`${x(d[0])},${y(d[1])}`).join(" "),fill:"none",stroke:"#008b72","stroke-width":2.5});
+      ratios.forEach(([n,v],i)=>{
+        add(svg,"circle",{cx:x(n),cy:y(v),r:5,fill:"#008b72",stroke:"#fff","stroke-width":1.5});
+        add(svg,"text",{x:x(n),y:y(v)-(i%2?14:10),"text-anchor":"middle"},`${v.toFixed(2)}×`);
+      });
+      add(svg,"text",{x:(m.l+W-m.r)/2,y:H-12,"text-anchor":"middle"},"Current N");
+    }
+
+    function renderLocalCompare() {
+      const svg=document.getElementById("localCompareChart");
+      const W=900,H=330,m={l:78,r:28,t:44,b:55};
+      const data=[[14,.787],[15,.746],[16,.788],[17,.778],[18,.751]];
+      const x=n=>scale(n,14,18,m.l,W-m.r),y=v=>scale(v,.65,1.1,H-m.b,m.t);
+      add(svg,"text",{x:m.l,y:20,class:"title"},"Local E47 PEPS / DFS wall-time ratio");
+      [.7,.8,.9,1.0,1.1].forEach(v=>{
+        add(svg,"line",{x1:m.l,x2:W-m.r,y1:y(v),y2:y(v),class:"grid"});
+        add(svg,"text",{x:m.l-10,y:y(v)+4,"text-anchor":"end"},v.toFixed(1));
+      });
+      add(svg,"rect",{x:m.l,y:y(1),width:W-m.r-m.l,height:y(.65)-y(1),fill:"#e9f6ef",opacity:.75});
+      add(svg,"line",{x1:m.l,x2:W-m.r,y1:y(1),y2:y(1),stroke:"#b52b33","stroke-width":2,"stroke-dasharray":"6 4"});
+      add(svg,"text",{x:W-m.r-4,y:y(1)-8,"text-anchor":"end",fill:"#b52b33"},"parity");
+      add(svg,"polyline",{points:data.map(d=>`${x(d[0])},${y(d[1])}`).join(" "),fill:"none",stroke:"#1565c0","stroke-width":2.5});
+      data.forEach(([n,v])=>{
+        add(svg,"circle",{cx:x(n),cy:y(v),r:6,fill:"#1565c0",stroke:"#fff","stroke-width":2});
+        add(svg,"text",{x:x(n),y:y(v)-12,"text-anchor":"middle"},`${v.toFixed(3)}×`);
+        add(svg,"text",{x:x(n),y:H-m.b+22,"text-anchor":"middle"},`N=${n}`);
+      });
+      add(svg,"line",{x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,class:"axis"});
+      add(svg,"line",{x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,class:"axis"});
+    }
+
+    function renderTreeSA() {
+      const svg=document.getElementById("treeSaChart");
+      const W=900,H=330,m={l:82,r:28,t:42,b:58};
+      const data=[[8,58.4706],[9,8.3793],[10,109.0537],[11,16.5049]];
+      const x=n=>scale(n,7.5,11.5,m.l,W-m.r), y=v=>scale(v,0,120,H-m.b,m.t);
+      add(svg,"text",{x:m.l,y:20,class:"title"},"TreeSA actual sparse support / production row support");
+      [0,20,40,60,80,100,120].forEach(v=>{
+        add(svg,"line",{x1:m.l,x2:W-m.r,y1:y(v),y2:y(v),class:"grid"});
+        add(svg,"text",{x:m.l-10,y:y(v)+4,"text-anchor":"end"},`${v}×`);
+      });
+      const gateY=y(.8);
+      add(svg,"line",{x1:m.l,x2:W-m.r,y1:gateY,y2:gateY,stroke:"#16794a","stroke-width":2,"stroke-dasharray":"5 4"});
+      data.forEach(([n,v])=>{
+        const bw=92,xx=x(n)-bw/2,yy=y(v);
+        add(svg,"rect",{x:xx,y:yy,width:bw,height:H-m.b-yy,rx:5,fill:v>50?"#b52b33":"#d8871b",opacity:.88});
+        add(svg,"text",{x:x(n),y:yy-10,"text-anchor":"middle"},`${v.toFixed(2)}×`);
+        add(svg,"text",{x:x(n),y:H-m.b+23,"text-anchor":"middle"},`N=${n}`);
+      });
+      add(svg,"line",{x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,class:"axis"});
+      add(svg,"line",{x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,class:"axis"});
+    }
+
+    renderScaling();
+    renderRatios();
+    renderLocalCompare();
+    renderTreeSA();
+  </script>
+</body>
+</html>
