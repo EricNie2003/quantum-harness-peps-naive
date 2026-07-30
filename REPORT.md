@@ -1584,3 +1584,60 @@ N<=20 可由 `N! < 2^64` 证明安全的单路 checked-u64，再扩大 C-certifi
 terminal supernode并消除递归/调度常数。E46--E50 的 exact obligations、
 消融和 kill gates 写入研究计划 §S；本检查点严格停在 E45，尚未启动
 E46。
+
+## 37. Mandatory review after E46--E50
+
+### 37.1 Results and mechanisms
+
+| Direction | Measured result | Mechanism | Decision |
+|:---|:---|:---|:---:|
+| E46 direct scalar-u64 | 35.2% and 34.1% faster than E45 at N=17/18; N=18 was 21.9% faster than the paired DFS and used 7.2 MB RSS | The proved `N! <= u64::MAX` range replaced two modular lanes with one checked native accumulator; C-derived work was unchanged | **KEEP** |
+| E47 last-5/last-6 | Last-6 beat last-4 by 21.5%/18.6% at N=16/17 and beat the checkpoint DFS at every N=14--18 point | Inlining the widest six terminal layers removed recursive dispatch, repeated base cases, and mask setup; nodes and accepted C entries were unchanged | **KEEP** |
+| E48 iterative stack | Only 0.8%/1.3% faster at N=16/17 | Fixed-array initialization, dynamic-depth indexing, stores, and reloads offset any call-frame saving | **REJECT** |
+| E49 cross-sector AVX2 | 1.6%/2.1% slower at N=16/17 despite 89--90% root-lane occupancy | SIMD covered only the root step while almost all tail work remained scalar; load/store and dispatch overhead dominated | **REJECT** |
+| E50 residue-lane AVX2 | The N=17/18 three- and four-lane AVX2 cases were 2.1--16.8% slower | LLVM already optimized the fixed scalar arrays well; explicit YMM calls added ABI and spill pressure without reducing nodes | **REJECT AVX2** |
+
+E46 and E47 support the narrow hypothesis that residue and call overhead still
+mattered. E48--E50 reject the stronger hypothesis that explicit stacks or SIMD
+automatically improve the highly branching tail. None of these directions
+changed the exponent: the E47 N=17 to N=18 wall ratio remained about 8.1.
+Later SCNet scalar-CRT measurements are resource measurements of the same E50
+control, not a sixth optimization direction.
+
+### 37.2 Revised hypothesis and authorization for E51
+
+E15 observed exact boundary flattening ranks far below sparse support. E16
+then verified the geometry needed to construct a row MPO from explicit `C`,
+represent its open row cut as an MPS, and shift the diagonal virtual wires.
+E16 failed because dense finite-field elimination and adjacent exact SWAPs were
+too expensive, not because its network geometry was invalid.
+
+The next distinguishable hypothesis is therefore:
+
+> Conventional floating-point boundary-MPS/SVD truncation may turn the row-cut
+> cost into a useful polynomial approximation at controlled maximum bond
+> dimension `chi`. N-queens zeros, small counts, and cancellation may instead
+> make the estimate inaccurate even at large `chi`; only an error--cost sweep
+> can decide this.
+
+E51, the truncated boundary-MPS diagnostic, is authorized only with these
+obligations:
+
+1. Construct the rank-9 `B` and rank-8 `C=sum_alpha B` explicitly, with 17
+   nonzero entries each. Generate every row MPO from `C.entries()`.
+2. Preserve `v0=(1,0)`, row/column `v1=(0,1)`, diagonal `v2=(1,1)`, and the
+   documented diagonal orientation. A diagonal shift is a labeled virtual-wire
+   permutation, not a handwritten queen recurrence.
+3. Require an untruncated small-N floating-point check against the exact
+   contraction before any truncation sweep.
+4. For every `chi`, record the unrounded estimate, absolute/relative error,
+   wall time, RSS, peak bond, discarded singular-value weight, SVD count, and
+   explicit-C examinations/acceptances. Preserve raw CSV in `benchmarks/`.
+5. Label every truncated value **approximate / diagnostic-only**. It cannot
+   satisfy Issue #34, establish Q(28), or become exact by integer rounding.
+
+The first grid is `chi=4,8,16,32,64,128`, after a local full-rank calibration.
+Kill conditions are an untruncated geometry failure, no overall convergence as
+`chi` grows, or a largest-`chi` point that is slower than exact production yet
+still scientifically inaccurate. E51 can end only as `DIAGNOSTIC_ONLY` or
+`REJECT`; it cannot replace the exact production solver.

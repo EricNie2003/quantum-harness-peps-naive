@@ -2963,3 +2963,46 @@ base 仍不低于 DFS，下一次 review 必须重新寻找改变 contraction ex
     `benchmarks/`；
 11. 完成 E50 后必须执行下一次 five-direction review；复盘前不得启动
     E51。当前检查点严格停在 E45，E46 尚未开始。
+
+## T. Revision after the mandatory E46--E50 review (2026-07-30)
+
+E46--E50 are complete and the mandatory review is recorded in `REPORT.md`
+section 37. E46 direct scalar-u64 and E47 last-6 are `KEEP`; E48 iterative
+stack, E49 cross-sector AVX2, and E50 explicit residue-lane AVX2 are `REJECT`.
+The successful mechanism removed residue/call constants without reducing
+C-derived nodes. The failures were caused by array traffic, SIMD coverage of
+only the root, and YMM ABI/spill overhead.
+
+This review clears the E51 gate, but does not authorize an indefinite sequence
+of exact-tail micro-optimizations. The new priority is to test whether the
+low-rank observation from E15 produces a useful accuracy--cost tradeoff in a
+conventional approximate PEPS contraction.
+
+### T.1 E51: truncated finite-PEPS boundary MPS
+
+- **Classification:** approximate scientific diagnostic, not an Issue #34
+  exact solver.
+- **Implementation:** generate a row MPO from the explicit 17-entry `C`, apply
+  it to a boundary MPS, use canonical sweeps and SVD with maximum bond
+  dimension `chi`, and translate the two diagonal families with a labeled
+  virtual-qubit SWAP network.
+- **Boundaries:** start every line with `v0`; finish rows and columns with `v1`;
+  finish both diagonal families with `v2`, using the existing row-major
+  orientation.
+- **Validation:** retain all B/C, local truth-table, and boundary tests; an
+  untruncated N<=7 run must match the exact count within a preregistered
+  floating-point tolerance.
+- **Sweep:** `chi=4,8,16,32,64,128`; run local small-N calibration first, then
+  use one fixed SCNet node/BLAS/thread configuration for the N sweep.
+- **Metrics:** unrounded estimate, absolute/relative error, median/min wall,
+  GNU-time and Slurm RSS, peak retained bond, maximum and cumulative discarded
+  Frobenius weight, SVD count, and explicit-C entries examined/accepted.
+- **Kill:** geometry failure without truncation; no overall convergence with
+  increasing `chi`; or the largest `chi` being slower than exact production
+  while still inaccurate.
+- **Decision semantics:** `DIAGNOSTIC_ONLY` or `REJECT` only. Approximate values
+  must never be promoted into the exact production result.
+
+No E52 implementation is preregistered. Only a clear and reproducible E51
+singular-spectrum signal may justify a later exact low-rank certificate or a
+new contraction path; otherwise the low-rank line stops here.
