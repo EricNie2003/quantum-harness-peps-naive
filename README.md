@@ -1,4 +1,4 @@
-# Exact naive contraction of the N-Queens PEPS
+# Exact contraction of the N-Queens PEPS
 
 This Rust crate explicitly implements the local tensors in Sec. VI of
 Liu--Liao--Wang, *Statistical mechanics of the N-queens problem*.
