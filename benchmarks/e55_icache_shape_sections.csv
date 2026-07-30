@@ -1,0 +1,4 @@
+revision,shape,text_bytes,data_bytes,bss_bytes,total_section_bytes,executable_bytes,text_change_vs_fully_inline
+ad83da132b1d820297d6c4ef3b3e564086918792,fully-inline,274319,95026,0,369345,371200,0.000000
+ad83da132b1d820297d6c4ef3b3e564086918792,regular-inline,273455,95062,0,368517,371200,-0.003149
+ad83da132b1d820297d6c4ef3b3e564086918792,noinline,273231,95050,0,368281,370688,-0.003966
