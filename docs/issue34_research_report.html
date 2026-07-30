@@ -309,6 +309,7 @@
     figcaption { margin-top: 0.55rem; color: var(--muted); font-size: 0.78rem; }
     .chart-shell { padding: 0.8rem; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
     svg.chart { display: block; width: 100%; height: auto; min-height: 260px; }
+    .chart-image { display: block; width: 100%; height: auto; }
     .chart text { font-family: Inter, ui-sans-serif, system-ui, sans-serif; fill: #516476; font-size: 11px; }
     .chart .title { fill: #213b50; font-size: 14px; font-weight: 750; }
     .chart .axis { stroke: #8fa2b2; stroke-width: 1; }
@@ -379,7 +380,8 @@
       <h1>From 17 local entries to the N-Queens frontier</h1>
       <p class="dek">
         A fidelity-first account of an exact Sec. VI tensor-network contraction: what was built,
-        which algorithmic ideas survived fifty isolated experiments, why the optimized hot loop
+        which algorithmic ideas survived sixty isolated exact-optimization experiments plus one
+        approximation diagnostic, why the optimized hot loop
         resembles backtracking without ceasing to be a certified PEPS contraction, and what the
         measured scaling says about the still-open target <strong>Q(28)</strong>.
       </p>
@@ -401,7 +403,9 @@
       <a href="#exactness">Exactness</a>
       <a href="#research">Research program</a>
       <a href="#performance">Performance</a>
+      <a href="#comparison">Same-node comparison</a>
       <a href="#treesa">TreeSA</a>
+      <a href="#truncation">Truncation diagnostic</a>
       <a href="#projection">Q(28)</a>
       <a href="#value">Scientific value</a>
       <a href="#roadmap">Roadmap</a>
@@ -510,9 +514,11 @@
       </div>
 
       <div class="callout danger">
-        <strong>Source-data correction.</strong> The issue body contains an incorrect Q(25). OEIS
-        A000170 gives Q(25)=227,514,171,973,736. This project uses an audited constant table rather
-        than copying that typo. The four minimum acceptance values in the issue are correct.
+        <strong>Source-data correction.</strong> The live issue body lists the malformed value
+        Q(25)=2,207,893,435,360. OEIS A000170 gives
+        Q(25)=2,207,893,435,808,352; the value 227,514,171,973,736 belongs to Q(24).
+        This project uses an audited constant table rather than copying either indexing/value error.
+        The four minimum acceptance values named in the issue are correct.
       </div>
     </section>
 
@@ -641,6 +647,11 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
         <em>proved-equivalent optimized contraction of the Sec. VI PEPS</em>. It is not the literal
         sitewise baseline, and it is not the independent DFS comparator.
       </div>
+      <p class="small muted">
+        The formal row-transfer statement, proof, reassociation corollary, scope, and executable
+        proof obligations are recorded in
+        <a href="sec_vi_row_automaton_equivalence.md"><code>docs/sec_vi_row_automaton_equivalence.md</code></a>.
+      </p>
     </section>
 
     <section id="exactness">
@@ -692,7 +703,7 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
 
     <section id="research">
       <div class="section-kicker">Auto-research record</div>
-      <h2>Fifty directions, organized around falsifiable mechanisms</h2>
+      <h2>Sixty exact directions, plus one separately classified approximation diagnostic</h2>
       <p class="lede">
         Each optimization direction was isolated in its own worktree, preregistered with keep/kill
         gates, and followed by a mandatory review every five directions. Negative results were kept
@@ -705,6 +716,9 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
       <div class="story-line"><div class="phase">Phase III · E21–E30</div><div><strong>Test symbolic representations and memory organization.</strong> Weighted DDs and macro paths failed their production gates. Sharding and compact records succeeded because they improved locality without pretending to alter the exponent.</div></div>
       <div class="story-line"><div class="phase">Phase IV · E31–E40</div><div><strong>Attack record traffic, then stop producing records.</strong> Parallel generation and u64 packing helped; the decisive turn was the C-derived recursive tail, which reduced memory by orders of magnitude and brought the PEPS path close to DFS.</div></div>
       <div class="story-line"><div class="phase">Phase V · E41–E50</div><div><strong>Optimize the streamed tail and widen exact arithmetic.</strong> Last-k supernodes and wide CRT survived. Scheduling, memoization, explicit stacks, and two SIMD strategies did not. The scalar control—not AVX2—is the current cluster production configuration.</div></div>
+      <div class="story-line"><div class="phase">Phase VI · E51–E55</div><div><strong>Test whether the remaining hotspot was ordinary cache locality.</strong> Packed tasks, cache-budget cuts, cache-line ownership, bounded suffix caches, and I-cache shaping changed bytes, RSS, or balance without stable wall-time gains. All five production candidates were rejected.</div></div>
+      <div class="story-line"><div class="phase">Phase VII · E56–E60</div><div><strong>Attack per-node instruction cost and certified reuse.</strong> Last-7/8, deferred overflow, generated depth kernels, scalar ILP, and suffix symmetry produced only marginal or negative effects. E60 remains an exact diagnostic; production remains E46+E47.</div></div>
+      <div class="story-line"><div class="phase">APX1 · separate</div><div><strong>Test the low-rank intuition directly.</strong> A conventional canonical boundary-MPS contraction with hard bond cap chi was implemented from the same explicit C. It controlled storage but discarded essentially the entire count-carrying sector, and was slower than exact production at the matched N=14 control. It is retained as an approximation diagnostic, never an exact solver or numbered PEPS optimization.</div></div>
 
       <details>
         <summary>E1–E10 · Literal contraction, layout, compilation, sorting, parallelism</summary>
@@ -811,12 +825,57 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
         </div>
       </details>
 
+      <details>
+        <summary>E51–E55 · Cache-locality hypothesis and falsification</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>E51</td><td>Pack direct-sector task tape</td><td>Task bytes fell 4× and RSS improved, but the tail—not task storage—dominated wall time</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E52</td><td>Choose prefix cut from cache capacity</td><td>Changed working-set placement without reducing the necessary recursive C work</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E53</td><td>Cache-line tiled task ownership</td><td>Worker imbalance fell from roughly 56% to 1.7% without a stable runtime benefit</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E54</td><td>Bounded tagged suffix cache</td><td>Maximum hit rate stayed below 0.28%; lookup cost exceeded reuse</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E55</td><td>Last-six hot-code/I-cache shaping</td><td>Hot text barely shrank and call/control overhead made candidates 4–18% slower</td><td><span class="tag gap">REJECT</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>E56–E60 · Profile-driven terminal-kernel experiments</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>E56</td><td>Certified last-7/last-8 expansion</td><td>Extra terminal depth gave only low-single-digit, inconsistent gains near the mature last-six kernel</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E57</td><td>Factorial-bounded deferred overflow</td><td>Moving checks out of the hot path changed runtime by at most a few percent</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E58</td><td>Generated depth-specific scalar kernels</td><td>Static specialization produced at most about 4% on one checkpoint and no two-size gate</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E59</td><td>Interleave 2/4 scalar sectors for ILP</td><td>Only 47–70% lanes remained active; spill/divergence overhead made it 16–25% slower</td><td><span class="tag gap">REJECT</span></td></tr>
+              <tr><td>E60</td><td>Symmetry-canonical suffix reuse</td><td>Extra duplicates were nearly zero for even N and about 5% for odd N—useful structural evidence, not a production cache</td><td><span class="tag partial">KEEP DIAGNOSTIC</span><br><span class="tag gap">REJECT PROD.</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details open>
+        <summary>APX1 · Canonical finite-PEPS boundary-MPS truncation</summary>
+        <div class="details-body table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Hypothesis</th><th>Observed mechanism</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr><td>APX1</td><td>A conventional Schmidt-truncated boundary MPS gives a useful speed/error curve</td><td>At N=14, chi=128 estimated 13.4036 instead of 365596 in 198.414 s; exact PEPS took 0.015146 s</td><td><span class="tag gap">REJECT COUNTING</span><br><span class="tag partial">KEEP DIAGNOSTIC</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
       <div class="callout">
-        <strong>Mandatory E46–E50 review conclusion.</strong> The winning mechanism was contraction
-        association and native scalar arithmetic, not explicit SIMD. E46/E47 are retained; E48–E50
-        candidates are rejected. The cluster run uses E50's scalar control (E45 CRT + E47 last-six),
-        with the rejected AVX2 mode forced off. No E51 direction should begin until this review and a
-        revised direction list are recorded alongside the experiment artifacts.
+        <strong>Mandatory E56–E60 review conclusion.</strong> E51–E60 found no production improvement;
+        the exact production path remains E46 direct scalar plus E47 certified last-six, with E45 CRT
+        for scalable arithmetic. The measured hotspot is necessary, low-reuse C-state expansion—not
+        ordinary cache placement, easy symmetry reuse, or exposed scalar ILP. No E61 same-kind CPU
+        micro-optimization is authorized without a new direction choice. Separately, APX1 falsified
+        the ordinary floating low-rank/truncation hypothesis and authorizes no larger-chi counting line.
       </div>
     </section>
 
@@ -906,6 +965,121 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
       </p>
     </section>
 
+    <section id="comparison">
+      <div class="section-kicker">Controlled benchmark · b10r4n19</div>
+      <h2>One node, four exact implementations, and no identity games</h2>
+      <p class="lede">
+        The comparison requested for this report was rerun as one exclusive-node Slurm chain. It
+        distinguishes a conventional DFS oracle, the fifth-commit literal PEPS, the latest scalable
+        exact PEPS backend without TreeSA, and a real TreeSA-planned site-tree PEPS. Every plotted
+        count is verified; each N has its own process-level GNU-RSS record.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Series</th><th>Frozen implementation</th><th>Range</th><th class="num">Threads</th><th>Interpretation</th></tr></thead>
+          <tbody>
+            <tr><td>DFS bitmask</td><td><code>b89f4f1</code> · <code>dfs_bitmask.rs</code></td><td>N=1–22</td><td class="num">128</td><td>Independent classical comparator; never labeled PEPS</td></tr>
+            <tr><td>Naive exact PEPS</td><td><code>20b5334</code> · “Index C entries by incoming virtual signature”</td><td>N=1–16</td><td class="num">1</td><td>Explicit-C HashMap row contraction before later representation/tail optimizations</td></tr>
+            <tr><td>Latest exact PEPS, no TreeSA</td><td><code>fc0921b</code> · algorithm <code>ea5b985</code></td><td>N=1–22</td><td class="num">128</td><td>C-certified D4 last-six contraction; scalar three-prime CRT forced at every N</td></tr>
+            <tr><td>TreeSA exact PEPS</td><td><code>c715e36</code> · executor <code>e9a80a5</code></td><td>N=2–11</td><td class="num">1</td><td>Actual OMEinsum TreeSA plan plus checked-u128 explicit-C D4 site-tree executor</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure>
+        <div class="chart-shell"><img class="chart-image" src="../experiments/e51_truncated_boundary_mps/figures/issue34_same_node_time.svg" alt="Same-node execution time versus N for DFS, naive PEPS, latest exact PEPS, and TreeSA PEPS"></div>
+        <figcaption>Internal execution wall time on a logarithmic axis. For PEPS methods this is contraction time; for DFS it is search time. The second TreeSA line adds measured optimizer time, while process/JIT startup remains separately recorded in the normalized CSV.</figcaption>
+      </figure>
+
+      <figure>
+        <div class="chart-shell"><img class="chart-image" src="../experiments/e51_truncated_boundary_mps/figures/issue34_same_node_rss.svg" alt="Same-node peak RSS versus N for DFS, naive PEPS, latest exact PEPS, and TreeSA PEPS"></div>
+        <figcaption>Fresh-process GNU <code>time -v</code> maximum RSS. TreeSA executor and end-to-end maxima are separate; sequential planner/executor peaks are maximized, never incorrectly added.</figcaption>
+      </figure>
+
+      <div class="callout warn">
+        <strong>Presentation data lock is still open.</strong> The completed normalized table contains
+        68 of 70 preregistered rows. DFS and latest-PEPS N=22 remain in the serialized Slurm
+        chain. Until those four rows pass count, provenance, and exit-status checks, the generated
+        SVGs are watermarked <code>PROVISIONAL</code> and the analyzer's
+        <code>--require-complete</code> mode refuses publication output.
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">N</th><th class="num">DFS time (s)</th><th class="num">Latest PEPS time (s)</th><th class="num">DFS / PEPS</th><th>Frozen-run interpretation</th></tr></thead>
+          <tbody>
+            <tr><td class="num">14</td><td class="num">0.010902</td><td class="num">0.015420</td><td class="num">0.7070×</td><td>DFS faster; overhead-dominated</td></tr>
+            <tr><td class="num">15</td><td class="num">0.025699</td><td class="num">0.031871</td><td class="num">0.8063×</td><td>DFS faster; small kernel</td></tr>
+            <tr><td class="num">16</td><td class="num">0.075594</td><td class="num">0.069050</td><td class="num">1.0948×</td><td>Latest-PEPS crossover</td></tr>
+            <tr><td class="num">17</td><td class="num">0.414400</td><td class="num">0.365453</td><td class="num">1.1339×</td><td>Latest PEPS faster</td></tr>
+            <tr><td class="num">18</td><td class="num">2.369722</td><td class="num">2.220825</td><td class="num">1.0670×</td><td>Latest PEPS faster</td></tr>
+            <tr><td class="num">19</td><td class="num">18.747813</td><td class="num">17.040845</td><td class="num">1.1002×</td><td>Latest PEPS faster</td></tr>
+            <tr><td class="num">20</td><td class="num">141.132524</td><td class="num">131.450921</td><td class="num">1.0737×</td><td>Latest PEPS faster</td></tr>
+            <tr><td class="num">21</td><td class="num">1,270.576339</td><td class="num">1,188.372938</td><td class="num">1.0692×</td><td>Latest PEPS faster; one exact sample</td></tr>
+            <tr><td class="num">22</td><td colspan="3"><span class="tag partial">PENDING JOB</span></td><td>Withheld until exact row and GNU-RSS record exist</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Ratios above one mean the latest-PEPS executable is faster. From N=16 through N=21 the
+        ratio remains 1.067–1.134×. This supports a modest finite-N implementation result, not the
+        stronger claim that the tensor formulation itself beats an optimization-matched DFS.
+      </p>
+
+      <div class="grid-3">
+        <div class="card"><h3>Naive PEPS at N=16</h3><p><strong>1,197.111 s</strong><br>30.625 GiB GNU-RSS<br>194.21M peak states</p></div>
+        <div class="card"><h3>Latest PEPS at N=16</h3><p><strong>0.069050 s</strong><br>10.074 MiB GNU-RSS<br>17,337× lower wall time</p></div>
+        <div class="card"><h3>TreeSA planning</h3><p><strong>15.1–33.3 s</strong> at N=8–11<br>392–397 MiB planner RSS<br>support gate failed 4/4</p></div>
+      </div>
+      <p class="small muted">
+        The naive/latest ratio measures implementation evolution, not equal-thread parallel
+        efficiency: the historical contraction is serial, while latest PEPS requests 128 physical
+        cores. At N=16 the naive run examined 19.24 billion indexed C entries; the memory reduction
+        is the structural result of avoiding the materialized late frontier.
+      </p>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>What is controlled</h3>
+          <p>All rows use the same dual-EPYC 7742 node, one hardware thread per core, release builds,
+            immutable binaries, non-overlapping allocations, exact known-count checks, and
+            per-N process boundaries. Repetition counts and warmups are explicit in the CSV.</p>
+        </div>
+        <div class="card">
+          <h3>What is not artificially equalized</h3>
+          <p>The historical and TreeSA executors are serial; DFS and current PEPS are parallel.
+            This is measured implementation throughput on one resource, not a claim of equal
+            parallel efficiency. TreeSA is a separate site-tree implementation—not E50 with a
+            planner Boolean flipped.</p>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <strong>Backend-consistent, not per-N cherry-picked.</strong> The latest-PEPS curve forces
+        three-prime CRT even where checked scalar-u64 would be faster. That keeps one scalable N&gt;21
+        backend across the x-axis. It should not be read as the minimum achievable PEPS time at every
+        small N.
+      </div>
+
+      <div class="callout warn">
+        <strong>Same hardware is not full optimization parity.</strong> The current DFS directly
+        counts its final row but does not have the PEPS path's certified last-six expansion; it targets
+        64 rather than 512 tasks per thread, uses different atomic chunking, and accumulates checked
+        integer subtrees rather than three forced CRT lanes. This section compares frozen complete
+        implementations. The reviewer-driven R2 matrix will equalize these axes in both directions
+        before any formulation-level speed claim is made.
+      </div>
+
+      <p>
+        The TreeSA line ends at N=11 because its preregistered exact sparse-support gate failed at
+        every N=8–11 checkpoint. A plan-only N=20 result exists, but launching the exact site-tree
+        executor after 8.38–109.05× support inflation would be an uncontrolled OOM/timeout attempt.
+        The plot does not extrapolate or fabricate those missing execution points.
+      </p>
+    </section>
+
     <section id="treesa">
       <div class="section-kicker">Contraction-order study</div>
       <h2>Why generic TreeSA did not improve E50</h2>
@@ -952,6 +1126,84 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
         utilization. Re-running site-level TreeSA with more trials or more cluster cores does not
         address the measured failure mechanism.
       </p>
+    </section>
+
+    <section id="truncation">
+      <div class="section-kicker">Approximation diagnostic · APX1</div>
+      <h2>Hard bond truncation is fast-scaling here only because it loses the count</h2>
+      <p class="lede">
+        APX1 asks a useful question that the exact production path cannot answer by itself: if the
+        same finite PEPS is contracted as a conventional floating-point boundary MPS and capped at
+        bond dimension <em>chi</em>, how much time and memory are saved, and how far does the result
+        move from the exact integer? The answer is experimentally clear and unfavorable.
+      </p>
+      <p class="small muted">
+        The isolated branch forked before <code>origin/main</code> assigned E51–E60 to the later
+        cache/hotspot sequence. Its legacy path and raw filenames retain <code>e51</code> for hash
+        stability, but APX1 is the canonical report identifier and is outside the numbered exact
+        optimization ledger.
+      </p>
+
+      <div class="grid-3">
+        <div class="card">
+          <h3>Same tensor</h3>
+          <p>The row MPO is generated from the explicit 17-entry C. Row and column endpoints use
+            v<sub>1</sub>; diagonal endpoints use v<sub>2</sub>; the documented diagonal orientation
+            moves both endpoints together.</p>
+        </div>
+        <div class="card">
+          <h3>Conventional truncation</h3>
+          <p>The implementation QR-canonicalizes the boundary MPS and applies LAPACK SVD to actual
+            Schmidt cuts. Labeled virtual-qubit SWAPs implement diagonal translation. No rounded
+            floating result is promoted to an exact count.</p>
+        </div>
+        <div class="card">
+          <h3>Validation</h3>
+          <p>All 616 tests pass: 17-entry B/C, local truth tables, 504 line-boundary checks,
+            uncapped N=0–7 geometry versus an independent test-only oracle, finite-cap behavior,
+            and BLAS-thread invariance.</p>
+        </div>
+      </div>
+
+      <h3>The requested deeper N=14 sweep</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">chi</th><th class="num">Floating estimate</th><th class="num">Relative error</th><th class="num">Median time</th><th class="num">Peak RSS</th><th class="num">Time / exact PEPS</th></tr></thead>
+          <tbody>
+            <tr><td class="num">4</td><td class="num">−1.70×10<sup>−17</sup></td><td class="num">1.000000</td><td class="num">0.480 s</td><td class="num">371.8 MiB</td><td class="num">31.7×</td></tr>
+            <tr><td class="num">8</td><td class="num">1.31356</td><td class="num">0.999996407</td><td class="num">1.002 s</td><td class="num">381.1 MiB</td><td class="num">66.1×</td></tr>
+            <tr><td class="num">16</td><td class="num">1.40069</td><td class="num">0.999996169</td><td class="num">2.130 s</td><td class="num">371.1 MiB</td><td class="num">140.6×</td></tr>
+            <tr><td class="num">32</td><td class="num">2.10073</td><td class="num">0.999994254</td><td class="num">9.437 s</td><td class="num">509.1 MiB</td><td class="num">623.1×</td></tr>
+            <tr><td class="num">64</td><td class="num">5.50888</td><td class="num">0.999984932</td><td class="num">49.041 s</td><td class="num">710.2 MiB</td><td class="num">3,237.9×</td></tr>
+            <tr><td class="num">128</td><td class="num">13.40356</td><td class="num">0.999963338</td><td class="num">198.414 s</td><td class="num">692.2 MiB</td><td class="num">13,100.0×</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The exact value is Q(14)=365,596. The same-node exact E50 explicit-C contraction took
+        0.015146118 s median over seven samples after two warmups. Even chi=4 was therefore slower
+        than exact production, while chi=128 retained only 3.67×10<sup>−5</sup> of the count.
+      </p>
+
+      <figure>
+        <div class="chart-shell"><svg id="truncationChart" class="chart" viewBox="0 0 900 350" role="img" aria-label="N14 retained count fraction and time versus PEPS boundary-MPS bond cap"></svg></div>
+        <figcaption>N=14 canonical boundary-MPS diagnostic. Count fraction and wall time both use logarithmic axes; the chi=4 estimate is numerical noise around zero.</figcaption>
+      </figure>
+
+      <p>
+        Fixed chi does flatten growth: at N=13–20 the whole-process RSS stays roughly 367–464 MiB
+        for chi=4–16, and chi=16 time rises only from 3.49 s at N=16 to 6.81 s at N=20. But the
+        relative error simultaneously reaches 0.999999999946. At N=8, where convergence can be
+        seen, chi=128 still gives 54.4344 instead of 92 (40.8% error) and is slower than the uncapped
+        floating geometry check.
+      </p>
+
+      <div class="callout danger">
+        <strong>Decision: reject APX1 as a counting algorithm.</strong> The useful structure of this
+        PEPS is exact combinatorial sparsity and deterministic signal propagation, not low ordinary
+        floating-point Schmidt rank along this boundary path. Capped rows are approximation
+        diagnostics only; agreement after rounding would not satisfy Issue #34.
+      </div>
     </section>
 
     <section id="projection">
@@ -1072,7 +1324,7 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
         <table>
           <thead><tr><th>Method family</th><th>Core representation</th><th>Strength</th><th>Limitation / comparison rule</th></tr></thead>
           <tbody>
-            <tr><td>This work: optimized Sec. VI PEPS</td><td>C-certified virtual-boundary sectors + exact scalar/CRT tail</td><td>Independent tensor derivation, exactness certificate, low memory, rich instrumentation</td><td>Current measured growth does not beat DFS; Q(27) absent</td></tr>
+            <tr><td>This work: optimized Sec. VI PEPS</td><td>C-certified virtual-boundary sectors + exact scalar/CRT tail</td><td>Independent tensor derivation, exactness certificate, low memory, rich instrumentation</td><td>Only a modest finite-N same-node advantage; exponential growth remains and Q(27) is absent</td></tr>
             <tr><td>Local Rust DFS comparator</td><td>Columns and diagonals on a recursive bitmask stack</td><td>Minimal per-node overhead; same-hardware control</td><td>Not the repository's primary PEPS method</td></tr>
             <tr><td>Q27 FPGA carry chains</td><td>Massively distributed prefix search, D4, custom bit logic</td><td>Purpose-built throughput and demonstrated frontier result</td><td>Different hardware and run scale; wall time is not a fair speedup denominator</td></tr>
             <tr><td>Recent GPU iterative DFS</td><td>Shared-memory stacks, bank-conflict avoidance, many prefixes</td><td>Independent Q27 verification and much stronger aggregate compute</td><td>Algorithm and hardware differ; compare method and resource scale, not raw seconds</td></tr>
@@ -1084,36 +1336,71 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
       <div class="callout good">
         The strongest defensible claim is not “PEPS has solved N-Queens.” It is:
         <strong>an exact, paper-faithful PEPS contraction can be compiled and associated well enough
-        to match or beat a tuned local DFS at finite N, while revealing that the remaining frontier
-        barrier is exponential accepted-transition work.</strong>
+        to match or beat the repository DFS comparator at finite N, while revealing that the
+        remaining frontier barrier is exponential accepted-transition work.</strong> A fully
+        optimization-matched DFS is still required before attributing that finite-N ratio to the
+        tensor formulation itself.
       </div>
     </section>
 
     <section id="roadmap">
-      <div class="section-kicker">Next decisions</div>
-      <h2>What must happen before a credible Issue #34 submission</h2>
+      <div class="section-kicker">Reviewer-driven revision</div>
+      <h2>Four additions would turn a strong project report into a defensible paper</h2>
+      <p class="lede">
+        The review in <a href="../审稿意见.md"><code>审稿意见.md</code></a>, committed on
+        <code>origin/main</code>, correctly identifies the remaining paper
+        risks. Its “largest N=19” snapshot is now outdated—this project has verified Q(22)—but the
+        fairness, formalization, generality, and frontier criticisms remain. The completed E56–E60
+        review also rejects more same-kind CPU micro-tuning, so the response should be a focused
+        publication track rather than five more cosmetic hot-loop experiments.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Reviewer concern</th><th>Current evidence</th><th>Required addition</th><th>Claim gate</th></tr></thead>
+          <tbody>
+            <tr><td>Is the final method really a PEPS contraction?</td><td>Fail-closed C compiler and reachable-parent replay exist</td><td>Formal row-transfer isomorphism theorem plus machine-readable trace certificate</td><td>State “proved-equivalent optimized contraction,” with DFS as a distinct execution schedule</td></tr>
+            <tr><td>Is “faster than DFS” fair?</td><td>Same-node comparison controls hardware, but PEPS has certified last-six and different task/arithmetic policies</td><td>Independent DFS k=4/5/6, matched seeding/chunking, u64/CRT parity, and a shared-kernel attribution ablation</td><td>No formulation-level speed claim unless the matched late-N ratio survives a preregistered uncertainty rule</td></tr>
+            <tr><td>Does the compiler generalize?</td><td>Sixty-plus studies still center on one uniform Sec. VI tensor</td><td>Blocked and exact integer-weighted queens with site-dependent tensors, literal contraction, compiler, and independent oracle</td><td>Publish transfer/failure mechanisms; a speed win is not required</td></tr>
+            <tr><td>Does it advance the N-Queens frontier?</td><td>Q(22) is verified; Q(27), Q(28), and the PR are absent</td><td>Recoverable task manifest, tail-distribution pilot, independent sector replay, and certified reduction</td><td>Keep “method study” separate from Issue #34 acceptance</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <strong>The running four-way curve is necessary but not the final fairness experiment.</strong>
+        It is an honest comparison of complete implementations on one node. It does not equalize
+        terminal unrolling, task target, chunk size, or arithmetic in both directions, so it cannot
+        by itself prove that tensor-network provenance creates a speed advantage.
+      </div>
+
       <ol>
-        <li><strong>Archive the completed N=22 run locally.</strong> Mirror the remote raw CSV and logs,
-          and preserve Slurm MaxRSS, scheduler state, compiler, binary hash, and exact command beside
-          the experiment report before submission.</li>
-        <li><strong>Complete the formal E46–E50 review artifact.</strong> Preserve the conclusion that
-          scalar last-six won and explicit AVX2 failed; do not start E51 before revising priorities.</li>
-        <li><strong>Target work reduction.</strong> A next representation must reduce actual accepted
-          C transitions or give a provable cross-sector quotient before enumeration. More lane tuning,
-          root ordering, or site-level TreeSA does not meet this criterion.</li>
-        <li><strong>Add recoverable distributed execution.</strong> Freeze task manifests, detect
-          duplicates/missing tasks, checkpoint, retry, and independently verify selected heavy sectors.</li>
-        <li><strong>Reach Q(27) before claiming acceptance.</strong> Use at least two exactness paths,
-          a modulus product above 27!, complete manifests, and preserved provenance.</li>
-        <li><strong>Only then perform a Q(28) sample-distribution study.</strong> Measure median, P90,
-          P99, and worst predicted tasks; report core-hours, tail risk, memory, storage, and verification
-          overhead before any full submission.</li>
-        <li><strong>Prepare the harness PR.</strong> Include a concise method report, exactness proof,
-          scaling and negative-results documents, raw CSVs, reproducible commands, and an explicit
-          link to Issue #34.</li>
+        <li><strong>Write the theorem first.</strong> Separate tensor definition, contraction tree,
+          compiled automaton, and conventional DFS schedule; prove the row-transfer isomorphism and
+          why hybrid/last-k execution is reassociation.</li>
+        <li><strong>Run the matched comparator matrix.</strong> Preserve the original DFS oracle,
+          independently add last-k and scheduling parity, and use a shared terminal kernel only as
+          an attribution diagnostic—not as an independent baseline.</li>
+        <li><strong>Add one nonuniform problem family.</strong> Sweep deterministic blocked/weighted
+          queen instances and compare literal tensor, compiled flat, adaptive tail, and independent
+          oracle paths with exact arithmetic.</li>
+        <li><strong>Keep the frontier track separate.</strong> Build checkpointable task manifests,
+          measure N=23 task-tail risk, and do not call a Q(28) projection a computation attempt.</li>
+        <li><strong>Submit only with claim-evidence links.</strong> Every abstract/conclusion claim
+          should point to a theorem, raw CSV, test, or preserved negative-result report.</li>
       </ol>
 
-      <h3>Recommended research hypothesis after the review</h3>
+      <p>
+        The complete preregistered matrices, artifact layout, and proposed paper structure are in
+        <a href="issue34_publication_revision_plan.md"><code>docs/issue34_publication_revision_plan.md</code></a>.
+        Current concern-by-concern status and allowed claim language are tracked in
+        <a href="issue34_reviewer_response_matrix.md"><code>docs/issue34_reviewer_response_matrix.md</code></a>.
+        The main paper should be thematic—compiler theorem, bottleneck transition, matched baseline,
+        generalization, and selected failure mechanisms—while the E1–E60 chronology moves to the
+        supplement.
+      </p>
+
+      <h3>Recommended next PEPS research hypothesis</h3>
       <div class="formula">
         The next material gain must reduce the number of distinct exact C-derived continuations
         <em>before</em> they are traversed—not merely store or execute the same continuations faster.
@@ -1134,13 +1421,15 @@ diag_dl' = (diag_dl | selected) &gt;&gt; 1</code></pre>
         <table>
           <thead><tr><th>Artifact / run</th><th>Revision or job</th><th>Configuration</th><th>Location</th></tr></thead>
           <tbody>
-            <tr><td>Main research history through E50 reports</td><td><code>bd928cd</code></td><td>Accepted code + negative reports through explicit AVX2 rejection</td><td><code>REPORT.md</code>, <code>experiments/e*/</code>, <code>benchmarks/</code></td></tr>
+            <tr><td>Main exact-optimization history through E60</td><td><code>ad272f1</code></td><td>Sixty isolated directions plus the mandatory E56–E60 mechanism review; no unreviewed E61 continuation</td><td><code>REPORT.md</code>, <code>experiments/e*/</code>, <code>benchmarks/</code></td></tr>
             <tr><td>E50 cluster branch</td><td><code>e34ed67</code>; algorithm <code>ea5b985</code></td><td>rustc 1.97.1; static musl; scalar 3-prime CRT; last-six; AVX2 off</td><td><code>.worktrees/scnet-e50-overnight/</code></td></tr>
             <tr><td>N=20/21 calibration</td><td>Slurm <code>41497022</code></td><td>128 physical cores; dual EPYC 7742; 32 GiB request; one sample each</td><td><code>benchmarks/scnet_e50_calibration_release.csv</code> in cluster worktree</td></tr>
             <tr><td>N=1–19 matched-node series</td><td>Slurm <code>41498587</code></td><td>Same production binary; seven samples + two warmups</td><td><code>benchmarks/scnet_e50_scaling_n1_n19_release.csv</code></td></tr>
             <tr><td>Three/four-lane overhead pair</td><td>Slurm <code>41498812</code></td><td>N=18/19, same EPYC node, paired sequential lanes</td><td><code>benchmarks/scnet_e50_crt_lane_pair_release.csv</code></td></tr>
             <tr><td>N=22 profiled job</td><td>Slurm <code>41497149</code></td><td>Completed, exit 0; 10,112.287 s count + 19,948.064 s replay; 8:21:02 total</td><td><code>results/e50_scalar3_profile_once_scnet_n22_job41497149.csv</code> on scnet</td></tr>
             <tr><td>TreeSA diagnostic</td><td><code>c715e36</code></td><td>OMEinsumContractionOrders 1.3.0; exact Rust sparse C; seed 20260729</td><td><code>.worktrees/e37-treesa-d4/</code></td></tr>
+            <tr><td>APX1 finite boundary-MPS diagnostic</td><td><code>b89f4f1</code> base; separate approximation code</td><td>Julia 1.11.5; canonical SVD; explicit hard chi; exact reference kept separate</td><td><code>experiments/e51_truncated_boundary_mps/</code> (legacy directory name)</td></tr>
+            <tr><td>Same-node four-family comparison</td><td>Slurm <code>41534890–41534930</code></td><td>Exclusive <code>b10r4n19</code>; fresh process per N; immutable binaries; exact rows only</td><td><code>benchmarks/issue34_same_node_algorithm_comparison_scnet.csv</code> plus raw comparison archive</td></tr>
           </tbody>
         </table>
       </div>
@@ -1159,7 +1448,23 @@ RAYON_NUM_THREADS=128 ./bin/e50_crt_avx2 scalar 3 1 19 7 2 512 0
 
 # N=20/21 calibration submission
 sbatch --job-name=qpeps-e50-cal --time=01:00:00 \
-  scripts/scnet_e50_scalar_crt.sbatch 20 21 1 0 512 0</code></pre>
+  scripts/scnet_e50_scalar_crt.sbatch 20 21 1 0 512 0
+
+# APX1 tensor/boundary/truncation validation
+JULIA_DEPOT_PATH=.raw/julia-depot: julia \
+  --project=experiments/e51_truncated_boundary_mps \
+  experiments/e51_truncated_boundary_mps/test/runtests.jl
+
+# Final four-family table and SVGs; fails while any preregistered row is missing
+python3 experiments/e51_truncated_boundary_mps/scripts/analyze_algorithm_comparison.py \
+  --dfs experiments/e51_truncated_boundary_mps/raw/comparison_scnet_b10r4n19/dfs/results \
+  --naive experiments/e51_truncated_boundary_mps/raw/comparison_scnet_b10r4n19/naive/results \
+  --peps experiments/e51_truncated_boundary_mps/raw/comparison_scnet_b10r4n19/latest_peps/results \
+  --treesa experiments/e51_truncated_boundary_mps/raw/comparison_scnet_b10r4n19/treesa/results \
+  --output-csv benchmarks/issue34_same_node_algorithm_comparison_scnet.csv \
+  --output-time-svg experiments/e51_truncated_boundary_mps/figures/issue34_same_node_time.svg \
+  --output-rss-svg experiments/e51_truncated_boundary_mps/figures/issue34_same_node_rss.svg \
+  --require-complete</code></pre>
 
       <h3>Measurement caveats</h3>
       <ul>
@@ -1186,7 +1491,9 @@ sbatch --job-name=qpeps-e50-cal --time=01:00:00 \
           <li>T. B. Preußer and M. R. Engelhardt, <a href="https://doi.org/10.1007/s11265-016-1176-8">Putting Queens in Carry Chains, No. 27</a>.</li>
           <li>G. Yao and Y. Li, <a href="https://arxiv.org/abs/2511.12009">High-Performance N-Queens Solver on GPU</a>.</li>
           <li>F. Pan et al., <a href="https://arxiv.org/abs/2606.01852">Parallelizing Large-Scale Tensor Network Contraction on Multiple GPUs</a>.</li>
-          <li>Internal method/evidence: <code>REPORT.md</code>, <code>nqueens_issue34_autoresearch_plan.md</code>, the isolated <code>experiments/</code> reports, and raw <code>benchmarks/*.csv</code>.</li>
+          <li>Internal reviewer assessment: <a href="../审稿意见.md"><code>审稿意见.md</code></a>; preserved verbatim, with project-authored corrections and responses kept separate.</li>
+          <li>Internal proof/revision artifacts: <a href="sec_vi_row_automaton_equivalence.md"><code>sec_vi_row_automaton_equivalence.md</code></a>, <a href="issue34_publication_revision_plan.md"><code>issue34_publication_revision_plan.md</code></a>, and <a href="issue34_reviewer_response_matrix.md"><code>issue34_reviewer_response_matrix.md</code></a>.</li>
+          <li>Internal method/evidence: <code>REPORT.md</code>, <code>nqueens_issue34_autoresearch_plan.md</code>, isolated <code>experiments/</code> reports, raw <code>benchmarks/*.csv</code>, and the immutable same-node comparison archive.</li>
         </ol>
       </div>
       <div class="callout">
@@ -1332,10 +1639,53 @@ sbatch --job-name=qpeps-e50-cal --time=01:00:00 \
       add(svg,"line",{x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,class:"axis"});
     }
 
+    function renderTruncation() {
+      const svg=document.getElementById("truncationChart");
+      const W=900,H=350,m={l:86,r:86,t:48,b:58};
+      const data=[
+        [4,4.63710604501165e-23,0.479634091],
+        [8,3.59292056817198e-6,1.001726129],
+        [16,3.83123944200518e-6,2.13028285],
+        [32,5.74605343763621e-6,9.437101303],
+        [64,1.50682268533467e-5,49.040875013],
+        [128,3.66622149071735e-5,198.414197819]
+      ];
+      const xIndex=new Map(data.map((d,i)=>[d[0],i]));
+      const x=chi=>scale(xIndex.get(chi),0,data.length-1,m.l,W-m.r);
+      const yFraction=v=>scale(Math.log10(Math.max(v,1e-6)),-6,0,H-m.b,m.t);
+      const yTime=v=>scale(Math.log10(v),-1,3,H-m.b,m.t);
+      add(svg,"text",{x:m.l,y:20,class:"title"},"N=14 boundary-MPS truncation: retained count fraction versus cost");
+      [-6,-5,-4,-3,-2,-1,0].forEach(p=>{
+        const yy=yFraction(10**p);
+        add(svg,"line",{x1:m.l,x2:W-m.r,y1:yy,y2:yy,class:"grid"});
+        add(svg,"text",{x:m.l-10,y:yy+4,"text-anchor":"end"},p===0?"1":`1e${p}`);
+      });
+      [-1,0,1,2,3].forEach(p=>{
+        add(svg,"text",{x:W-m.r+10,y:yTime(10**p)+4},humanSeconds(10**p));
+      });
+      add(svg,"polyline",{points:data.map(d=>`${x(d[0])},${yFraction(d[1])}`).join(" "),fill:"none",stroke:"#1565c0","stroke-width":2.5});
+      add(svg,"polyline",{points:data.map(d=>`${x(d[0])},${yTime(d[2])}`).join(" "),fill:"none",stroke:"#d95f02","stroke-width":2.5});
+      data.forEach(([chi,fraction,time],i)=>{
+        add(svg,"circle",{cx:x(chi),cy:yFraction(fraction),r:5,fill:i===0?"#fff":"#1565c0",stroke:"#1565c0","stroke-width":2});
+        add(svg,"rect",{x:x(chi)-4.5,y:yTime(time)-4.5,width:9,height:9,fill:"#d95f02",stroke:"#fff","stroke-width":1});
+        add(svg,"text",{x:x(chi),y:H-m.b+23,"text-anchor":"middle"},String(chi));
+      });
+      add(svg,"text",{x:x(4)+7,y:yFraction(1e-6)-10},"~0 / numerical noise");
+      add(svg,"line",{x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,class:"axis"});
+      add(svg,"line",{x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,class:"axis"});
+      add(svg,"line",{x1:W-m.r,x2:W-m.r,y1:m.t,y2:H-m.b,class:"axis"});
+      add(svg,"text",{x:(m.l+W-m.r)/2,y:H-12,"text-anchor":"middle"},"Maximum bond dimension chi");
+      add(svg,"circle",{cx:m.l+8,cy:36,r:5,fill:"#1565c0"});
+      add(svg,"text",{x:m.l+20,y:40},"absolute estimate / exact count (left)");
+      add(svg,"rect",{x:m.l+245,y:31,width:9,height:9,fill:"#d95f02"});
+      add(svg,"text",{x:m.l+261,y:40},"contraction time (right)");
+    }
+
     renderScaling();
     renderRatios();
     renderLocalCompare();
     renderTreeSA();
+    renderTruncation();
   </script>
 </body>
 </html>
