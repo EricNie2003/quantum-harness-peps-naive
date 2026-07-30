@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Quantum Harness Issue #34：N 皇后 Sec. VI PEPS 精确收缩的最终中文研究报告">
+  <title>从组合计数到物理系统：用 PEPS 精确计数复杂约束构型</title>
+  <style>
+    :root {
+      --ink: #152235;
+      --muted: #52657a;
+      --navy: #0c2945;
+      --navy-2: #143f66;
+      --blue: #1677c8;
+      --cyan: #1ab4c6;
+      --purple: #7447b8;
+      --green: #087f5b;
+      --amber: #c66a0a;
+      --red: #c44238;
+      --paper: #f4f7fa;
+      --card: #ffffff;
+      --line: #d7e1eb;
+      --soft-blue: #eaf4ff;
+      --soft-green: #e8f6f0;
+      --soft-amber: #fff4de;
+      --soft-red: #ffebe8;
+      --shadow: 0 18px 50px rgba(16, 42, 67, .10);
+      --radius: 18px;
+      color-scheme: light;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      line-height: 1.78;
+      font-size: 16px;
+    }
+    a { color: #0969b6; text-underline-offset: 3px; }
+    a:hover { color: #064d87; }
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    code {
+      border-radius: 5px;
+      background: #edf2f7;
+      padding: .1em .35em;
+      font-size: .9em;
+    }
+    .wrap { width: min(1180px, calc(100% - 36px)); margin: 0 auto; }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      color: white;
+      background:
+        radial-gradient(circle at 80% 16%, rgba(26,180,198,.28), transparent 30%),
+        radial-gradient(circle at 10% 100%, rgba(116,71,184,.26), transparent 34%),
+        linear-gradient(135deg, #081b30 0%, #0d3556 58%, #0b4d5b 100%);
+      padding: 74px 0 66px;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: .13;
+      background-image:
+        linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);
+      background-size: 38px 38px;
+      pointer-events: none;
+    }
+    .hero .wrap { position: relative; z-index: 1; }
+    .eyebrow {
+      margin: 0 0 12px;
+      color: #78e1ed;
+      font-size: .82rem;
+      font-weight: 800;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 980px;
+      margin: 0;
+      font-size: clamp(2.25rem, 5vw, 4.5rem);
+      line-height: 1.14;
+      letter-spacing: -.035em;
+    }
+    .hero .subtitle {
+      max-width: 940px;
+      margin: 25px 0 0;
+      color: #dceafb;
+      font-size: clamp(1.04rem, 1.8vw, 1.28rem);
+    }
+    .hero-conclusion {
+      max-width: 1010px;
+      margin: 28px 0 0;
+      padding: 20px 24px;
+      border: 1px solid rgba(120,225,237,.5);
+      border-left: 5px solid #78e1ed;
+      border-radius: 14px;
+      background: rgba(5, 24, 43, .56);
+      backdrop-filter: blur(6px);
+      font-size: 1.08rem;
+    }
+    .hero-conclusion strong { color: #fff4aa; }
+    .badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 6px 12px;
+      border: 1px solid rgba(255,255,255,.28);
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      color: #eaf5ff;
+      font-size: .82rem;
+      font-weight: 700;
+    }
+    .badge.warn { color: #ffd890; border-color: rgba(255,196,91,.56); }
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      overflow-x: auto;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.94);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 3px 12px rgba(16,42,67,.06);
+    }
+    nav .wrap { display: flex; gap: 5px; min-width: max-content; padding: 10px 0; }
+    nav a {
+      display: inline-block;
+      padding: 7px 10px;
+      border-radius: 8px;
+      color: #334e68;
+      font-size: .84rem;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    nav a:hover { color: #075b9e; background: var(--soft-blue); }
+    main { padding: 38px 0 72px; }
+    section {
+      margin: 30px 0;
+      padding: clamp(24px, 4vw, 48px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+      scroll-margin-top: 76px;
+    }
+    .section-kicker {
+      margin-bottom: 5px;
+      color: var(--blue);
+      font-size: .77rem;
+      font-weight: 900;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h2 {
+      margin: 0 0 18px;
+      color: #102a43;
+      font-size: clamp(1.65rem, 3.2vw, 2.45rem);
+      line-height: 1.28;
+      letter-spacing: -.02em;
+    }
+    h3 { margin: 28px 0 10px; color: #193b5a; font-size: 1.27rem; line-height: 1.4; }
+    h4 { margin: 20px 0 6px; color: #234f72; }
+    p { margin: 10px 0 16px; }
+    .lede { color: #3b526a; font-size: 1.08rem; }
+    .small { font-size: .88rem; }
+    .muted { color: var(--muted); }
+    .grid-2, .grid-3, .grid-4 { display: grid; gap: 17px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+    .card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfdff;
+    }
+    .card h3 { margin-top: 0; }
+    .kpi {
+      padding: 20px;
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 14px;
+      background: rgba(255,255,255,.07);
+    }
+    .kpi strong { display: block; color: white; font-size: 1.85rem; line-height: 1.15; }
+    .kpi span { display: block; margin-top: 7px; color: #cfe0ef; font-size: .87rem; }
+    .hero-kpis { margin-top: 28px; }
+    .callout {
+      margin: 22px 0;
+      padding: 18px 20px;
+      border-left: 5px solid var(--blue);
+      border-radius: 10px;
+      background: var(--soft-blue);
+    }
+    .callout.good { border-color: var(--green); background: var(--soft-green); }
+    .callout.warn { border-color: var(--amber); background: var(--soft-amber); }
+    .callout.danger { border-color: var(--red); background: var(--soft-red); }
+    .thesis {
+      margin: 26px 0;
+      padding: 24px;
+      border: 1px solid #a7cce8;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #e9f5ff, #f4fbfd);
+      color: #103b5d;
+      font-size: clamp(1.08rem, 2vw, 1.32rem);
+      font-weight: 700;
+    }
+    .formula {
+      margin: 18px 0;
+      padding: 18px;
+      border: 1px solid #cbd8e5;
+      border-radius: 12px;
+      background: #f6f9fc;
+      text-align: center;
+      color: #163c5d;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.08rem;
+      overflow-x: auto;
+    }
+    .hero-image {
+      width: 100%;
+      margin-top: 22px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(16,42,67,.12);
+    }
+    figure { margin: 28px 0; }
+    figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: white;
+    }
+    figcaption { margin-top: 10px; color: var(--muted); font-size: .87rem; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; background: white; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid #e2eaf1; text-align: left; vertical-align: top; }
+    th { color: #163c5d; background: #eef5fb; font-size: .86rem; }
+    td { font-size: .9rem; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: #fbfdff; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .status {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: .75rem;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .status.pass { color: #05603f; background: #dff4e9; }
+    .status.partial { color: #8c4c00; background: #ffedc8; }
+    .status.fail { color: #a52b24; background: #ffe0dd; }
+    .status.info { color: #195c99; background: #dfeeff; }
+    .flow { display: grid; gap: 12px; margin: 22px 0; }
+    .flow-row { display: grid; grid-template-columns: 105px 1fr; gap: 15px; align-items: start; }
+    .flow-label {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #e6f1fb;
+      color: #0f5f9f;
+      font-size: .8rem;
+      font-weight: 900;
+      text-align: center;
+    }
+    .flow-body { padding: 12px 15px; border-left: 3px solid #9cc4e2; background: #f8fbfe; }
+    details {
+      margin: 12px 0;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #fcfdff;
+    }
+    summary { cursor: pointer; padding: 14px 16px; color: #173f61; font-weight: 800; }
+    details > div { padding: 0 16px 16px; }
+    pre {
+      overflow-x: auto;
+      padding: 17px;
+      border-radius: 11px;
+      background: #0d2237;
+      color: #d9e8f7;
+      line-height: 1.55;
+      font-size: .83rem;
+    }
+    ul, ol { padding-left: 1.35em; }
+    li { margin: 6px 0; }
+    .ref-list li { margin-bottom: 10px; }
+    footer {
+      padding: 30px 0 46px;
+      color: #61758a;
+      text-align: center;
+      font-size: .85rem;
+    }
+    @media (max-width: 900px) {
+      .grid-4, .grid-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .flow-row { grid-template-columns: 1fr; gap: 6px; }
+      .flow-label { width: fit-content; }
+    }
+    @media (max-width: 650px) {
+      .wrap { width: min(100% - 20px, 1180px); }
+      .hero { padding: 50px 0 44px; }
+      .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+      section { padding: 22px 17px; }
+    }
+    @media print {
+      nav { display: none; }
+      body { background: white; font-size: 10.5pt; }
+      .hero { padding: 30px 0; background: #123653 !important; print-color-adjust: exact; }
+      section { box-shadow: none; break-inside: avoid; margin: 16px 0; }
+      a { color: inherit; text-decoration: none; }
+      figure { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <p class="eyebrow">QUANTUM HARNESS · ISSUE #34 · 最终中文研究报告</p>
+      <h1>从组合计数到物理系统：<br>用 PEPS 精确计数复杂约束构型</h1>
+      <p class="subtitle">
+        从 Liu–Liao–Wang Sec. VI 的 17 个局域非零元出发，经过 60 个隔离优化方向，
+        我们构建并验证了一条严格精确的 PEPS 收缩链，测得其规模边界，并解释它为何在极限优化后
+        自然呈现经典位搜索的执行形态。
+      </p>
+      <div class="hero-conclusion">
+        <strong>最重要的结论不是“PEPS 比 DFS 快了多少”，而是：</strong>
+        对这类强局部约束、极稀疏、非负整数张量网络，保真的局域张量编译、状态消除和收缩重结合，
+        会把高维精确收缩自然化为对“仍然存活的约束状态”的搜索。未来优化的核心指标应是
+        <em>actual sparse support</em> 与真实 continuation 数，而不是只看网络拓扑、稠密 FLOP 或理论 bond width。
+      </div>
+      <div class="badges">
+        <span class="badge">主方法：严格精确 Sec. VI PEPS 收缩</span>
+        <span class="badge">最大已验证：Q(22)</span>
+        <span class="badge">60 个隔离优化方向</span>
+        <span class="badge warn">Issue #34 完整验收：尚未达到</span>
+      </div>
+      <div class="grid-4 hero-kpis">
+        <div class="kpi"><strong>17 + 17</strong><span>rank-9 B 与 rank-8 C 的显式非零元</span></div>
+        <div class="kpi"><strong>2.81 h</strong><span>128 核 EPYC 上 Q(22) 的精确计数时间</span></div>
+        <div class="kpi"><strong>105–214 年</strong><span>当前单节点 Q(28) count-only 外推区间</span></div>
+        <div class="kpi"><strong>χ=128 仍错 99.9963%</strong><span>N=14 常规截断 boundary-MPS 诊断</span></div>
+      </div>
+    </div>
+  </header>
+
+  <nav aria-label="报告目录">
+    <div class="wrap">
+      <a href="#background">问题背景</a>
+      <a href="#conclusion">研究结论</a>
+      <a href="#fidelity">张量保真</a>
+      <a href="#evolution">60 轮演化</a>
+      <a href="#benchmark">性能与内存</a>
+      <a href="#treesa">TreeSA</a>
+      <a href="#truncation">截断实验</a>
+      <a href="#physics">物理启示</a>
+      <a href="#issue">Issue 验收</a>
+      <a href="#repro">复现</a>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <section id="background">
+      <div class="section-kicker">01 · 问题背景</div>
+      <h2>把合法构型计数写成一个可审计的张量网络</h2>
+      <p class="lede">
+        N 皇后问题要求在 N×N 棋盘放置 N 个皇后，使任意两个皇后不共享行、列或两族对角线。
+        Q(N) 是全部合法构型的精确数目。这里研究的是精确组合计数，而不是把一个浮点近似四舍五入成整数。
+      </p>
+
+      <img class="hero-image" src="../示意图.png" alt="从 N 皇后组合计数到 PEPS，再迁移至自旋冰与里德堡阻塞系统的示意图">
+
+      <div class="grid-3" style="margin-top:22px">
+        <div class="card">
+          <h3>组合学问题</h3>
+          <p>每行恰有一个皇后，且列与两族对角线上至多一个。直接枚举有阶乘级候选空间；位棋盘 DFS 是经典高性能路线。</p>
+        </div>
+        <div class="card">
+          <h3>统计物理表示</h3>
+          <p>把皇后占据视作晶格气体，把排斥规则编码进虚指标传播。网络的全收缩等于零温基态简并度 Q(N)。</p>
+        </div>
+        <div class="card">
+          <h3>可迁移方法</h3>
+          <p>同一“局域规则 → 稀疏张量 → 构型计数”框架可用于 ice rule、Rydberg blockade、硬方格等受约束模型。</p>
+        </div>
+      </div>
+
+      <h3>Sec. VI 的精确 PEPS</h3>
+      <p>
+        Liu、Liao、Wang 将 N 皇后写成一个有限尺寸张量网络。每个格点有一个物理占据指标
+        α∈{0,1}，以及列、行、右下对角线、左下对角线四个有向约束通道；每个通道各有一入一出两个
+        dimension-2 虚指标。因此局域张量 B 是 rank-9，而求和物理指标后的计数张量
+        C=Σ<sub>α</sub>B 是 rank-8。完整网络与全构型积态的内积给出：
+      </p>
+      <div class="formula">Q(N) = ⟨Ψ | (|0⟩ + |1⟩)<sup>⊗N²</sup> = Contract(C<sup>⊗N²</sup>, v<sub>0</sub>, v<sub>1</sub>, v<sub>2</sub>)</div>
+      <p>
+        这不是把 N 皇后递推“改名”为 PEPS：本项目显式构造 B、显式得到 C，并从 C 的条目机械生成所有快路径。
+        这种来源链条是后续“为何热循环像 DFS”仍能被称为 proved-equivalent optimized contraction 的依据。
+      </p>
+
+      <div class="callout warn">
+        <strong>复杂度表述：</strong>本报告不把标准 Q(N) 序列草率称为“NP 问题”。它是一个精确计数任务；相关的广义放置/补全决策问题可以具有 NP 完全性，但本研究关心的是有限 N 的 #solutions 与张量收缩复杂度。
+      </div>
+
+      <h3>为什么这一框架具有物理意义</h3>
+      <p>
+        自旋冰中，two-in/two-out 的 ice rule 本身就是局域稀疏约束；收缩对应合法冰构型数、残余熵与受挫体系的基态简并。
+        里德堡阻塞中，阻塞图上的激发构型等价于独立集；合法基矢数就是受阻塞 Hilbert 空间维数。
+        这些系统比 N 皇后的长程行列/对角线传播更局域，但共享“巨大零结构与强约束”的算法特征。
+      </p>
+    </section>
+
+    <section id="conclusion">
+      <div class="section-kicker">02 · 研究结论</div>
+      <h2>精确稀疏 PEPS 的极限优化，揭示了张量收缩与状态搜索的同源性</h2>
+      <div class="thesis">
+        当局域张量主要承载确定性的约束传播，而非一般稠密振幅时，“收缩”真正做的事情是维护仍可能延拓为合法全局构型的边界状态。
+        机械消去零元、编译局域关系并避免晚层中间张量物化后，这一过程会自然形成位掩码状态更新与深度优先 continuation traversal。
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>我们真正证明了什么</h3>
+          <ul>
+            <li>显式 17-entry B/C 与边界条件构成真实 Sec. VI 网络。</li>
+            <li>逐行 C-transfer 可被 fail-closed 地编译成列与对角线 bitmask 自动机。</li>
+            <li>后期递归仍逐步应用该 C-derived relation；它不调用 DFS 模块或已知计数表。</li>
+            <li>在有限 N 与一个冻结实现对照中，优化 PEPS 可以达到并略快于仓库 DFS comparator。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>我们没有证明什么</h3>
+          <ul>
+            <li>没有证明 PEPS 具有更低的渐近指数。</li>
+            <li>没有证明它胜过所有同等微优化的 N 皇后 DFS。</li>
+            <li>没有复现 Q(27)，也没有得到 Q(28)。</li>
+            <li>没有证明这些结论可无条件外推到一般复数、稠密、纠缠 PEPS。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>三条最重要的实证结论</h3>
+      <div class="flow">
+        <div class="flow-row"><div class="flow-label">结论 A</div><div class="flow-body"><strong>支持度比拓扑更重要。</strong> Generic TreeSA、dense width 与几何 cut 不能预测实际非零中间张量；最优路径必须计入 tensor values、actual sparse support、物化字节和已校准 kernel 成本。</div></div>
+        <div class="flow-row"><div class="flow-label">结论 B</div><div class="flow-body"><strong>最大转折来自改变中间表示。</strong> E38/E40 不再物化最宽晚层 frontier，而改为“小 prefix + C-derived recursive tail”。这比继续优化哈希、排序或缓存更接近根因。</div></div>
+        <div class="flow-row"><div class="flow-label">结论 C</div><div class="flow-body"><strong>低秩与截断不能只看形式。</strong> 边界具有低秩诊断信号，不等于能廉价构造该低秩表示；常规 SVD 截断在 N=14、χ=128 仍丢失 99.9963% 的计数。</div></div>
+      </div>
+
+      <figure>
+        <img src="assets/issue34_submission/algorithm_time_rss_zh.svg" alt="DFS、朴素 PEPS、最新精确 PEPS 与 TreeSA PEPS 在同一节点上的耗时和峰值 RSS">
+        <figcaption>
+          同一 exclusive SCNet 节点上的冻结实现对照。DFS/latest N=22 的新对照作业尚在运行，因此该图只使用已完成且通过 provenance 校验的点；production N=22 的独立完整测量见下文。
+        </figcaption>
+      </figure>
+
+      <div class="callout good">
+        <strong>最稳健的表述：</strong>项目成功完成了一项“张量网络如何编译成组合搜索”的方法研究，并把朴素显式-C 收缩从不可扩展的巨型 frontier 推进到低内存、可验证、可运行至 N=22 的精确实现；它没有推进 N 皇后世界纪录。
+      </div>
+    </section>
+
+    <section id="fidelity">
+      <div class="section-kicker">03 · 张量网络保真与精确性</div>
+      <h2>从 17 个局域非零元到位掩码热循环：每一步都必须可回放</h2>
+
+      <h3>局域张量的 17 个条目</h3>
+      <div class="grid-2">
+        <div class="card">
+          <h3>空格点 α=0：16 项</h3>
+          <p>四个约束通道彼此独立地传递 0 或 1；每个通道出信号等于入信号，因此共有 2<sup>4</sup>=16 个非零条目。</p>
+        </div>
+        <div class="card">
+          <h3>占据格点 α=1：1 项</h3>
+          <p>四个通道的入信号全部为 0、出信号全部为 1，表示当前格点第一次在每条约束线上发出“已有皇后”信号。</p>
+        </div>
+      </div>
+      <p>
+        B 因而恰有 17 个非零元；对 α 求和得到 C 后，16 个空传播项与 1 个占据项仍不重合，所以 C 也恰有 17 个非零元。
+      </p>
+
+      <h3>边界向量</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>边界</th><th>向量</th><th>作用</th><th>本实现</th></tr></thead>
+          <tbody>
+            <tr><td>约束线起点</td><td><code>v0=(1,0)</code></td><td>进入棋盘前尚未出现皇后</td><td><span class="status pass">显式测试</span></td></tr>
+            <tr><td>行与列终点</td><td><code>v1=(0,1)</code></td><td>强制恰好一个皇后</td><td><span class="status pass">显式测试</span></td></tr>
+            <tr><td>两族对角线终点</td><td><code>v2=(1,1)</code></td><td>允许 0 或 1 个皇后，即至多一个</td><td><span class="status pass">显式测试</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted">本实现采用文档化的 row-major 对角线方向；若翻转某一对角通道，其 v0/v2 端点也同时翻转，物理线约束不变。</p>
+
+      <h3>逐行等价命题</h3>
+      <div class="callout">
+        <strong>命题（简述）：</strong>在上述 B/C 与 v0/v1/v2 下，完成一行的物理指标收缩后，可达边界态与三个冲突集合
+        <code>(columns, diagDR, diagDL)</code> 一一对应。当前行可占据位置恰为
+        <code>available = boardMask &amp; !(columns | diagDR | diagDL)</code>；选定位置后的三个集合更新，正是 occupied C 条目沿列与两族对角虚键传播的机械结果。
+      </div>
+      <p>
+        这解释了最终热循环为何与 bitboard DFS 相似。相似性来自同一约束自动机，而不是偷换模型。仓库中的证明说明、逐 parent replay 和测试把下面这条链闭合：
+      </p>
+      <div class="formula">显式 B → 物理收缩得到 C → fail-closed row compiler → reachable-parent replay → certified tail plan → 优化热循环</div>
+
+      <h3>精确算术</h3>
+      <p>
+        所有正式计数使用 checked 整数或有限域/CRT。N≤20 的非负部分计数由 N! 上界认证可走 scalar-u64；更宽 N 使用多个 32-bit primes，
+        并在模数乘积超过可证明计数上界后做唯一 CRT 重构。浮点、SVD 阈值与整数 rounding 均不进入正式 Q(N)。
+      </p>
+
+      <div class="grid-3">
+        <div class="card"><h3>Rust 验证</h3><p><strong>51 tests</strong><br>局域张量、边界、small-N oracle、已知计数、优化路径 replay。</p></div>
+        <div class="card"><h3>APX1 Julia 验证</h3><p><strong>616 assertions</strong><br>含 72 个 B/C、504 个线边界、uncapped N=0–7、有限 χ 与 BLAS invariance。</p></div>
+        <div class="card"><h3>独立对照</h3><p>经典 DFS 只作为 oracle/comparator；PEPS production 不调用它，也不读取 known-count 作为输出。</p></div>
+      </div>
+    </section>
+
+    <section id="evolution">
+      <div class="section-kicker">04 · 各优化方向分类与总结</div>
+      <h2>60 个方向不是“堆技巧”，而是四次瓶颈认知转变</h2>
+      <p class="lede">
+        每个方向在独立 worktree/branch 中预注册假设、正确性义务与 keep/kill gate；每五个方向强制复盘。
+        KEEP 表示机制在指定门槛下成立，REJECT 也保留数据和失败原因。不能把跨硬件、跨 revision 的最佳数字拼成虚假的总 speedup。
+      </p>
+
+      <div class="grid-4">
+        <div class="card"><h3>阶段 A · E1–E10</h3><p><strong>解释器与容器</strong></p><p>索引 17-entry C、紧凑 key、buffer reuse、sort-reduce、并行 slicing。N=14 串行链从 25.19 s 降至 3.09 s，但 support 未变。</p></div>
+        <div class="card"><h3>阶段 B · E11–E35</h3><p><strong>结构压缩探索</strong></p><p>vertical D4 有效；DD/ZDD、future quotient、低秩、generic path 等多数发现结构却无法在物化前利用。</p></div>
+        <div class="card"><h3>阶段 C · E24–E47</h3><p><strong>表示与结合顺序</strong></p><p>紧凑 record、bounded flush、窄算术；E38/E40 以 recursive tail 删除晚层 materialization；E42/E47 编译 last-k supernode。</p></div>
+        <div class="card"><h3>阶段 D · E48–E60</h3><p><strong>热核边际耗尽</strong></p><p>stack、AVX2、cache、I-cache、ILP、更多 unroll 均未过 gate。99.98% 热点是必要的低复用 C-state expansion。</p></div>
+      </div>
+
+      <h3>按机制分类</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>方向</th><th>代表实验</th><th>结论</th><th>机制解释</th></tr></thead>
+          <tbody>
+            <tr><td>局域算子编译</td><td>E1、E6、E11/E24</td><td><span class="status pass">KEEP</span></td><td>从 explicit C 自动生成稀疏 successor，删除每站重复扫描与无效分支。</td></tr>
+            <tr><td>连续内存与 sort-reduce</td><td>E3、E5、E9、E24、E28、E36</td><td><span class="status pass">KEEP</span></td><td>只要仍物化 frontier，record bytes、顺序访问和 buffer capacity 会直接映射到 wall/RSS。</td></tr>
+            <tr><td>并行与任务组织</td><td>E10、E26、E31、E37、E43、E51–E53</td><td><span class="status partial">阶段性</span></td><td>早期可改善生成/规约；进入 recursive tail 后，task tape 与调度不再是主瓶颈。</td></tr>
+            <tr><td>对称性</td><td>E12、E39、E60</td><td><span class="status partial">vertical KEEP；full D4 REJECT</span></td><td>第一行反射便宜且约 2×；完整 D4 的 canonical bookkeeping 大于额外 1–2% node 收益。</td></tr>
+            <tr><td>决策图与等价类</td><td>E7、E14–E18、E21–E23、E35</td><td><span class="status fail">production REJECT</span></td><td>共享/低秩确实存在，但 post-hoc 压缩前已生成 concrete support；hash-cons、PLUQ 与 fill-in 吞掉收益。</td></tr>
+            <tr><td>通用收缩路径</td><td>E8、E13、E19、E20、E29、E30、TreeSA</td><td><span class="status fail">REJECT</span></td><td>dense width 与几何 open legs 看不到 tensor values、整行 partial evaluation 和实际非零 support。</td></tr>
+            <tr><td>混合 BFS→DFS</td><td>E38、E40、E41</td><td><span class="status pass">关键 KEEP</span></td><td>小 prefix 合并后直接递归收缩 tail，避免写入、排序和归并最大晚层中间张量。</td></tr>
+            <tr><td>精确算术与 terminal macro</td><td>E32、E42、E45–E47</td><td><span class="status pass">KEEP</span></td><td>把 N! 与 CRT 证明转化为窄数据路径；last-six 消除递归/base-case 常数而不改变 C work。</td></tr>
+            <tr><td>缓存、SIMD、ILP、更多展开</td><td>E48–E59</td><td><span class="status fail">多数 REJECT</span></td><td>状态少复用、lane divergence、spill、数组流量与代码增长超过理论指令级收益。</td></tr>
+            <tr><td>浮点 boundary-MPS 截断</td><td>APX1（非编号 exact 优化）</td><td><span class="status fail">计数 REJECT</span></td><td>固定 χ 只通过丢弃 count-carrying sector 控制成本；保留为误差诊断。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>成功与失败的分界</h3>
+      <div class="grid-2">
+        <div class="card" style="border-color:#a9d8c3;background:#f4fbf7">
+          <h3 style="color:#087f5b">成功模式</h3>
+          <ul>
+            <li>在 apply 过程中机械 partial evaluation，而非事后压缩。</li>
+            <li>减少真实 record 数、bytes 与物化层数。</li>
+            <li>只使用当前 cut 上便宜、可证明的对称性。</li>
+            <li>用 exact certificate 选择窄算术与 terminal supernode。</li>
+            <li>把并行粒度与内存组织共同设计。</li>
+          </ul>
+        </div>
+        <div class="card" style="border-color:#efb2ad;background:#fff7f6">
+          <h3 style="color:#b63831">失败模式</h3>
+          <ul>
+            <li>仅优化 dense proxy、理论 width 或抽象 contraction tree。</li>
+            <li>先物化完整对象，再做 DD、rank、quotient 或 SVD。</li>
+            <li>在几乎不汇合的状态空间上强加 memoization/cache。</li>
+            <li>假设 full D4 必然带来 8×，忽略 canonicalization 成本。</li>
+            <li>不减少 C nodes，只手写 stack/SIMD/ILP。</li>
+          </ul>
+        </div>
+      </div>
+
+      <details>
+        <summary>查看 E1–E60 的完整可检索实验矩阵</summary>
+        <div>
+          <p>全量方向、状态、测量值和失败机制已保存在独立总结页面，未在此重复数百行：</p>
+          <ul>
+            <li><a href="../总结2.html">总结2.html：E1–E60 全量可筛选矩阵</a></li>
+            <li><a href="../REPORT.md">REPORT.md：逐轮实验报告与五方向复盘</a></li>
+            <li><a href="../nqueens_issue34_autoresearch_plan.md">自动研究计划：假设、gate 与修订历史</a></li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <section id="benchmark">
+      <div class="section-kicker">05 · 完整技术报告：性能、内存与 Q(28)</div>
+      <h2>内存墙被重组掉了，但指数 continuation 数没有消失</h2>
+
+      <h3>同节点四算法对照</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">N</th><th class="num">DFS / s</th><th class="num">最新 PEPS / s</th><th class="num">DFS÷PEPS</th><th>解释</th></tr></thead>
+          <tbody>
+            <tr><td class="num">14</td><td class="num">0.010902</td><td class="num">0.015420</td><td class="num">0.707×</td><td>小规模 overhead 主导，DFS 更快</td></tr>
+            <tr><td class="num">15</td><td class="num">0.025699</td><td class="num">0.031871</td><td class="num">0.806×</td><td>DFS 更快</td></tr>
+            <tr><td class="num">16</td><td class="num">0.075594</td><td class="num">0.069050</td><td class="num">1.095×</td><td>冻结实现出现 crossover</td></tr>
+            <tr><td class="num">17</td><td class="num">0.414400</td><td class="num">0.365453</td><td class="num">1.134×</td><td>PEPS 快 11.8%</td></tr>
+            <tr><td class="num">18</td><td class="num">2.369722</td><td class="num">2.220825</td><td class="num">1.067×</td><td>PEPS 快 6.3%</td></tr>
+            <tr><td class="num">19</td><td class="num">18.747813</td><td class="num">17.040845</td><td class="num">1.100×</td><td>PEPS 快 9.1%</td></tr>
+            <tr><td class="num">20</td><td class="num">141.132524</td><td class="num">131.450921</td><td class="num">1.074×</td><td>PEPS 快 6.9%</td></tr>
+            <tr><td class="num">21</td><td class="num">1,270.576339</td><td class="num">1,188.372938</td><td class="num">1.069×</td><td>单次精确样本；PEPS 快 6.5%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted">
+        以上最新 PEPS 为同一 scalable backend：128 核、强制三 prime CRT、无 TreeSA。N≤19 为 7 repeats + 2 warmups；N=20/21 为单次精确样本。
+        DFS 与 PEPS 并未实现完全匹配的 last-six、任务切分和算术路径，因此只能作“冻结整机实现吞吐”比较，不能据此声称 tensor formulation 本身胜过等优化 DFS。
+      </p>
+
+      <div class="grid-3">
+        <div class="card"><h3>朴素 PEPS · N=16</h3><p><strong>1,197.111 s</strong><br>30.625 GiB GNU-RSS<br>194.21M peak states</p></div>
+        <div class="card"><h3>最新 PEPS · N=16</h3><p><strong>0.069050 s</strong><br>10.074 MiB GNU-RSS<br>相对朴素路径快 17,337×</p></div>
+        <div class="card"><h3>production · N=22</h3><p><strong>10,112.287 s</strong>（2.81 h）<br>57,892 KiB GNU-RSS（count+replay 进程）<br>Q(22)=2,691,008,701,644</p></div>
+      </div>
+      <p class="small muted">
+        三张卡并非同一硬件/后端的可乘 speedup 链。它们只展示表示从“大 frontier 物化”转成“低内存 streaming sectors + recursive tail”后，资源形态发生了什么变化。
+      </p>
+
+      <h3>精确 production 扩展至 N=22</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">N</th><th class="num">Q(N)</th><th class="num">count time</th><th class="num">相邻时间比</th><th>采样</th></tr></thead>
+          <tbody>
+            <tr><td class="num">16</td><td class="num">14,772,512</td><td class="num">0.074719 s</td><td class="num">2.11×</td><td>7 次中位数</td></tr>
+            <tr><td class="num">17</td><td class="num">95,815,104</td><td class="num">0.398020 s</td><td class="num">5.33×</td><td>7 次中位数</td></tr>
+            <tr><td class="num">18</td><td class="num">666,090,624</td><td class="num">2.174198 s</td><td class="num">5.46×</td><td>7 次中位数</td></tr>
+            <tr><td class="num">19</td><td class="num">4,968,057,848</td><td class="num">17.068042 s</td><td class="num">7.85×</td><td>7 次中位数</td></tr>
+            <tr><td class="num">20</td><td class="num">39,029,188,884</td><td class="num">131.643368 s</td><td class="num">7.71×</td><td>单次精确样本</td></tr>
+            <tr><td class="num">21</td><td class="num">314,666,222,712</td><td class="num">1,187.868090 s</td><td class="num">9.02×</td><td>单次精确样本</td></tr>
+            <tr><td class="num">22</td><td class="num">2,691,008,701,644</td><td class="num">10,112.287308 s</td><td class="num">8.51×</td><td>1 次 count + 独立 checked-u128 metrics replay</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        N=22 的 replay 测得 143,257,397,145,757 个 recursive nodes 与 143,257,397,198,927 个 accepted entries。
+        key width 与 CRT uniqueness 已不再是主限制；真正的瓶颈是数以万亿计、低复用、数据依赖强的 exact C transitions。
+      </p>
+
+      <figure>
+        <img src="assets/issue34_submission/q28_projection_zh.svg" alt="当前精确 PEPS 后端从 N=16 到 N=22 的实测时间以及到 N=28 的三种资源外推">
+        <figcaption>
+          三种模型均用 N=18–22 估计增长并锚定实测 N=22；N=28 再施加 paired 3/4-prime 测得的 1.02497× 几何开销。105–214 年是单节点 count-only 敏感性区间，不是置信区间、复杂度证明或已提交作业。
+        </figcaption>
+      </figure>
+
+      <div class="callout danger">
+        <strong>Q(28) go/no-go：</strong>当前 kernel 不应启动完整单节点 Q(28)。外推约 105–214 年，相当于约 13,500–27,300 个持续满载 core-years；更保守的早期局部比率估计曾给出 800–1,000 年。数值虽依模型而变，结论不变：必须减少 exact continuation 数或改变指数，而不是继续争取几个百分点的 ns/node。
+      </div>
+    </section>
+
+    <section id="treesa">
+      <div class="section-kicker">06 · 收缩路径实验</div>
+      <h2>TreeSA 为什么在这个 PEPS 上失败</h2>
+      <p class="lede">
+        我们没有把“TreeSA”当作 E50 的布尔开关，而是构建了独立的 explicit-C site-tree executor：OMEinsumContractionOrders 生成真实 TreeSA 计划，Rust 稀疏引擎按计划做 checked-u128 精确收缩。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">N</th><th class="num">TreeSA peak support</th><th class="num">逐行 support</th><th class="num">膨胀比</th><th>结论</th></tr></thead>
+          <tbody>
+            <tr><td class="num">8</td><td class="num">15,904</td><td class="num">272</td><td class="num">58.47×</td><td><span class="status fail">gate fail</span></td></tr>
+            <tr><td class="num">9</td><td class="num">10,139</td><td class="num">1,210</td><td class="num">8.38×</td><td><span class="status fail">gate fail</span></td></tr>
+            <tr><td class="num">10</td><td class="num">491,832</td><td class="num">4,510</td><td class="num">109.05×</td><td><span class="status fail">gate fail</span></td></tr>
+            <tr><td class="num">11</td><td class="num">367,284</td><td class="num">22,253</td><td class="num">16.50×</td><td><span class="status fail">gate fail</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        N=8–11 的计划时间为 15.1–33.3 s，planner RSS 约 392–397 MiB。所有 exact executor 结果都正确，但中间 support gate 全部失败。
+        N=20 只生成了 dense-space log2=60 的 plan；在小 N 稀疏证据已经明显不利时，继续启动 exact N=20 executor 会是不受控的 OOM/timeout 尝试，因此没有提交。
+      </p>
+      <div class="callout warn">
+        <strong>机制：</strong>通用 TreeSA 优化的是拓扑与 dense bond dimension。E50 的优势来自 tensor values、整行 partial evaluation、可达 sector、D4 首行条件化和不物化 tail；site-level dense objective 看不到这些。未来 path search 必须使用 C-derived row/half-row/terminal macros，并以 actual support、materialization bytes 与 measured kernel cost 评分。
+      </div>
+    </section>
+
+    <section id="truncation">
+      <div class="section-kicker">07 · APX1 近似诊断</div>
+      <h2>有限 χ 看似控制了规模，却几乎丢掉了全部计数</h2>
+      <p class="lede">
+        为回答“如果用常规有限 PEPS 截断，误差和速度如何随 χ 变化”，我们实现了独立的 Float64 boundary-MPS：
+        row MPO 仍由 explicit 17-entry C 生成，QR canonicalization 后做 LAPACK SVD，且用带标签的 virtual-qubit SWAP 处理对角线平移。
+        该实验是近似诊断，不属于 exact Issue #34 solver。
+      </p>
+
+      <figure>
+        <img src="assets/issue34_submission/truncation_n14_zh.svg" alt="N=14 时 boundary-MPS 截断结果与精确计数以及耗时随 chi 的变化">
+        <figcaption>
+          χ=4,8,16,32,64,128 的完整 N=14 扫描。左图纵轴直接画收缩得到的浮点计数，并用虚线标注 Q(14)=365,596；右图比较截断时间与同节点 exact PEPS。
+        </figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">χ</th><th class="num">浮点估计</th><th class="num">相对误差</th><th class="num">时间 / s</th><th class="num">RSS / MiB</th></tr></thead>
+          <tbody>
+            <tr><td class="num">4</td><td class="num">≈0</td><td class="num">1.000000000</td><td class="num">0.480</td><td class="num">371.8</td></tr>
+            <tr><td class="num">8</td><td class="num">1.31356</td><td class="num">0.999996407</td><td class="num">1.002</td><td class="num">381.1</td></tr>
+            <tr><td class="num">16</td><td class="num">1.40069</td><td class="num">0.999996169</td><td class="num">2.130</td><td class="num">371.1</td></tr>
+            <tr><td class="num">32</td><td class="num">2.10073</td><td class="num">0.999994254</td><td class="num">9.437</td><td class="num">509.1</td></tr>
+            <tr><td class="num">64</td><td class="num">5.50888</td><td class="num">0.999984932</td><td class="num">49.041</td><td class="num">710.2</td></tr>
+            <tr><td class="num">128</td><td class="num">13.40356</td><td class="num">0.999963338</td><td class="num">198.414</td><td class="num">692.2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        χ=128 仅保留精确计数的 3.67×10<sup>−5</sup>，同时比 exact PEPS 的 0.015146 s 慢约 13,100×。
+        在 N=20，χ=16 的估计只有 2.127，而精确值是 39,029,188,884；固定 χ 的“良好 scaling”来自丢弃几乎整个 count-carrying sector。
+      </p>
+      <div class="callout danger">
+        <strong>APX1 决策：计数算法 REJECT，负面诊断 KEEP。</strong>这个结果警告我们：对构型简并度、残余熵或受约束 Hilbert 空间维数，普通 Schmidt/Frobenius 截断误差并不自动控制最终计数的相对误差。它不意味着所有物理 PEPS 截断都会失败，但要求针对目标 observable/partition function 做独立误差验证。
+      </div>
+    </section>
+
+    <section id="physics">
+      <div class="section-kicker">08 · 对强约束物理 PEPS 的启示</div>
+      <h2>这项研究的价值在方法论，而不在刷新 N 皇后纪录</h2>
+      <p class="lede">
+        N 皇后张量是非负、布尔虚键、极稀疏的经典约束网络；一般强关联 PEPS 可能是复数、稠密、含符号抵消并需要近似环境。
+        因此下面是可检验的迁移假设，而不是未经验证的普适定理。
+      </p>
+
+      <div class="grid-2">
+        <div class="card"><h3>1 · Support-aware contraction</h3><p>收缩代价不应只由 cut 上有多少虚键决定，而应由存活非零 sector、真实物化字节和压缩后的 continuation 决定。强约束体系需要 data-dependent path cost。</p></div>
+        <div class="card"><h3>2 · 局域张量机械编译</h3><p>当局域张量本质是 ice rule、Gauss law、blockade 或 dimer constraint 时，不应一律当成稠密数组。JIT/算子生成可把它编译成 bitwise 或 sparse automaton。</p></div>
+        <div class="card"><h3>3 · 对称性有隐性簿记成本</h3><p>block-sparse 与点群对称不是无条件收益。若 canonicalization、hash 与 sector 管理作用在每个 node，而维度只小幅下降，它会成为负优化。</p></div>
+        <div class="card"><h3>4 · 平坦连续数据优于复杂图结构</h3><p>在 exact contraction 中，指针跳转与哈希常比算术更贵。packed key-value、顺序生成与 sort-reduce 往往比通用 DD/图容器更适合吞吐。</p></div>
+        <div class="card"><h3>5 · 警惕 algebraic fill-in</h3><p>“事后低秩”不等于“可廉价生成”。PLUQ、QR/SVD 若先形成大对象或破坏计算基稀疏性，fill-in 会抵消理论 rank 优势；压缩必须进入 apply 过程。</p></div>
+        <div class="card"><h3>6 · BFS→DFS 的混合环境</h3><p>边界还小时合并相同 sector；环境即将爆炸时 slicing，并把剩余子网流式收缩成独立标量任务。核心是避免巨型中间环境，而非只加速其分解。</p></div>
+      </div>
+
+      <h3>两个直接物理映射</h3>
+      <div class="grid-2">
+        <div class="card">
+          <h3>自旋冰 / ice rule</h3>
+          <p>局域 two-in/two-out 张量收缩给出 ice manifold 的构型数与残余熵；三维受挫体系已有 PEPS/张量网络计算残余熵和 Coulomb-phase 关联的研究。</p>
+        </div>
+        <div class="card">
+          <h3>Rydberg blockade / 独立集</h3>
+          <p>阻塞半径内不能同时激发，等价于图独立集约束。全合法构型计数给出 blockade Hilbert space 维数；加 fugacity 后得到 hard-square/independent-set 配分函数。</p>
+        </div>
+      </div>
+
+      <div class="callout good">
+        <strong>下一代工具应优化什么：</strong>不是“裸 contraction tree”，而是 contraction strategy + compression strategy + target observable sensitivity。
+        理想的自动化工具应能从局域张量值推导宏算子，在线估计 actual support，并在物化、合并、切片和递归之间动态选择。
+      </div>
+    </section>
+
+    <section id="issue">
+      <div class="section-kicker">09 · Issue #34 提交状态</div>
+      <h2>技术路线成立，但挑战的完整验收条件尚未满足</h2>
+      <p>
+        Issue #34 要求 exact Sec. VI contraction、已知值验证、runtime/memory scaling，并以 Q(28) 为目标；若未达到，则报告最大 N 与精确瓶颈。
+        它还把 Q(27) 复现和向 harness 提交 PR 列为 deliverables。下面按当前仓库证据逐项回答。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>要求</th><th>当前证据</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td>严格遵循 Sec. VI B/C 与 v0/v1/v2</td><td>显式 rank-9 B、rank-8 C，各 17 项；边界与方向测试；compiled-C replay</td><td><span class="status pass">完成</span></td></tr>
+            <tr><td>严格精确，不用截断改变计数</td><td>checked integer 与 certified finite-field/CRT；APX1 与 exact production 完全分离</td><td><span class="status pass">完成</span></td></tr>
+            <tr><td>验证 Q(8)、Q(16)、Q(20)</td><td>92；14,772,512；39,029,188,884，均 exact verified</td><td><span class="status pass">完成</span></td></tr>
+            <tr><td>复现 Q(27)</td><td>最大完整精确结果为 Q(22)</td><td><span class="status fail">未完成</span></td></tr>
+            <tr><td>计算 Q(28)，或说明不可行原因</td><td>N=18–22 实测、N=22 held-out 检验、105–214 年 count-only 外推；瓶颈为 recursive C transitions</td><td><span class="status partial">no-go 分析完成；Q(28) 未完成</span></td></tr>
+            <tr><td>runtime / memory scaling</td><td>原始 CSV、GNU time、Slurm、support、entries、nodes 与同节点四算法对照</td><td><span class="status pass">完成</span></td></tr>
+            <tr><td>与 FPGA/GPU backtracking 比较</td><td>方法与量级的文献比较；未宣称跨硬件 speedup</td><td><span class="status partial">定性完成</span></td></tr>
+            <tr><td>向 harness 提交 PR</td><td>报告与代码分支已推送；最终 harness PR 尚未建立</td><td><span class="status fail">未完成</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warn">
+        <strong>提交定位：</strong>这是 Issue #34 的高质量阶段性研究交付与 no-go 分析，不应写成“挑战已经完成”。其核心贡献是保真编译、系统消融、负面结果和瓶颈定位；如果未来要继续冲击 Q(27)/Q(28)，必须引入能减少 nodes/support 的新表示、分隔面、meet-in-the-middle 或显著不同的 many-core/GPU exact throughput。
+      </div>
+    </section>
+
+    <section id="repro">
+      <div class="section-kicker">10 · 复现、数据与参考文献</div>
+      <h2>所有结论都可回到代码 revision、原始 CSV 与进程级测量</h2>
+
+      <h3>主要工件</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>工件</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><a href="../REPORT.md">REPORT.md</a></td><td>E1–E60 逐方向报告、五方向复盘、KEEP/REJECT 机制</td></tr>
+            <tr><td><a href="../nqueens_issue34_autoresearch_plan.md">nqueens_issue34_autoresearch_plan.md</a></td><td>预注册假设、精确性义务、benchmark gate 与研究计划修订</td></tr>
+            <tr><td><a href="issue34_research_report.html">专业英文研究报告</a></td><td>完整证据链、reviewer matrix、详细 scaling 与 provenance</td></tr>
+            <tr><td><a href="sec_vi_row_automaton_equivalence.md">Sec. VI 行自动机等价说明</a></td><td>从 explicit C 到 bitmask transfer 的论文级论证草案</td></tr>
+            <tr><td><a href="../benchmarks/issue34_same_node_algorithm_comparison_scnet.csv">同节点四算法 CSV</a></td><td>DFS、朴素 PEPS、latest PEPS、TreeSA 的时间/RSS/来源</td></tr>
+            <tr><td><a href="../benchmarks/issue34_submission_q28_projection.csv">Q(28) 外推 CSV</a></td><td>N=16–22 measured 与三种 N=23–28 sensitivity projection</td></tr>
+            <tr><td><a href="../benchmarks/e51_truncated_boundary_mps_tradeoff.csv">APX1 χ tradeoff CSV</a></td><td>浮点估计、误差、时间、RSS、discarded weight 与 SVD 计数</td></tr>
+            <tr><td><a href="../benchmarks/raw/scnet_e50_n22/e50_scalar3_profile_once_scnet_n22_job41497149.csv">N=22 原始 CSV</a></td><td>Q(22) count、replay、work counters 与 exact arithmetic provenance</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>代表性复现命令</h3>
+      <pre><code># Rust exact solver / tensor fidelity
+cargo test --release
+cargo clippy --release --all-targets -- -D warnings
+
+# APX1：显式 B/C、边界、uncapped geometry 与有限 chi
+JULIA_DEPOT_PATH=.raw/julia-depot: julia \
+  --project=experiments/e51_truncated_boundary_mps \
+  experiments/e51_truncated_boundary_mps/test/runtests.jl
+
+# 重新校验 CSV 并生成本中文报告的三张 SVG 与 projection CSV
+MPLCONFIGDIR=.raw/matplotlib python3 \
+  scripts/generate_issue34_submission_figures.py</code></pre>
+
+      <h3>测量限制</h3>
+      <ul>
+        <li>Linux RSS 来自每个 fresh process 的 GNU <code>time -v</code> Maximum resident set size，并以 Slurm MaxRSS 作采样交叉检查；它不是 allocator live heap。</li>
+        <li>TreeSA planner 与 executor 顺序运行，端到端 RSS 取两者最大值，绝不相加。</li>
+        <li>重复中位数与单次 exact sample 在表中明确区分；不同算法 revision 的 CSV 不混用。</li>
+        <li>跨 FPGA/GPU/CPU 文献只做定性比较，没有虚构归一化 speedup。</li>
+      </ul>
+
+      <h3>主要参考文献</h3>
+      <ol class="ref-list">
+        <li>Z.-Y. Liu, H.-J. Liao, L. Wang, <a href="https://arxiv.org/abs/2605.10326">Statistical mechanics of the N-queens problem</a>, Sec. VI（PEPS 张量构造）。</li>
+        <li><a href="https://github.com/QuantumBFS/quantum.harness/issues/34">Quantum Harness Issue #34</a>（挑战要求与验收条件）。</li>
+        <li><a href="https://oeis.org/A000170">OEIS A000170</a>（已知 Q(N) 序列）。</li>
+        <li>T. B. Preußer, M. R. Engelhardt, <a href="https://doi.org/10.1007/s11265-016-1176-8">Putting Queens in Carry Chains, No. 27</a>（FPGA Q(27)）。</li>
+        <li>G. Yao, Y. Li, <a href="https://arxiv.org/abs/2511.12009">High-performance N-queens solver on GPU</a>（GPU 精确枚举）。</li>
+        <li>L. Vanderstraeten, B. Vanhecke, F. Verstraete, <a href="https://arxiv.org/abs/1805.10598">Residual entropies for three-dimensional frustrated spin systems with tensor networks</a>（冰/受挫体系残余熵）。</li>
+        <li>S. Ebadi et al., <a href="https://arxiv.org/abs/2202.09372">Quantum Optimization of Maximum Independent Set using Rydberg Atom Arrays</a>（Rydberg blockade 与独立集映射）。</li>
+        <li>S. Nyckees, F. Mila, <a href="https://arxiv.org/abs/2205.02508">Tensor network investigation of the hard-square model</a>（hard-square/Rydberg 经典对应）。</li>
+      </ol>
+
+      <div class="callout">
+        <strong>数据截止：</strong>2026-07-30。production N=22 已完成并纳入；新的同节点 DFS/latest N=22 对照链仍在运行，因此四算法图没有伪造或外推这两个点。待两点完成后，只需重跑 figure script 即可更新图和报告注释。
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      Quantum Harness Issue #34 · 中文最终研究报告 · 主方法为严格精确、显式 C 派生的 PEPS contraction。<br>
+      本报告有意区分“已验证”“外推”“近似诊断”“Issue 完整验收”四种状态。
+    </div>
+  </footer>
+</body>
+</html>

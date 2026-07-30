@@ -36,8 +36,13 @@ cargo run --release --bin dfs_bitmask -- bench 17 --min 8 --threads 16 --repeats
 See [`REPORT.md`](REPORT.md) for the construction, boundary convention,
 correctness checks, and measured benchmarks.
 
-For presentation and publication review, open the professional HTML report at
+For the Chinese Issue #34 submission, open
+[`docs/issue34_final_submission_zh.html`](docs/issue34_final_submission_zh.html).
+It follows `报告结构.md`, leads with the main research conclusion, preserves the
+SCNet measurements behind every plot, and states explicitly that Q(27)/Q(28)
+and the final harness PR remain incomplete.
+
+The longer English report remains available at
 [`docs/issue34_research_report.html`](docs/issue34_research_report.html). Its
 claim-by-claim revision plan, tensor-to-automaton equivalence argument, and
-reviewer-response matrix are linked from the report and preserved alongside it
-in `docs/`.
+reviewer-response matrix are preserved alongside it in `docs/`.
