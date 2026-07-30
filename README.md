@@ -36,11 +36,13 @@ cargo run --release --bin dfs_bitmask -- bench 17 --min 8 --threads 16 --repeats
 See [`REPORT.md`](REPORT.md) for the construction, boundary convention,
 correctness checks, and measured benchmarks.
 
-For the Chinese Issue #34 submission, open
+For the current redesigned Chinese report, open
+[`第二稿.html`](第二稿.html). It now integrates the audited figures, local and SCNet
+comparisons, the completed Q(22) production run, and the Q(28) no-go projection
+while keeping the three benchmark environments explicitly separated.
+
+The earlier detailed Chinese evidence report remains at
 [`docs/issue34_final_submission_zh.html`](docs/issue34_final_submission_zh.html).
-It follows `报告结构.md`, leads with the main research conclusion, preserves the
-SCNet measurements behind every plot, and states explicitly that Q(27)/Q(28)
-and the final harness PR remain incomplete.
 
 The longer English report remains available at
 [`docs/issue34_research_report.html`](docs/issue34_research_report.html). Its
